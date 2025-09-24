@@ -643,7 +643,6 @@ def main():
     config = load_config(config_file, catalog_source)
     
     # Extract configuration variables
-    # catalog_file = config.get('catalog_file')
     source_name = config.get('source_name')
     catalog_location = config.get('catalog_location', 'NERSC')
     catalog_params = config.get('catalog_params', {}).copy()
@@ -672,7 +671,7 @@ def main():
     logger.info(f"Source name: {source_name}")
     logger.info(f"Input file: {in_zarr}")
     logger.info(f"Output file: {output_filename}")
-    # import pdb; pdb.set_trace()
+
 
     # Setup Dask client
     client = setup_dask_client(parallel, n_workers, threads_per_worker, logger)
@@ -681,16 +680,28 @@ def main():
     ds = xr.open_zarr(in_zarr, consolidated=True)
     ds = ds.pipe(egh.attach_coords)
     
-    # Load the HEALPix catalog
-    print(f"Loading HEALPix catalog: {catalog_file}")
-    in_catalog = intake.open_catalog(catalog_file)
-    if catalog_location:
-        in_catalog = in_catalog[catalog_location]
-    
-    # Get the DataSet from the catalog
-    ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
-    # Add lat/lon coordinates to the HEALPix DataSet
-    ds_p = ds_p.pipe(egh.attach_coords)
+    if catalog_source == "IR_IMERG":
+        # Special case for IMERG data (not in catalog yet)
+        dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
+        in_basename = f"IMERG_V7_"
+        time_res = "6H"
+        in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
+        # Read IMERG dataset
+        print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
+        ds_p = xr.open_zarr(in_zarr, consolidated=True)
+        ds_p = ds_p.pipe(egh.attach_coords)
+
+    else:
+        # Load the HEALPix catalog
+        print(f"Loading HEALPix catalog: {catalog_file}")
+        in_catalog = intake.open_catalog(catalog_file)
+        if catalog_location:
+            in_catalog = in_catalog[catalog_location]
+        
+        # Get the DataSet from the catalog
+        ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
+        # Add lat/lon coordinates to the HEALPix DataSet
+        ds_p = ds_p.pipe(egh.attach_coords)
 
     # Check liquid precipitaiton variable
     if varname_precip_liq in list(ds_p.keys()):
@@ -750,7 +761,7 @@ def main():
         ds = ds.sel(time=common_times)
         # Add precipitation to the dataset
         ds["pr"] = pr
-    
+
     # Subset to the specified time range using robust method
     if start_datetime and end_datetime:
         logger.info("Subsetting datasets to specified time range")
