@@ -23,8 +23,8 @@ from pathlib import Path
 import warnings
 import argparse
 import logging
-import easygems.healpix as egh
-from zarr_tools import stream_process_to_zarr
+# import easygems.healpix as egh  # Commented out for testing
+from zarr_tools import stream_process_to_zarr, initialize_zarr_store
 
 warnings.filterwarnings('ignore')
 
@@ -1028,24 +1028,34 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     }
 
 
-def process_timestep_wrapper(time_val, ds_dict, verbose=False):
+def process_timestep_wrapper_zarr(time_val, zarr_path, verbose=False):
     """
-    Wrapper function for processing a single time step in parallel.
+    Wrapper function for processing a single time step by reading from zarr file.
     
-    This function reconstructs the xarray dataset from the dictionary
-    and calls the main processing function.
+    This approach avoids serialization issues by having each worker read the zarr file
+    directly instead of serializing large xarray Datasets.
     
     Args:
-        time_val: Time coordinate value
-        ds_dict: Dictionary containing data arrays for this time step
+        time_val: Time coordinate value to process
+        zarr_path: Path to the zarr file containing the data
         verbose: Whether to print verbose output
         
     Returns:
         tuple: (time_str, results_dict) or (time_str, None) if error
     """
     try:
-        # Reconstruct xarray dataset from dictionary
-        _ds = xr.Dataset(ds_dict)
+        
+        # Each worker opens the zarr file independently
+        ds = xr.open_dataset(zarr_path, engine='zarr')
+        
+        # Select the specific time step
+        _ds = ds.sel(time=time_val)
+        
+        # Load the data for this time step into memory
+        _ds = _ds.load()
+        
+        # Close the full dataset to free memory
+        ds.close()
         
         # Process this time step
         timestep_results = process_single_timestep_overlaps(_ds, verbose=verbose)
@@ -1054,6 +1064,88 @@ def process_timestep_wrapper(time_val, ds_dict, verbose=False):
         
     except Exception as e:
         print(f"Error processing time step {time_val}: {e}")
+        import traceback
+        traceback.print_exc()
+        return str(time_val), None
+
+
+def process_timestep_wrapper_numpy(time_val, data_dict, coords_dict, verbose=False):
+    """
+    Wrapper function for processing a single time step in parallel using numpy arrays.
+    
+    This function reconstructs the xarray Dataset from numpy arrays for efficient serialization.
+    
+    Args:
+        time_val: Time coordinate value
+        data_dict: Dictionary containing numpy arrays for data variables
+        coords_dict: Dictionary containing numpy arrays for coordinates
+        verbose: Whether to print verbose output
+        
+    Returns:
+        tuple: (time_str, results_dict) or (time_str, None) if error
+    """
+    try:
+        # Reconstruct xarray Dataset from numpy arrays
+        data_vars = {}
+        for var_name, data in data_dict.items():
+            if data.ndim == 1:
+                data_vars[var_name] = (['cell'], data)
+            else:
+                # Handle multi-dimensional data
+                dims = ['cell'] if data.ndim == 1 else ['cell'] * data.ndim
+                data_vars[var_name] = (dims, data)
+        
+        # Create coordinates
+        coords = {}
+        for coord_name, coord_data in coords_dict.items():
+            if coord_name == 'time':
+                coords[coord_name] = coord_data.item() if coord_data.ndim == 0 else coord_data
+            elif coord_name == 'cell':
+                coords[coord_name] = (['cell'], coord_data)
+            elif coord_name == 'crs':
+                coords[coord_name] = ([], coord_data.item()) if coord_data.ndim == 0 else ([coord_name], coord_data)
+            else:
+                # Handle other coordinates
+                if coord_data.ndim == 0:
+                    coords[coord_name] = ([], coord_data.item())
+                else:
+                    coords[coord_name] = ([coord_name], coord_data)
+        
+        # Create Dataset
+        _ds = xr.Dataset(data_vars=data_vars, coords=coords)
+        
+        # Process this time step
+        timestep_results = process_single_timestep_overlaps(_ds, verbose=verbose)
+        return str(time_val), timestep_results
+        
+    except Exception as e:
+        print(f"Error processing time step {time_val}: {e}")
+        import traceback
+        traceback.print_exc()
+        return str(time_val), None
+
+
+def process_timestep_wrapper(time_val, _ds, verbose=False):
+    """
+    Wrapper function for processing a single time step in parallel.
+    
+    Args:
+        time_val: Time coordinate value
+        _ds: xarray.Dataset for this time step (already loaded)
+        verbose: Whether to print verbose output
+        
+    Returns:
+        tuple: (time_str, results_dict) or (time_str, None) if error
+    """
+    try:
+        # Process this time step directly
+        timestep_results = process_single_timestep_overlaps(_ds, verbose=verbose)
+        return str(time_val), timestep_results
+        
+    except Exception as e:
+        print(f"Error processing time step {time_val}: {e}")
+        import traceback
+        traceback.print_exc()
         return str(time_val), None
 
 
@@ -1122,7 +1214,7 @@ def main():
         print(f"\nLoading full dataset...")
         try:
             ds = xr.open_dataset(in_dir)
-            ds = ds.pipe(egh.attach_coords)  # Comment out if egh not available
+            # ds = ds.pipe(egh.attach_coords)  # Commented out for testing
             print(f"  ✅ Dataset loaded successfully")
             print(f"  Time steps: {len(ds.time)}")
             print(f"  Data variables: {list(ds.data_vars)}")
@@ -1165,18 +1257,53 @@ def main():
             attrs['threads_per_worker'] = str(threads_per_worker)
         
         # Optionally scale down workers for zarr writing to reduce memory pressure
-        if args.zarr_workers is not None and args.zarr_workers < n_workers and client is not None:
-            print(f"Scaling down cluster from {n_workers} to {args.zarr_workers} workers for zarr writing...")
-            try:
-                client.cluster.scale(args.zarr_workers)
-                print(f"  ✅ Scaled down to {args.zarr_workers} workers")
-            except Exception as e:
-                print(f"  ⚠️  Could not scale cluster: {e}")
+        # NOTE: This is from old implementation - not needed for streaming approach
+        # if args.zarr_workers is not None and args.zarr_workers < n_workers and client is not None:
+        #     print(f"Scaling down cluster from {n_workers} to {args.zarr_workers} workers for zarr writing...")
+        #     try:
+        #         client.cluster.scale(args.zarr_workers)
+        #         print(f"  ✅ Scaled down to {args.zarr_workers} workers")
+        #     except Exception as e:
+        #         print(f"  ⚠️  Could not scale cluster: {e}")
         
         # Stream processing and writing to zarr
         print(f"\nStreaming processing and writing {len(time_coords)} time steps to zarr...")
         
+        # Calculate conservative chunk size to avoid serialization issues
+        # For large spatial datasets (like HEALPix), use very small chunks
+        n_spatial_cells = len(ds.cell) if 'cell' in ds.dims else len(ds.ncol) if 'ncol' in ds.dims else 1000
+        
+        if n_spatial_cells > 500000:  # Large spatial dataset (like HEALPix HP8)
+            # With zarr-path approach, serialization is minimal (~100 bytes per task)
+            # Can use optimal chunk sizes for true parallel processing
+            if parallel and n_workers > 16:
+                # Use chunk size that maximizes worker utilization
+                conservative_chunk_size = max(n_workers, min(n_workers * 2, 48))
+                print(f"Large dataset detected ({n_spatial_cells} cells) with many workers ({n_workers}): using chunk_size_time={conservative_chunk_size} for optimal parallel processing")
+            else:
+                conservative_chunk_size = max(16, min(n_workers * 4, 32)) if parallel else 8
+                print(f"Large dataset detected ({n_spatial_cells} cells): using chunk_size_time={conservative_chunk_size}")
+        elif n_spatial_cells > 100000:  # Medium spatial dataset  
+            conservative_chunk_size = max(12, min(n_workers * 2, 24)) if parallel else 12
+            print(f"Medium dataset detected ({n_spatial_cells} cells): using chunk_size_time={conservative_chunk_size}")
+        else:  # Small spatial dataset
+            conservative_chunk_size = max(16, min(n_workers, 24)) if parallel else 24
+            print(f"Small dataset detected ({n_spatial_cells} cells): using chunk_size_time={conservative_chunk_size}")
+        
+        # conservative_chunk_size = 24
+        
         try:
+            # Initialize the zarr store structure (once only)
+            logger.info("Initializing zarr store...")
+            initialize_zarr_store(
+                output_path=output_path,
+                time_coords=time_coords,
+                mask_variables=mask_variables,
+                template_coords=ds.coords,
+                attrs=attrs,
+                chunk_size_time=conservative_chunk_size
+            )
+            
             # Stream process with chunked zarr writing
             successful_times = stream_process_to_zarr(
                 ds=ds,
@@ -1188,7 +1315,8 @@ def main():
                 client=client,
                 logger=logger,
                 parallel=parallel,
-                chunk_size_time=24  # Process 24 time steps at a time
+                chunk_size_time=conservative_chunk_size,
+                input_zarr_path=in_dir  # Pass the input zarr path for workers
             )
             
             print(f"  ✅ Zarr dataset created successfully")

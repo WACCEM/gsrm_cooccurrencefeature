@@ -428,10 +428,13 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
     n_cells = len(template_coords['cell'])
     
     # Calculate optimal cell chunking for HEALPix
-    nside = int(np.sqrt(n_cells // 12))  # Estimate NSIDE from n_cells
-    zoom = zoom_level_from_nside(nside)
-    chunksize_cell = 12 * (4 ** zoom) // 8  # Optimize for HEALPix structure
-    chunksize_cell = min(chunksize_cell, 50000)  # Cap at reasonable size
+    chunksize_cell = None
+    if 'crs' in template_coords and hasattr(template_coords['crs'], 'attrs') and 'healpix_nside' in template_coords['crs'].attrs:
+        zoom_level = zoom_level_from_nside(template_coords['crs'].attrs['healpix_nside'])
+        chunksize_cell = 12 * 4**zoom_level
+    else:
+        # Default cell chunking for non-HEALPix data
+        chunksize_cell = min(10000, n_cells)
     
     # Create data variables dictionary
     data_vars = {}
@@ -533,7 +536,7 @@ def append_chunk_to_zarr(chunk_results, chunk_times, chunk_idx, mask_variables, 
 
 
 def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, template_coords, attrs,
-                          client=None, logger=None, parallel=True, chunk_size_time=24):
+                          client=None, logger=None, parallel=True, chunk_size_time=24, input_zarr_path=None):
     """
     Stream processing and writing to zarr without accumulating all results in memory.
     
@@ -572,17 +575,6 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     if logger is None:
         logger = logging.getLogger(__name__)
     
-    # Initialize the zarr store with proper structure
-    logger.info("Initializing zarr store...")
-    initialize_zarr_store(
-        output_path=output_path,
-        time_coords=time_coords,
-        mask_variables=mask_variables,
-        template_coords=template_coords,
-        attrs=attrs,
-        chunk_size_time=chunk_size_time
-    )
-    
     # Process and write time steps in chunks
     total_processed = 0
     total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
@@ -610,51 +602,89 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                 sys.path.insert(0, current_dir)
             
             try:
-                from make_cooccurrence_masks import process_timestep_wrapper
+                from make_cooccurrence_masks import process_timestep_wrapper_zarr
             except ImportError:
-                logger.error("Could not import process_timestep_wrapper. Falling back to sequential processing.")
+                logger.error("Could not import process_timestep_wrapper_zarr. Falling back to sequential processing.")
                 parallel = False
         
         if parallel and client is not None:
-            # Parallel processing for this chunk
+            # Parallel processing for this chunk using zarr file path approach
             futures = []
-            for time_val in chunk_times:
-                _ds = ds.sel(time=time_val)
-                ds_dict = {var: _ds[var] for var in _ds.data_vars}
-                future = client.submit(process_timestep_wrapper, time_val, ds_dict, verbose=False)
-                futures.append(future)
+            serialization_failed = False
             
-            # Collect results for this chunk
-            try:
-                from dask.distributed import as_completed
-                for future in as_completed(futures):
-                    try:
-                        time_str, timestep_results = future.result()
-                        if timestep_results is not None:
-                            chunk_results[time_str] = timestep_results
-                        else:
-                            logger.warning(f"Failed to process time step: {time_str}")
-                    except Exception as e:
-                        logger.error(f"Error collecting chunk result: {e}")
-            except ImportError:
-                logger.error("Dask not available for parallel processing. Falling back to sequential.")
-                parallel = False
-        
-        if not parallel or client is None:
-            # Sequential processing for this chunk
-            try:
-                from make_cooccurrence_masks import process_single_timestep_overlaps
-            except ImportError:
-                logger.error("Could not import processing function. Aborting.")
-                return 0
+            logger.info(f"Submitting {len(chunk_times)} tasks to {len(client.nthreads())} workers...")
+            
+            # Use the provided input zarr path
+            if input_zarr_path is None:
+                logger.error("No input zarr path provided. Falling back to sequential processing.")
+                serialization_failed = True
+            else:
+                logger.info(f"Using input zarr file path: {input_zarr_path}")
                 
-            for time_val in chunk_times:
                 try:
-                    _ds = ds.sel(time=time_val)
-                    timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
-                    chunk_results[str(time_val)] = timestep_results
+                    for time_val in chunk_times:
+                        # Submit with just time_val and zarr_path - minimal serialization!
+                        future = client.submit(process_timestep_wrapper_zarr, time_val, input_zarr_path, verbose=False)
+                        futures.append(future)
+                        
+                    logger.info(f"Successfully submitted {len(futures)} tasks with minimal serialization")
+                        
                 except Exception as e:
-                    logger.error(f"Error processing time step {time_val}: {e}")
+                    logger.error(f"Error submitting zarr-based tasks: {e}")
+                    serialization_failed = True
+                    futures = []
+            
+            if not serialization_failed and futures:
+                # Collect results for this chunk
+                try:
+                    from dask.distributed import as_completed
+                    logger.info(f"Collecting results from {len(futures)} parallel tasks...")
+                    
+                    for future in as_completed(futures):
+                        try:
+                            time_str, timestep_results = future.result()
+                            if timestep_results is not None:
+                                chunk_results[time_str] = timestep_results
+                            else:
+                                logger.warning(f"Failed to process time step: {time_str}")
+                        except Exception as e:
+                            error_msg = str(e)
+                            if "bytes object is too large" in error_msg or "Failed to Serialize" in error_msg:
+                                logger.error(f"Serialization error during result collection: {error_msg}")
+                                logger.warning(f"Falling back to sequential processing for chunk {chunk_idx + 1}")
+                                # Clear futures and fall back to sequential
+                                for f in futures:
+                                    try:
+                                        f.cancel()
+                                    except:
+                                        pass
+                                chunk_results = {}  # Clear any partial results
+                                serialization_failed = True
+                                break
+                            else:
+                                logger.error(f"Error collecting chunk result: {e}")
+                                
+                except ImportError:
+                    logger.error("Dask not available for parallel processing. Falling back to sequential.")
+                    serialization_failed = True
+                    
+            # If serialization failed or no parallel processing, fall back to sequential        
+            if serialization_failed or not parallel or client is None:
+                # Sequential processing for this chunk
+                logger.info(f"Processing chunk {chunk_idx + 1} sequentially...")
+                try:
+                    from make_cooccurrence_masks import process_single_timestep_overlaps
+                except ImportError:
+                    logger.error("Could not import processing function. Aborting.")
+                    return 0
+                    
+                for time_val in chunk_times:
+                    try:
+                        _ds = ds.sel(time=time_val)
+                        timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
+                        chunk_results[str(time_val)] = timestep_results
+                    except Exception as e:
+                        logger.error(f"Error processing time step {time_val}: {e}")
         
         # Write this chunk to zarr immediately
         try:
