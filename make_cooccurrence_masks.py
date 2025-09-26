@@ -23,7 +23,7 @@ from pathlib import Path
 import warnings
 import argparse
 import logging
-from zarr_tools import write_zarr, write_zarr_simple
+from zarr_tools import write_zarr, write_zarr_simple, write_zarr_chunked
 
 warnings.filterwarnings('ignore')
 
@@ -61,12 +61,22 @@ def setup_dask_client(parallel, n_workers, threads_per_worker, logger=None):
     
     try:
         from dask.distributed import Client, LocalCluster
+        import psutil
+        
+        # Calculate memory limit per worker
+        total_memory_gb = psutil.virtual_memory().total / (1024**3)  # Convert to GB
+        # Leave 20% for system overhead, divide remaining by number of workers
+        usable_memory_gb = total_memory_gb * 0.8
+        memory_per_worker_gb = usable_memory_gb / n_workers
+        memory_limit = f"{memory_per_worker_gb:.1f}GB"
         
         logger.info(f"Setting up Dask cluster with {n_workers} workers, {threads_per_worker} threads per worker")
+        logger.info(f"Detected total memory: {total_memory_gb:.1f}GB, setting {memory_limit} per worker")
+        
         cluster = LocalCluster(
             n_workers=n_workers,
             threads_per_worker=threads_per_worker,
-            memory_limit='auto',
+            memory_limit=memory_limit,
         )
         client = Client(cluster)
         logger.info(f"Dask dashboard: {client.dashboard_link}")
@@ -1059,8 +1069,12 @@ def main():
                        help='Disable parallel processing')
     parser.add_argument('--workers', type=int, default=32,
                        help='Number of Dask workers (default: 32)')
-    parser.add_argument('--threads-per-worker', type=int, default=2,
-                       help='Number of threads per worker (default: 2)')
+    parser.add_argument('--threads-per-worker', type=int, default=1,
+                       help='Number of threads per worker (default: 1)')
+    parser.add_argument('--zarr-workers', type=int, default=None,
+                       help='Number of workers for zarr writing (default: same as --workers)')
+    parser.add_argument('--debug-memory', action='store_true',
+                       help='Enable detailed memory usage logging')
     parser.add_argument('--source', type=str, default='scream',
                        help='Source name (default: scream)')
     parser.add_argument('--test-steps', type=int, default=None,
@@ -1095,6 +1109,8 @@ def main():
     print(f"Parallel processing: {parallel}")
     if parallel:
         print(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
+        if args.zarr_workers is not None:
+            print(f"Zarr writing workers: {args.zarr_workers}")
     
     # Setup Dask client
     client = setup_dask_client(parallel, n_workers, threads_per_worker, logger)
@@ -1191,11 +1207,21 @@ def main():
                     print(f"  ❌ Error processing time step {time_val}: {e}")
                     continue
         
-        # Combine results into a single dataset
-        print(f"\nCombining results into single dataset...")
+        # Write results directly to zarr using memory-efficient chunked approach
+        print(f"\nWriting results to zarr using memory-efficient chunked approach...")
+        
+        # Optionally scale down workers for zarr writing to reduce memory pressure
+        zarr_client = client
+        if args.zarr_workers is not None and args.zarr_workers < n_workers and client is not None:
+            print(f"Scaling down cluster from {n_workers} to {args.zarr_workers} workers for zarr writing...")
+            try:
+                client.cluster.scale(args.zarr_workers)
+                print(f"  ✅ Scaled down to {args.zarr_workers} workers")
+            except Exception as e:
+                print(f"  ⚠️  Could not scale cluster: {e}")
         
         try:
-            # Create lists to hold data arrays for each variable
+            # Define all output variables
             mask_variables = [
                 'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
                 'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
@@ -1205,78 +1231,50 @@ def main():
                 'mcs_ar_etc_overlap_mask', 'ar_mcs_etc_overlap_mask', 'etc_mcs_ar_overlap_mask'
             ]
             
-            output_data_vars = {}
-            
-            # Collect all data arrays for each variable
-            for var_name in mask_variables:
-                var_arrays = []
-                
-                for time_val in time_coords:
-                    time_str = str(time_val)
-                    if time_str in all_results:
-                        var_data = all_results[time_str][var_name]
-                        var_arrays.append(var_data.expand_dims('time'))
-                    else:
-                        # Create empty array with same structure as a successful time step
-                        sample_time = str(time_coords[0])
-                        if sample_time in all_results:
-                            sample_data = all_results[sample_time][var_name]
-                            empty_data = xr.zeros_like(sample_data).expand_dims('time')
-                            var_arrays.append(empty_data)
-                
-                if var_arrays:
-                    # Concatenate along time dimension
-                    output_data_vars[var_name] = xr.concat(var_arrays, dim='time')
-                    # Assign correct time coordinates
-                    output_data_vars[var_name] = output_data_vars[var_name].assign_coords(time=time_coords)
-            
-            # Create output dataset
-            output_ds = xr.Dataset(output_data_vars)
-            
-            # Copy coordinates and attributes from original dataset
-            output_ds = output_ds.assign_coords(ds.coords)
-            output_ds.attrs = ds.attrs.copy()
-            
             # Add processing metadata
-            output_ds.attrs['processing_info'] = 'Meteorological feature overlap analysis'
-            output_ds.attrs['processing_date'] = str(np.datetime64('today'))
-            output_ds.attrs['thresholds'] = 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)'
-            output_ds.attrs['tc_filtering_threshold'] = '10%'
-            output_ds.attrs['parallel_processing'] = str(parallel)
+            attrs = ds.attrs.copy()
+            attrs.update({
+                'processing_info': 'Co-occurrence feature masks',
+                'processing_date': str(np.datetime64('today')),
+                'thresholds': 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)',
+                'tc_filtering_threshold': '10%',
+                'parallel_processing': str(parallel)
+            })
             if parallel:
-                output_ds.attrs['dask_workers'] = str(n_workers)
-                output_ds.attrs['threads_per_worker'] = str(threads_per_worker)
+                attrs['dask_workers'] = str(n_workers)
+                attrs['threads_per_worker'] = str(threads_per_worker)
             
-            print(f"  ✅ Combined dataset created")
-            print(f"  Output shape: {output_ds.dims}")
-            print(f"  Output variables: {list(output_ds.data_vars)}")
+            # Define chunk sizes for zarr writing
+            chunks = {
+                'time': 24,  # 24 time steps per chunk
+                'cell': min(50000, ds.sizes['cell'])  # Optimized for HEALPix grid
+            }
             
-        except Exception as e:
-            print(f"  ❌ Error combining results: {e}")
-            return
-        
-        # Save to zarr
-        print(f"\nSaving to zarr: {output_path}")
-        
-        try:
-            # Use optimized zarr writing with Dask support
-            if parallel and client is not None:
-                logger.info("Using optimized Dask-enabled zarr writing")
-                write_zarr(output_ds, output_path, client=client, logger=logger)
-            else:
-                logger.info("Using standard zarr writing")
-                write_zarr_simple(output_ds, output_path, logger=logger)
+            # Write chunked zarr with memory-efficient approach
+            successful_times = write_zarr_chunked(
+                all_results=all_results,
+                time_coords=time_coords,
+                mask_variables=mask_variables,
+                output_path=output_path,
+                template_coords=ds.coords,
+                attrs=attrs,
+                client=client,
+                logger=logger,
+                chunk_size_time=24  # Process 24 time steps at a time
+            )
             
-            print(f"  ✅ Dataset saved successfully")
+            print(f"  ✅ Zarr dataset created successfully")
+            print(f"  ✅ Processed {successful_times}/{len(time_coords)} time steps")
             
             # Verify the saved dataset
             test_ds = xr.open_dataset(output_path)
             print(f"  ✅ Verification successful - {len(test_ds.time)} time steps")
+            print(f"  ✅ Variables: {list(test_ds.data_vars)}")
             test_ds.close()
             
         except Exception as e:
-            logger.error(f"Error saving dataset: {e}")
-            print(f"  ❌ Error saving dataset: {e}")
+            logger.error(f"Error writing chunked zarr: {e}")
+            print(f"  ❌ Error writing zarr: {e}")
             return
         
         print(f"\n" + "="*80)
@@ -1284,15 +1282,16 @@ def main():
         print("="*80)
         print(f"Output saved to: {output_path}")
         print(f"Time steps processed: {len(time_coords)}")
-        print(f"Variables created: {len(output_ds.data_vars)}")
+        print(f"Variables created: {len(mask_variables)}")
         print(f"Processing mode: {'Parallel' if parallel else 'Sequential'}")
+        print(f"Memory approach: Chunked zarr writing")
         
         # Print summary statistics
         print(f"\nSUMMARY STATISTICS:")
-        successful_times = len([t for t in time_coords if str(t) in all_results])
-        print(f"  Successful time steps: {successful_times}/{len(time_coords)}")
+        successful_times_count = len([t for t in time_coords if str(t) in all_results])
+        print(f"  Successful time steps: {successful_times_count}/{len(time_coords)}")
         
-        if successful_times > 0:
+        if successful_times_count > 0:
             # Sample some statistics from the first successful time step
             sample_time = str([t for t in time_coords if str(t) in all_results][0])
             sample_results = all_results[sample_time]
