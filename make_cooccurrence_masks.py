@@ -21,7 +21,61 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 import warnings
+import argparse
+import logging
+from zarr_tools import write_zarr, write_zarr_simple
+
 warnings.filterwarnings('ignore')
+
+def setup_logging():
+    """Set up logging configuration"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+def setup_dask_client(parallel, n_workers, threads_per_worker, logger=None):
+    """
+    Set up a Dask client for parallel processing
+    
+    Args:
+        parallel: bool
+            Whether to use parallel processing
+        n_workers: int
+            Number of workers for the Dask cluster
+        threads_per_worker: int
+            Number of threads per worker
+        logger: logging.Logger, optional
+            Logger for status messages
+            
+    Returns:
+        dask.distributed.Client or None: Dask client if parallel is True, None otherwise
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        
+    if not parallel:
+        logger.info("Running in sequential mode (parallel=False)")
+        return None
+    
+    try:
+        from dask.distributed import Client, LocalCluster
+        
+        logger.info(f"Setting up Dask cluster with {n_workers} workers, {threads_per_worker} threads per worker")
+        cluster = LocalCluster(
+            n_workers=n_workers,
+            threads_per_worker=threads_per_worker,
+            memory_limit='auto',
+        )
+        client = Client(cluster)
+        logger.info(f"Dask dashboard: {client.dashboard_link}")
+        
+        return client
+        
+    except ImportError:
+        logger.warning("Dask not available, falling back to sequential processing")
+        return None
 
 def find_overlapping_tracks_and_pairs(mask1, mask2, binary_sum_mask, 
                                      thresh1=0.1, thresh2=0.1, overlap_threshold=1,
@@ -963,17 +1017,72 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     }
 
 
+def process_timestep_wrapper(time_val, ds_dict, verbose=False):
+    """
+    Wrapper function for processing a single time step in parallel.
+    
+    This function reconstructs the xarray dataset from the dictionary
+    and calls the main processing function.
+    
+    Args:
+        time_val: Time coordinate value
+        ds_dict: Dictionary containing data arrays for this time step
+        verbose: Whether to print verbose output
+        
+    Returns:
+        tuple: (time_str, results_dict) or (time_str, None) if error
+    """
+    try:
+        # Reconstruct xarray dataset from dictionary
+        _ds = xr.Dataset(ds_dict)
+        
+        # Process this time step
+        timestep_results = process_single_timestep_overlaps(_ds, verbose=verbose)
+        
+        return str(time_val), timestep_results
+        
+    except Exception as e:
+        print(f"Error processing time step {time_val}: {e}")
+        return str(time_val), None
+
+
 def main():
     """
     Main function that processes the full time series dataset.
     """
     
-    # Configuration
-    source_name = "scream"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Process meteorological feature overlaps')
+    parser.add_argument('--parallel', action='store_true', default=True,
+                       help='Use parallel processing with Dask (default: True)')
+    parser.add_argument('--no-parallel', action='store_false', dest='parallel',
+                       help='Disable parallel processing')
+    parser.add_argument('--workers', type=int, default=32,
+                       help='Number of Dask workers (default: 32)')
+    parser.add_argument('--threads-per-worker', type=int, default=2,
+                       help='Number of threads per worker (default: 2)')
+    parser.add_argument('--source', type=str, default='scream',
+                       help='Source name (default: scream)')
+    parser.add_argument('--test-steps', type=int, default=None,
+                       help='Number of time steps to process for testing (default: all)')
+    
+    args = parser.parse_args()
+    
+    # Set up logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    # Configuration from arguments
+    source_name = args.source
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
     output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
+    
+    # Parallel processing configuration
+    parallel = args.parallel
+    n_workers = args.workers
+    threads_per_worker = args.threads_per_worker
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -983,153 +1092,223 @@ def main():
     print(f"Source: {source_name}")
     print(f"Input: {in_dir}")
     print(f"Output: {output_dir}")
+    print(f"Parallel processing: {parallel}")
+    if parallel:
+        print(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
     
-    # Load the full dataset
-    print(f"\nLoading full dataset...")
+    # Setup Dask client
+    client = setup_dask_client(parallel, n_workers, threads_per_worker, logger)
+    
     try:
-        ds = xr.open_dataset(in_dir)
-        # ds = ds.pipe(egh.attach_coords)  # Comment out if egh not available
-        print(f"  ✅ Dataset loaded successfully")
-        print(f"  Time steps: {len(ds.time)}")
-        print(f"  Data variables: {list(ds.data_vars)}")
-        print(f"  Spatial dimensions: {dict(ds.dims)}")
-    except Exception as e:
-        print(f"  ❌ Error loading dataset: {e}")
-        return
-    
-    # TODO: Test a few time steps
-    ds = ds.isel(time=slice(0, 24))
-    # import pdb; pdb.set_trace()
-    
-    # Initialize output containers
-    print(f"\nInitializing output containers...")
-    all_results = {}
-    time_coords = ds.time.values
-    
-    # Process each time step
-    print(f"\nProcessing {len(time_coords)} time steps...")
-    
-    for i, time_val in enumerate(time_coords):
-        print(f"\n--- Time step {i+1}/{len(time_coords)}: {time_val} ---")
+        # Load the full dataset
+        print(f"\nLoading full dataset...")
+        try:
+            ds = xr.open_dataset(in_dir)
+            # ds = ds.pipe(egh.attach_coords)  # Comment out if egh not available
+            print(f"  ✅ Dataset loaded successfully")
+            print(f"  Time steps: {len(ds.time)}")
+            print(f"  Data variables: {list(ds.data_vars)}")
+            print(f"  Spatial dimensions: {dict(ds.dims)}")
+        except Exception as e:
+            print(f"  ❌ Error loading dataset: {e}")
+            return
+        
+        # Limit time steps for testing if requested
+        if args.test_steps is not None:
+            ds = ds.isel(time=slice(0, args.test_steps))
+            print(f"  📋 Limited to {args.test_steps} time steps for testing")
+        
+        # Initialize output containers
+        print(f"\nInitializing output containers...")
+        all_results = {}
+        time_coords = ds.time.values
+        
+        # Process each time step
+        print(f"\nProcessing {len(time_coords)} time steps...")
+        
+        if parallel and client is not None:
+            # Parallel processing with Dask
+            logger.info("Using parallel processing with Dask")
+            
+            try:
+                # Create delayed tasks for each time step
+                futures = []
+                for i, time_val in enumerate(time_coords):
+                    # Select data for this time step and convert to dict for serialization
+                    _ds = ds.sel(time=time_val)
+                    ds_dict = {var: _ds[var] for var in _ds.data_vars}
+                    
+                    # Submit task to cluster
+                    future = client.submit(process_timestep_wrapper, time_val, ds_dict, verbose=False)
+                    futures.append(future)
+                
+                # Collect results with progress tracking
+                from dask.distributed import progress, as_completed
+                
+                # Show progress
+                logger.info(f"Processing {len(futures)} time steps in parallel...")
+                progress(futures)
+                
+                # Collect results as they complete
+                completed_count = 0
+                for future in as_completed(futures):
+                    try:
+                        time_str, timestep_results = future.result()
+                        if timestep_results is not None:
+                            all_results[time_str] = timestep_results
+                            completed_count += 1
+                            if completed_count % 10 == 0:  # Log every 10 completions
+                                logger.info(f"Completed {completed_count}/{len(futures)} time steps")
+                        else:
+                            logger.warning(f"Failed to process time step: {time_str}")
+                    except Exception as e:
+                        logger.error(f"Error collecting result: {e}")
+                        
+                logger.info(f"Parallel processing complete: {len(all_results)}/{len(futures)} successful")
+                
+            except ImportError:
+                logger.warning("Dask distributed components not available, falling back to sequential processing")
+                parallel = False
+        
+        if not parallel or client is None:
+            # Sequential processing
+            logger.info("Using sequential processing")
+            
+            for i, time_val in enumerate(time_coords):
+                print(f"\n--- Time step {i+1}/{len(time_coords)}: {time_val} ---")
+                
+                try:
+                    # Select single time step
+                    _ds = ds.sel(time=time_val)
+                    
+                    # Process overlaps for this time step
+                    timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
+                    
+                    # Store results
+                    all_results[str(time_val)] = timestep_results
+                    
+                except Exception as e:
+                    print(f"  ❌ Error processing time step {time_val}: {e}")
+                    continue
+        
+        # Combine results into a single dataset
+        print(f"\nCombining results into single dataset...")
         
         try:
-            # Select single time step
-            _ds = ds.sel(time=time_val)
+            # Create lists to hold data arrays for each variable
+            mask_variables = [
+                'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
+                'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
+                'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
+                'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
+                'mcs_etc_overlap_mask', 'etc_mcs_overlap_mask',
+                'mcs_ar_etc_overlap_mask', 'ar_mcs_etc_overlap_mask', 'etc_mcs_ar_overlap_mask'
+            ]
             
-            # Process overlaps for this time step
-            timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
+            output_data_vars = {}
             
-            # Store results
-            all_results[str(time_val)] = timestep_results
+            # Collect all data arrays for each variable
+            for var_name in mask_variables:
+                var_arrays = []
+                
+                for time_val in time_coords:
+                    time_str = str(time_val)
+                    if time_str in all_results:
+                        var_data = all_results[time_str][var_name]
+                        var_arrays.append(var_data.expand_dims('time'))
+                    else:
+                        # Create empty array with same structure as a successful time step
+                        sample_time = str(time_coords[0])
+                        if sample_time in all_results:
+                            sample_data = all_results[sample_time][var_name]
+                            empty_data = xr.zeros_like(sample_data).expand_dims('time')
+                            var_arrays.append(empty_data)
+                
+                if var_arrays:
+                    # Concatenate along time dimension
+                    output_data_vars[var_name] = xr.concat(var_arrays, dim='time')
+                    # Assign correct time coordinates
+                    output_data_vars[var_name] = output_data_vars[var_name].assign_coords(time=time_coords)
+            
+            # Create output dataset
+            output_ds = xr.Dataset(output_data_vars)
+            
+            # Copy coordinates and attributes from original dataset
+            output_ds = output_ds.assign_coords(ds.coords)
+            output_ds.attrs = ds.attrs.copy()
+            
+            # Add processing metadata
+            output_ds.attrs['processing_info'] = 'Meteorological feature overlap analysis'
+            output_ds.attrs['processing_date'] = str(np.datetime64('today'))
+            output_ds.attrs['thresholds'] = 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)'
+            output_ds.attrs['tc_filtering_threshold'] = '10%'
+            output_ds.attrs['parallel_processing'] = str(parallel)
+            if parallel:
+                output_ds.attrs['dask_workers'] = str(n_workers)
+                output_ds.attrs['threads_per_worker'] = str(threads_per_worker)
+            
+            print(f"  ✅ Combined dataset created")
+            print(f"  Output shape: {output_ds.dims}")
+            print(f"  Output variables: {list(output_ds.data_vars)}")
             
         except Exception as e:
-            print(f"  ❌ Error processing time step {time_val}: {e}")
-            continue
-    
-    # Combine results into a single dataset
-    print(f"\nCombining results into single dataset...")
-    
-    try:
-        # Create lists to hold data arrays for each variable
-        mask_variables = [
-            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
-            'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
-            'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
-            'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
-            'mcs_etc_overlap_mask', 'etc_mcs_overlap_mask',
-            'mcs_ar_etc_overlap_mask', 'ar_mcs_etc_overlap_mask', 'etc_mcs_ar_overlap_mask'
-        ]
-        
-        output_data_vars = {}
-        
-        # Collect all data arrays for each variable
-        for var_name in mask_variables:
-            var_arrays = []
-            
-            for time_val in time_coords:
-                time_str = str(time_val)
-                if time_str in all_results:
-                    var_data = all_results[time_str][var_name]
-                    var_arrays.append(var_data.expand_dims('time'))
-                else:
-                    # Create empty array with same structure as a successful time step
-                    sample_time = str(time_coords[0])
-                    if sample_time in all_results:
-                        sample_data = all_results[sample_time][var_name]
-                        empty_data = xr.zeros_like(sample_data).expand_dims('time')
-                        var_arrays.append(empty_data)
-            
-            if var_arrays:
-                # Concatenate along time dimension
-                output_data_vars[var_name] = xr.concat(var_arrays, dim='time')
-                # Assign correct time coordinates
-                output_data_vars[var_name] = output_data_vars[var_name].assign_coords(time=time_coords)
-        
-        # Create output dataset
-        output_ds = xr.Dataset(output_data_vars)
-        
-        # Copy coordinates and attributes from original dataset
-        output_ds = output_ds.assign_coords(ds.coords)
-        output_ds.attrs = ds.attrs.copy()
-        
-        # Add processing metadata
-        output_ds.attrs['processing_info'] = 'Meteorological feature overlap analysis'
-        output_ds.attrs['processing_date'] = str(np.datetime64('today'))
-        output_ds.attrs['thresholds'] = 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)'
-        output_ds.attrs['tc_filtering_threshold'] = '10%'
-        
-        print(f"  ✅ Combined dataset created")
-        print(f"  Output shape: {output_ds.dims}")
-        print(f"  Output variables: {list(output_ds.data_vars)}")
-        
-    except Exception as e:
-        print(f"  ❌ Error combining results: {e}")
-        return
-    
-    # Save to zarr
-    print(f"\nSaving to zarr: {output_path}")
-    
-    try:
-        # Remove existing zarr store if it exists
-        if os.path.exists(output_path):
-            import shutil
-            shutil.rmtree(output_path)
+            print(f"  ❌ Error combining results: {e}")
+            return
         
         # Save to zarr
-        output_ds.to_zarr(output_path, mode='w')
-        print(f"  ✅ Dataset saved successfully")
+        print(f"\nSaving to zarr: {output_path}")
         
-        # Verify the saved dataset
-        test_ds = xr.open_dataset(output_path)
-        print(f"  ✅ Verification successful - {len(test_ds.time)} time steps")
+        try:
+            # Use optimized zarr writing with Dask support
+            if parallel and client is not None:
+                logger.info("Using optimized Dask-enabled zarr writing")
+                write_zarr(output_ds, output_path, client=client, logger=logger)
+            else:
+                logger.info("Using standard zarr writing")
+                write_zarr_simple(output_ds, output_path, logger=logger)
+            
+            print(f"  ✅ Dataset saved successfully")
+            
+            # Verify the saved dataset
+            test_ds = xr.open_dataset(output_path)
+            print(f"  ✅ Verification successful - {len(test_ds.time)} time steps")
+            test_ds.close()
+            
+        except Exception as e:
+            logger.error(f"Error saving dataset: {e}")
+            print(f"  ❌ Error saving dataset: {e}")
+            return
         
-    except Exception as e:
-        print(f"  ❌ Error saving dataset: {e}")
-        return
-    
-    print(f"\n" + "="*80)
-    print("PROCESSING COMPLETE!")
-    print("="*80)
-    print(f"Output saved to: {output_path}")
-    print(f"Time steps processed: {len(time_coords)}")
-    print(f"Variables created: {len(output_ds.data_vars)}")
-    
-    # Print summary statistics
-    print(f"\nSUMMARY STATISTICS:")
-    successful_times = len([t for t in time_coords if str(t) in all_results])
-    print(f"  Successful time steps: {successful_times}/{len(time_coords)}")
-    
-    if successful_times > 0:
-        # Sample some statistics from the first successful time step
-        sample_time = str([t for t in time_coords if str(t) in all_results][0])
-        sample_results = all_results[sample_time]
+        print(f"\n" + "="*80)
+        print("PROCESSING COMPLETE!")
+        print("="*80)
+        print(f"Output saved to: {output_path}")
+        print(f"Time steps processed: {len(time_coords)}")
+        print(f"Variables created: {len(output_ds.data_vars)}")
+        print(f"Processing mode: {'Parallel' if parallel else 'Sequential'}")
         
-        print(f"  Example from {sample_time}:")
-        print(f"    2-way pairs: MCS-AR={len(sample_results['mcs_ar_pairs_2way'])}, " +
-              f"AR-ETC={len(sample_results['ar_etc_pairs_2way'])}, " +
-              f"MCS-ETC={len(sample_results['mcs_etc_pairs_2way'])}")
-        print(f"    3-way overlaps: {len(sample_results['validated_triplets'])} triplets")
-        print(f"    TC filtering: {sample_results['tc_filtering_summary']['retention_rate']:.1%} MCS retention")
+        # Print summary statistics
+        print(f"\nSUMMARY STATISTICS:")
+        successful_times = len([t for t in time_coords if str(t) in all_results])
+        print(f"  Successful time steps: {successful_times}/{len(time_coords)}")
+        
+        if successful_times > 0:
+            # Sample some statistics from the first successful time step
+            sample_time = str([t for t in time_coords if str(t) in all_results][0])
+            sample_results = all_results[sample_time]
+            
+            print(f"  Example from {sample_time}:")
+            print(f"    2-way pairs: MCS-AR={len(sample_results['mcs_ar_pairs_2way'])}, " +
+                  f"AR-ETC={len(sample_results['ar_etc_pairs_2way'])}, " +
+                  f"MCS-ETC={len(sample_results['mcs_etc_pairs_2way'])}")
+            print(f"    3-way overlaps: {len(sample_results['validated_triplets'])} triplets")
+            print(f"    TC filtering: {sample_results['tc_filtering_summary']['retention_rate']:.1%} MCS retention")
+            
+    finally:
+        # Always cleanup client
+        if client and parallel:
+            logger.info("Shutting down Dask client")
+            client.close()
 
 
 if __name__ == "__main__":
