@@ -23,7 +23,8 @@ from pathlib import Path
 import warnings
 import argparse
 import logging
-from zarr_tools import write_zarr, write_zarr_simple, write_zarr_chunked
+import easygems.healpix as egh
+from zarr_tools import stream_process_to_zarr
 
 warnings.filterwarnings('ignore')
 
@@ -1091,7 +1092,8 @@ def main():
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
-    output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
+    # output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
+    output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1_stream.zarr"
     
     # Parallel processing configuration
     parallel = args.parallel
@@ -1120,7 +1122,7 @@ def main():
         print(f"\nLoading full dataset...")
         try:
             ds = xr.open_dataset(in_dir)
-            # ds = ds.pipe(egh.attach_coords)  # Comment out if egh not available
+            ds = ds.pipe(egh.attach_coords)  # Comment out if egh not available
             print(f"  ✅ Dataset loaded successfully")
             print(f"  Time steps: {len(ds.time)}")
             print(f"  Data variables: {list(ds.data_vars)}")
@@ -1134,84 +1136,35 @@ def main():
             ds = ds.isel(time=slice(0, args.test_steps))
             print(f"  📋 Limited to {args.test_steps} time steps for testing")
         
-        # Initialize output containers
-        print(f"\nInitializing output containers...")
-        all_results = {}
+        # Initialize streaming processing configuration
+        print(f"\nInitializing streaming zarr processing...")
         time_coords = ds.time.values
         
-        # Process each time step
-        print(f"\nProcessing {len(time_coords)} time steps...")
+        # Define all output variables
+        mask_variables = [
+            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
+            'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
+            'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
+            'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
+            'mcs_etc_overlap_mask', 'etc_mcs_overlap_mask',
+            'mcs_ar_etc_overlap_mask', 'ar_mcs_etc_overlap_mask', 'etc_mcs_ar_overlap_mask'
+        ]
         
-        if parallel and client is not None:
-            # Parallel processing with Dask
-            logger.info("Using parallel processing with Dask")
-            
-            try:
-                # Create delayed tasks for each time step
-                futures = []
-                for i, time_val in enumerate(time_coords):
-                    # Select data for this time step and convert to dict for serialization
-                    _ds = ds.sel(time=time_val)
-                    ds_dict = {var: _ds[var] for var in _ds.data_vars}
-                    
-                    # Submit task to cluster
-                    future = client.submit(process_timestep_wrapper, time_val, ds_dict, verbose=False)
-                    futures.append(future)
-                
-                # Collect results with progress tracking
-                from dask.distributed import progress, as_completed
-                
-                # Show progress
-                logger.info(f"Processing {len(futures)} time steps in parallel...")
-                progress(futures)
-                
-                # Collect results as they complete
-                completed_count = 0
-                for future in as_completed(futures):
-                    try:
-                        time_str, timestep_results = future.result()
-                        if timestep_results is not None:
-                            all_results[time_str] = timestep_results
-                            completed_count += 1
-                            if completed_count % 10 == 0:  # Log every 10 completions
-                                logger.info(f"Completed {completed_count}/{len(futures)} time steps")
-                        else:
-                            logger.warning(f"Failed to process time step: {time_str}")
-                    except Exception as e:
-                        logger.error(f"Error collecting result: {e}")
-                        
-                logger.info(f"Parallel processing complete: {len(all_results)}/{len(futures)} successful")
-                
-            except ImportError:
-                logger.warning("Dask distributed components not available, falling back to sequential processing")
-                parallel = False
-        
-        if not parallel or client is None:
-            # Sequential processing
-            logger.info("Using sequential processing")
-            
-            for i, time_val in enumerate(time_coords):
-                print(f"\n--- Time step {i+1}/{len(time_coords)}: {time_val} ---")
-                
-                try:
-                    # Select single time step
-                    _ds = ds.sel(time=time_val)
-                    
-                    # Process overlaps for this time step
-                    timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
-                    
-                    # Store results
-                    all_results[str(time_val)] = timestep_results
-                    
-                except Exception as e:
-                    print(f"  ❌ Error processing time step {time_val}: {e}")
-                    continue
-        
-        # Write results directly to zarr using memory-efficient chunked approach
-        print(f"\nWriting results to zarr using memory-efficient chunked approach...")
+        # Add processing metadata
+        attrs = ds.attrs.copy()
+        attrs.update({
+            'processing_info': 'Co-occurrence feature masks',
+            'processing_date': str(np.datetime64('today')),
+            'thresholds': 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)',
+            'tc_filtering_threshold': '10%',
+            'parallel_processing': str(parallel),
+            'memory_approach': 'streaming'
+        })
+        if parallel:
+            attrs['dask_workers'] = str(n_workers)
+            attrs['threads_per_worker'] = str(threads_per_worker)
         
         # Optionally scale down workers for zarr writing to reduce memory pressure
-        zarr_client = client
         if args.zarr_workers is not None and args.zarr_workers < n_workers and client is not None:
             print(f"Scaling down cluster from {n_workers} to {args.zarr_workers} workers for zarr writing...")
             try:
@@ -1220,39 +1173,13 @@ def main():
             except Exception as e:
                 print(f"  ⚠️  Could not scale cluster: {e}")
         
+        # Stream processing and writing to zarr
+        print(f"\nStreaming processing and writing {len(time_coords)} time steps to zarr...")
+        
         try:
-            # Define all output variables
-            mask_variables = [
-                'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
-                'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
-                'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
-                'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
-                'mcs_etc_overlap_mask', 'etc_mcs_overlap_mask',
-                'mcs_ar_etc_overlap_mask', 'ar_mcs_etc_overlap_mask', 'etc_mcs_ar_overlap_mask'
-            ]
-            
-            # Add processing metadata
-            attrs = ds.attrs.copy()
-            attrs.update({
-                'processing_info': 'Co-occurrence feature masks',
-                'processing_date': str(np.datetime64('today')),
-                'thresholds': 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)',
-                'tc_filtering_threshold': '10%',
-                'parallel_processing': str(parallel)
-            })
-            if parallel:
-                attrs['dask_workers'] = str(n_workers)
-                attrs['threads_per_worker'] = str(threads_per_worker)
-            
-            # Define chunk sizes for zarr writing
-            chunks = {
-                'time': 24,  # 24 time steps per chunk
-                'cell': min(50000, ds.sizes['cell'])  # Optimized for HEALPix grid
-            }
-            
-            # Write chunked zarr with memory-efficient approach
-            successful_times = write_zarr_chunked(
-                all_results=all_results,
+            # Stream process with chunked zarr writing
+            successful_times = stream_process_to_zarr(
+                ds=ds,
                 time_coords=time_coords,
                 mask_variables=mask_variables,
                 output_path=output_path,
@@ -1260,6 +1187,7 @@ def main():
                 attrs=attrs,
                 client=client,
                 logger=logger,
+                parallel=parallel,
                 chunk_size_time=24  # Process 24 time steps at a time
             )
             
@@ -1267,7 +1195,7 @@ def main():
             print(f"  ✅ Processed {successful_times}/{len(time_coords)} time steps")
             
             # Verify the saved dataset
-            test_ds = xr.open_dataset(output_path)
+            test_ds = xr.open_dataset(output_path, engine='zarr')
             print(f"  ✅ Verification successful - {len(test_ds.time)} time steps")
             print(f"  ✅ Variables: {list(test_ds.data_vars)}")
             test_ds.close()
@@ -1284,24 +1212,27 @@ def main():
         print(f"Time steps processed: {len(time_coords)}")
         print(f"Variables created: {len(mask_variables)}")
         print(f"Processing mode: {'Parallel' if parallel else 'Sequential'}")
-        print(f"Memory approach: Chunked zarr writing")
+        print(f"Memory approach: Streaming zarr writing")
         
         # Print summary statistics
         print(f"\nSUMMARY STATISTICS:")
-        successful_times_count = len([t for t in time_coords if str(t) in all_results])
-        print(f"  Successful time steps: {successful_times_count}/{len(time_coords)}")
+        print(f"  Successful time steps: {successful_times}/{len(time_coords)}")
         
-        if successful_times_count > 0:
-            # Sample some statistics from the first successful time step
-            sample_time = str([t for t in time_coords if str(t) in all_results][0])
-            sample_results = all_results[sample_time]
-            
-            print(f"  Example from {sample_time}:")
-            print(f"    2-way pairs: MCS-AR={len(sample_results['mcs_ar_pairs_2way'])}, " +
-                  f"AR-ETC={len(sample_results['ar_etc_pairs_2way'])}, " +
-                  f"MCS-ETC={len(sample_results['mcs_etc_pairs_2way'])}")
-            print(f"    3-way overlaps: {len(sample_results['validated_triplets'])} triplets")
-            print(f"    TC filtering: {sample_results['tc_filtering_summary']['retention_rate']:.1%} MCS retention")
+        # Verify the saved dataset for sample statistics
+        if successful_times > 0:
+            try:
+                # Open the written zarr to get sample statistics
+                test_ds = xr.open_dataset(output_path, engine='zarr')
+                sample_time = test_ds.time.values[0]
+                
+                print(f"  Example from {sample_time}:")
+                print(f"    Dataset successfully written with {len(test_ds.time)} time steps")
+                print(f"    Variables created: {len([v for v in test_ds.data_vars if 'mask' in v])}")
+                print(f"    Spatial cells: {test_ds.sizes.get('cell', 'unknown')}")
+                test_ds.close()
+            except Exception as e:
+                logger.warning(f"Could not read sample statistics: {e}")
+                print(f"  Dataset written but could not read sample statistics")
             
     finally:
         # Always cleanup client

@@ -396,3 +396,307 @@ def write_zarr_chunked(all_results, time_coords, mask_variables, output_path,
     
     logger.info(f"Chunked zarr write completed: {successful_times} time steps written")
     return successful_times
+
+
+def initialize_zarr_store(output_path, time_coords, mask_variables, template_coords, attrs, chunk_size_time=24):
+    """
+    Initialize zarr store with proper structure for streaming writes using xarray.
+    
+    This approach creates a proper xarray Dataset first, then saves to zarr,
+    which ensures coordinates are handled correctly.
+    
+    Parameters:
+    -----------
+    output_path : str
+        Path where zarr store will be created
+    time_coords : numpy.ndarray
+        All time coordinates for the dataset
+    mask_variables : list
+        List of mask variable names to create
+    template_coords : dict
+        Coordinate information from template dataset
+    attrs : dict
+        Global attributes for the dataset
+    chunk_size_time : int
+        Time dimension chunk size
+    """
+    
+    if os.path.exists(output_path):
+        shutil.rmtree(output_path)
+    
+    # Get spatial dimensions from template
+    n_cells = len(template_coords['cell'])
+    
+    # Calculate optimal cell chunking for HEALPix
+    nside = int(np.sqrt(n_cells // 12))  # Estimate NSIDE from n_cells
+    zoom = zoom_level_from_nside(nside)
+    chunksize_cell = 12 * (4 ** zoom) // 8  # Optimize for HEALPix structure
+    chunksize_cell = min(chunksize_cell, 50000)  # Cap at reasonable size
+    
+    # Create data variables dictionary
+    data_vars = {}
+    for var_name in mask_variables:
+        # Initialize with zeros
+        data_vars[var_name] = (['time', 'cell'], 
+                              np.zeros((len(time_coords), n_cells), dtype=np.float32),
+                              {'grid_mapping': 'crs', '_FillValue': 0.0})
+    
+    # Create coordinates dictionary (only the actual coordinates)
+    coords = {
+        'time': (('time',), time_coords, dict(template_coords['time'].attrs)),
+        'cell': (('cell',), template_coords['cell'].values.astype(int), dict(template_coords['cell'].attrs))
+    }
+    
+    # Add crs coordinate if it exists
+    if 'crs' in template_coords:
+        coords['crs'] = (template_coords['crs'].dims, 
+                        template_coords['crs'].values, 
+                        dict(template_coords['crs'].attrs))
+    
+    # Create xarray Dataset
+    ds = xr.Dataset(
+        data_vars=data_vars,
+        coords=coords,
+        attrs=attrs
+    )
+    
+    # Define chunking for zarr and chunk the dataset
+    chunks = {
+        'time': chunk_size_time,
+        'cell': chunksize_cell
+    }
+    ds = ds.chunk(chunks)
+    
+    # Write to zarr
+    ds.to_zarr(output_path, mode='w')
+    
+    print(f"Initialized zarr store: {len(time_coords)} time steps, {n_cells} cells")
+    
+    # Close the dataset to free memory
+    ds.close()
+
+
+def append_chunk_to_zarr(chunk_results, chunk_times, chunk_idx, mask_variables, output_path, logger=None):
+    """
+    Append a chunk of processed results to the existing zarr store.
+    
+    Parameters:
+    -----------
+    chunk_results : dict
+        Dictionary mapping time strings to result dictionaries
+    chunk_times : numpy.ndarray
+        Time coordinates for this chunk
+    chunk_idx : int
+        Index of this chunk (for determining time slice)
+    mask_variables : list
+        List of mask variable names to write
+    output_path : str
+        Path to zarr store
+    logger : logging.Logger, optional
+        Logger for status messages
+    """
+    
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    # Open existing zarr store
+    zarr_store = zarr.open(output_path, mode='r+')
+    
+    # Calculate time indices for this chunk
+    time_start = chunk_idx * len(chunk_times)  # Assumes uniform chunk sizes
+    time_end = time_start + len(chunk_times)
+    
+    # Write each mask variable
+    for var_name in mask_variables:
+        var_data = []
+        
+        # Collect data for this variable across all time steps in chunk
+        for time_val in chunk_times:
+            time_str = str(time_val)
+            if time_str in chunk_results and var_name in chunk_results[time_str]:
+                # Get the mask data
+                mask_data = chunk_results[time_str][var_name]
+                if hasattr(mask_data, 'values'):
+                    mask_data = mask_data.values
+                var_data.append(mask_data)
+            else:
+                # Fill with zeros if data missing
+                n_cells = zarr_store[var_name].shape[1]
+                var_data.append(np.zeros(n_cells, dtype=np.float32))
+        
+        # Convert to numpy array and write to zarr
+        if var_data:
+            var_array = np.stack(var_data, axis=0)
+            zarr_store[var_name][time_start:time_end, :] = var_array
+    
+    logger.info(f"Appended chunk {chunk_idx + 1} data to zarr store")
+
+
+def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, template_coords, attrs,
+                          client=None, logger=None, parallel=True, chunk_size_time=24):
+    """
+    Stream processing and writing to zarr without accumulating all results in memory.
+    
+    This function processes time steps in chunks, writes each chunk to zarr immediately,
+    and frees memory before processing the next chunk. This eliminates the memory
+    accumulation issue where all_results grows to 157GB.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Full input dataset
+    time_coords : numpy.ndarray
+        Time coordinates to process
+    mask_variables : list
+        List of mask variable names to create
+    output_path : str
+        Path for zarr output
+    template_coords : dict
+        Coordinate information from template dataset
+    attrs : dict
+        Global attributes for the output dataset
+    client : dask.distributed.Client, optional
+        Dask client for parallel processing
+    logger : logging.Logger, optional
+        Logger for status messages
+    parallel : bool
+        Whether to use parallel processing
+    chunk_size_time : int
+        Number of time steps to process in each chunk
+        
+    Returns:
+    --------
+    int : Number of successfully processed time steps
+    """
+    
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    # Initialize the zarr store with proper structure
+    logger.info("Initializing zarr store...")
+    initialize_zarr_store(
+        output_path=output_path,
+        time_coords=time_coords,
+        mask_variables=mask_variables,
+        template_coords=template_coords,
+        attrs=attrs,
+        chunk_size_time=chunk_size_time
+    )
+    
+    # Process and write time steps in chunks
+    total_processed = 0
+    total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
+    
+    logger.info(f"Processing {len(time_coords)} time steps in {total_chunks} chunks of {chunk_size_time}")
+    
+    for chunk_idx in range(total_chunks):
+        start_idx = chunk_idx * chunk_size_time
+        end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
+        chunk_times = time_coords[start_idx:end_idx]
+        
+        logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
+        
+        # Process this chunk of time steps
+        chunk_results = {}
+        
+        if parallel and client is not None:
+            # Import process_timestep_wrapper function
+            import sys
+            import os
+            
+            # Add current directory to path to import the main script functions
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            if current_dir not in sys.path:
+                sys.path.insert(0, current_dir)
+            
+            try:
+                from make_cooccurrence_masks import process_timestep_wrapper
+            except ImportError:
+                logger.error("Could not import process_timestep_wrapper. Falling back to sequential processing.")
+                parallel = False
+        
+        if parallel and client is not None:
+            # Parallel processing for this chunk
+            futures = []
+            for time_val in chunk_times:
+                _ds = ds.sel(time=time_val)
+                ds_dict = {var: _ds[var] for var in _ds.data_vars}
+                future = client.submit(process_timestep_wrapper, time_val, ds_dict, verbose=False)
+                futures.append(future)
+            
+            # Collect results for this chunk
+            try:
+                from dask.distributed import as_completed
+                for future in as_completed(futures):
+                    try:
+                        time_str, timestep_results = future.result()
+                        if timestep_results is not None:
+                            chunk_results[time_str] = timestep_results
+                        else:
+                            logger.warning(f"Failed to process time step: {time_str}")
+                    except Exception as e:
+                        logger.error(f"Error collecting chunk result: {e}")
+            except ImportError:
+                logger.error("Dask not available for parallel processing. Falling back to sequential.")
+                parallel = False
+        
+        if not parallel or client is None:
+            # Sequential processing for this chunk
+            try:
+                from make_cooccurrence_masks import process_single_timestep_overlaps
+            except ImportError:
+                logger.error("Could not import processing function. Aborting.")
+                return 0
+                
+            for time_val in chunk_times:
+                try:
+                    _ds = ds.sel(time=time_val)
+                    timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
+                    chunk_results[str(time_val)] = timestep_results
+                except Exception as e:
+                    logger.error(f"Error processing time step {time_val}: {e}")
+        
+        # Write this chunk to zarr immediately
+        try:
+            logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
+            append_chunk_to_zarr(
+                chunk_results=chunk_results,
+                chunk_times=chunk_times,
+                chunk_idx=chunk_idx,
+                mask_variables=mask_variables,
+                output_path=output_path,
+                logger=logger
+            )
+            
+            # Update progress
+            processed_this_chunk = len(chunk_results)
+            total_processed += processed_this_chunk
+            logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk}/{len(chunk_times)} time steps written")
+            
+            # Free memory by explicitly deleting chunk results
+            del chunk_results
+            
+        except Exception as e:
+            logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
+            continue
+        
+        # Log memory usage periodically
+        if (chunk_idx + 1) % 5 == 0:
+            if PSUTIL_AVAILABLE:
+                try:
+                    import psutil
+                    memory_usage = psutil.virtual_memory().percent
+                    logger.info(f"Memory usage after chunk {chunk_idx + 1}: {memory_usage:.1f}%")
+                except:
+                    pass
+    
+    # Final consolidation of metadata
+    try:
+        zarr.consolidate_metadata(output_path)
+        logger.info("Consolidated zarr metadata")
+    except Exception as e:
+        logger.warning(f"Could not consolidate zarr metadata: {e}")
+    
+    logger.info(f"Streaming processing complete: {total_processed}/{len(time_coords)} time steps successful")
+    return total_processed
+
