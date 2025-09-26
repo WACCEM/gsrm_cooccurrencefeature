@@ -6,6 +6,7 @@ import os, glob
 import time
 import logging
 from dask.distributed import Client, LocalCluster
+from zarr_tools import write_zarr
 
 #-------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logger=None):
@@ -92,105 +93,11 @@ def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logg
     # Rename variables, drop unwanted ones in the DataSet
     ds = ds.rename(rename_dict).drop_vars(drop_var_list, errors='ignore')
 
-    # TODO: Modify global attributes if needed
-    # ds.attrs['history'] = f"Created on {time.ctime()} by combining MCS and AR tracking data"
-    
     # Write to Zarr
     if out_zarr:
         write_zarr(ds, out_zarr, client=client, logger=logger)
     
     return ds
-
-#-------------------------------------------------------------------
-def write_zarr(ds, out_zarr, client=None, logger=None):
-    """
-    Write dataset to Zarr with optimized chunking for HEALPix grid.
-    
-    Args:
-        ds: xarray.Dataset
-            Dataset to write
-        out_zarr: str
-            Output Zarr store path
-        client: dask.distributed.Client, optional
-            Dask client for distributed computation
-        logger: logging.Logger, optional
-            Logger for status messages
-            
-    Returns:
-        None
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
-    # Optimize cell chunking for HEALPix grid
-    zoom_level = zoom_level_from_nside(ds.crs.attrs['healpix_nside'])
-    chunksize_time = 24
-    chunksize_cell = 12 * 4**zoom_level
-    
-    # Make time chunks more even if needed
-    if isinstance(chunksize_time, (int, float)) and chunksize_time != 'auto':
-        total_times = ds.sizes['time']
-        chunks = total_times // chunksize_time
-        if chunks * chunksize_time < total_times:
-            # We have a remainder - try to make chunks more even
-            if total_times % chunks == 0:
-                chunksize_time = total_times // chunks
-            elif total_times % (chunks + 1) == 0:
-                chunksize_time = total_times // (chunks + 1)
-    
-    # Set proper chunking for HEALPix output
-    chunked_hp = ds.chunk({
-        "time": chunksize_time, 
-        "cell": chunksize_cell, 
-    })
-    # Report dataset size and chunking info
-    logger.info(f"Output dataset dimensions: {dict(chunked_hp.sizes)}")
-    logger.info(f"Output chunking scheme: time={chunksize_time}, cell={chunksize_cell}")
-
-    # ---------- WRITE HEALPIX ZARR OUTPUT ----------
-    logger.info(f"Starting Zarr write to: {out_zarr}")
-    
-    # Create a delayed task for Zarr writing
-    write_task = chunked_hp.to_zarr(
-        out_zarr,
-        mode="w",
-        consolidated=True,  # Enable for better performance when reading
-        compute=False      # Create a delayed task
-    )
-    
-    # Compute the task, with progress reporting
-    if client:
-        from dask.distributed import progress
-        import psutil
-
-        # Temporarily suppress distributed.shuffle logs during progress display
-        shuffle_logger = logging.getLogger('distributed.shuffle')
-        original_level = shuffle_logger.level
-        shuffle_logger.setLevel(logging.ERROR)  # Only show errors, not warnings
-
-        # Get cluster state information before processing
-        memory_usage = client.run(lambda: psutil.Process().memory_info().rss / 1e9)
-        logger.info(f"Current memory usage across workers (GB): {memory_usage}")
-               
-        try:
-            # Compute with progress tracking
-            future = client.compute(write_task)
-            logger.info("Writing Zarr (this may take a while)...")
-            progress(future)  # Shows a progress bar in notebooks or detailed progress in terminals
-
-            result = future.result()
-            logger.info("Zarr write completed successfully")
-        except Exception as e:
-            logger.error(f"Zarr write failed: {str(e)}")
-            raise
-        finally:
-            # Restore original log level
-            shuffle_logger.setLevel(original_level)
-    else:
-        # Compute locally if no client
-        write_task.compute()
-
-    logger.info(f"Zarr file complete: {out_zarr}")
 
 #-------------------------------------------------------------------
 def convert_to_matching_calendar(std_times, target_calendar):
@@ -255,22 +162,6 @@ def convert_to_matching_calendar(std_times, target_calendar):
         return converted_times[0]
     else:
         return converted_times
-
-#-------------------------------------------------------------------
-def zoom_level_from_nside(nside):
-    """
-    Calculate the zoom level from the NSIDE value.
-
-    Args:
-        nside (int): NSIDE value, must be a power of 2.
-    
-    Returns:
-        int: Zoom level corresponding to the NSIDE value.
-    """
-    zoom = int(np.log2(nside))
-    if 2**zoom != nside:
-        raise ValueError("NSIDE must be a power of 2.")
-    return zoom
 
 def setup_logging():
     """
