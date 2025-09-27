@@ -10,6 +10,8 @@ Author: Zhe Feng | zhe.feng@pnnl.gov
 
 import os
 import shutil
+import sys
+import traceback
 import zarr
 import numpy as np
 import xarray as xr
@@ -22,7 +24,7 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 try:
-    from dask.distributed import progress
+    from dask.distributed import progress, as_completed
     DASK_AVAILABLE = True
 except ImportError:
     DASK_AVAILABLE = False
@@ -196,206 +198,6 @@ def write_zarr_simple(ds, out_zarr, logger=None):
     logger.info(f"Writing zarr to: {out_zarr}")
     ds.to_zarr(out_zarr, mode='w', consolidated=True)
     logger.info(f"Zarr write completed: {out_zarr}")
-
-
-def write_zarr_chunked(all_results, time_coords, mask_variables, output_path, 
-                      template_coords, attrs, client=None, logger=None, chunk_size_time=24):
-    """
-    Write results to zarr in time chunks.
-    
-    Args:
-        all_results: dict
-            Dictionary with time keys and results
-        time_coords: array-like
-            Time coordinate values
-        mask_variables: list
-            List of mask variable names  
-        output_path: str
-            Path to output zarr file
-        template_coords: dict
-            Template coordinate dictionary
-        attrs: dict
-            Dataset attributes
-        client: dask.distributed.Client, optional
-            Dask client for distributed computation
-        logger: logging.Logger, optional
-            Logger for progress messages
-        chunk_size_time: int, optional
-            Number of time steps to process at once (default: 24)
-    
-    Returns:
-        int: Number of successfully written time steps
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-    
-    # Remove existing zarr store if it exists
-    if os.path.exists(output_path):
-        logger.info(f"Removing existing zarr store: {output_path}")
-        shutil.rmtree(output_path)
-    
-    # Ensure parent directory exists
-    parent_dir = os.path.dirname(output_path)
-    if parent_dir and not os.path.exists(parent_dir):
-        os.makedirs(parent_dir, exist_ok=True)
-        logger.info(f"Created parent directory: {parent_dir}")
-    
-    logger.info(f"Starting memory-efficient zarr write to: {output_path}")
-    logger.info(f"Processing in chunks of {chunk_size_time} time steps")
-    
-    # Find a successful time step to get spatial dimensions and structure
-    sample_time = None
-    sample_results = None
-    for time_val in time_coords:
-        time_str = str(time_val)
-        if time_str in all_results:
-            sample_time = time_str
-            sample_results = all_results[time_str]
-            break
-    
-    if sample_results is None:
-        logger.error("No successful results found in all_results")
-        return 0
-    
-    logger.info(f"Using time step {sample_time} as template")
-    
-    # Get spatial dimensions from the first mask variable
-    first_var = mask_variables[0]
-    sample_data = sample_results[first_var]
-    spatial_dims = sample_data.shape
-    
-    logger.info(f"Spatial dimensions: {spatial_dims}")
-    logger.info(f"Total time steps to process: {len(time_coords)}")
-    
-    # Calculate optimal cell chunk size based on HEALPix zoom level
-    chunksize_cell = None
-    if 'crs' in template_coords:
-        crs_coord = template_coords['crs']
-        if hasattr(crs_coord, 'attrs') and 'healpix_nside' in crs_coord.attrs:
-            zoom_level = zoom_level_from_nside(crs_coord.attrs['healpix_nside'])
-            chunksize_cell = 12 * 4**zoom_level
-            logger.info(f"HEALPix NSIDE={crs_coord.attrs['healpix_nside']}, zoom_level={zoom_level}, chunksize_cell={chunksize_cell}")
-    
-    if chunksize_cell is None:
-        # Default cell chunking for non-HEALPix data
-        chunksize_cell = min(10000, spatial_dims[0])
-        logger.info(f"Using default cell chunking: {chunksize_cell}")
-    
-    # Log coordinate information for debugging
-    if logger:
-        logger.debug(f"Template coords keys: {list(template_coords.keys())}")
-    
-    # Handle CRS coordinate if present
-    if 'crs' in template_coords:
-        crs_coord = template_coords['crs']
-        logger.debug(f"Found CRS coordinate: {crs_coord}")
-    
-    # Define the zarr store structure once
-    zarr_store = None
-    
-    # Process time in chunks
-    successful_times = 0
-    total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
-    
-    logger.info(f"Will process {len(time_coords)} time steps in {total_chunks} chunks")
-    
-    # Main processing loop
-    for chunk_idx in range(total_chunks):
-        start_idx = chunk_idx * chunk_size_time
-        end_idx = min(start_idx + chunk_size_time, len(time_coords))
-        chunk_times = time_coords[start_idx:end_idx]
-        
-        logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: "
-                   f"times {start_idx} to {end_idx-1}")
-        
-        # Collect data for this chunk
-        chunk_data = {}
-        chunk_time_coords = []
-        
-        try:
-            for i, time_val in enumerate(chunk_times):
-                time_str = str(time_val)
-                if time_str in all_results:
-                    timestep_results = all_results[time_str]
-                    
-                    # Initialize chunk_data structure on first successful time
-                    if not chunk_data:
-                        for var_name in mask_variables:
-                            chunk_data[var_name] = []
-                    
-                    # Add data for each variable
-                    for var_name in mask_variables:
-                        var_data = timestep_results[var_name]
-                        chunk_data[var_name].append(var_data)
-                    
-                    chunk_time_coords.append(time_val)
-            
-            if not chunk_data:
-                logger.warning(f"No data found for chunk {chunk_idx + 1}, skipping")
-                continue
-            
-            # Convert lists to numpy arrays with time dimension
-            chunk_data_vars = {}
-            for var_name in mask_variables:
-                data_array = np.stack(chunk_data[var_name], axis=0)  # time is first dimension
-                chunk_data_vars[var_name] = (['time', 'cell'], data_array)
-                
-            # Create other coordinates (excluding time which we'll set per chunk)
-            other_coords = {k: v for k, v in template_coords.items()
-                           if k not in ['time']}
-            
-            # Add time coordinate for this chunk
-            chunk_coords = other_coords.copy()
-            chunk_coords['time'] = chunk_time_coords
-            
-            # Create xarray Dataset for this chunk
-            chunk_ds = xr.Dataset(
-                data_vars=chunk_data_vars,
-                coords=chunk_coords
-            )
-            
-            # Apply chunking (optimized for HEALPix)
-            chunk_ds = chunk_ds.chunk({'time': chunk_size_time, 'cell': chunksize_cell})
-            
-            # Set attributes
-            if attrs:
-                chunk_ds.attrs.update(attrs)
-            
-            # Write to zarr (append mode for subsequent chunks)
-            if chunk_idx == 0:
-                # First chunk - create zarr store
-                logger.info("Creating new zarr store")
-                chunk_ds.to_zarr(output_path, mode='w')
-                zarr_store = output_path
-                logger.info(f"Created zarr store with {len(chunk_time_coords)} time steps")
-            else:
-                # Subsequent chunks - append along time dimension  
-                logger.info(f"Appending {len(chunk_time_coords)} time steps to zarr store")
-                chunk_ds.to_zarr(output_path, mode='a', append_dim='time')
-                logger.info(f"Appended chunk {chunk_idx + 1} successfully")
-            
-            successful_times += len(chunk_time_coords)
-            
-        except Exception as e:
-            logger.error(f"Error processing chunk {chunk_idx + 1}: {e}")
-            continue
-            
-        # Clear chunk data to free memory
-        del chunk_data, chunk_data_vars, chunk_ds
-        
-        # Progress update
-        if (chunk_idx + 1) % 5 == 0 or chunk_idx + 1 == total_chunks:
-            logger.info(f"Completed {chunk_idx + 1}/{total_chunks} chunks")
-    
-    # Consolidate zarr metadata for better read performance
-    try:
-        zarr.consolidate_metadata(output_path)
-        logger.info("Consolidated zarr metadata")
-    except Exception as e:
-        logger.warning(f"Could not consolidate zarr metadata: {e}")
-    
-    logger.info(f"Chunked zarr write completed: {successful_times} time steps written")
-    return successful_times
 
 
 def initialize_zarr_store(output_path, time_coords, mask_variables, template_coords, attrs, chunk_size_time=24):
@@ -592,20 +394,10 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         chunk_results = {}
         
         if parallel and client is not None:
-            # Import process_timestep_wrapper function
-            import sys
-            import os
-            
             # Add current directory to path to import the main script functions
             current_dir = os.path.dirname(os.path.abspath(__file__))
             if current_dir not in sys.path:
-                sys.path.insert(0, current_dir)
-            
-            try:
-                from make_cooccurrence_masks import process_timestep_wrapper_zarr
-            except ImportError:
-                logger.error("Could not import process_timestep_wrapper_zarr. Falling back to sequential processing.")
-                parallel = False
+                sys.path.insert(0, current_dir)            
         
         if parallel and client is not None:
             # Parallel processing for this chunk using zarr file path approach
@@ -637,7 +429,6 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
             if not serialization_failed and futures:
                 # Collect results for this chunk
                 try:
-                    from dask.distributed import as_completed
                     logger.info(f"Collecting results from {len(futures)} parallel tasks...")
                     
                     for future in as_completed(futures):
@@ -648,27 +439,14 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                             else:
                                 logger.warning(f"Failed to process time step: {time_str}")
                         except Exception as e:
-                            error_msg = str(e)
-                            if "bytes object is too large" in error_msg or "Failed to Serialize" in error_msg:
-                                logger.error(f"Serialization error during result collection: {error_msg}")
-                                logger.warning(f"Falling back to sequential processing for chunk {chunk_idx + 1}")
-                                # Clear futures and fall back to sequential
-                                for f in futures:
-                                    try:
-                                        f.cancel()
-                                    except:
-                                        pass
-                                chunk_results = {}  # Clear any partial results
-                                serialization_failed = True
-                                break
-                            else:
-                                logger.error(f"Error collecting chunk result: {e}")
-                                
+                            logger.error(f"Error processing time step: {e}")
+                            # Continue processing other time steps rather than failing the entire chunk
+                            
                 except ImportError:
-                    logger.error("Dask not available for parallel processing. Falling back to sequential.")
+                    logger.error("Dask as_completed not available. This should not happen if we got this far.")
                     serialization_failed = True
                     
-            # If serialization failed or no parallel processing, fall back to sequential        
+            # Fall back to sequential processing only if input zarr path missing or dask unavailable        
             if serialization_failed or not parallel or client is None:
                 # Sequential processing for this chunk
                 logger.info(f"Processing chunk {chunk_idx + 1} sequentially...")
@@ -714,7 +492,6 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         if (chunk_idx + 1) % 5 == 0:
             if PSUTIL_AVAILABLE:
                 try:
-                    import psutil
                     memory_usage = psutil.virtual_memory().percent
                     logger.info(f"Memory usage after chunk {chunk_idx + 1}: {memory_usage:.1f}%")
                 except:
@@ -729,4 +506,46 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     
     logger.info(f"Streaming processing complete: {total_processed}/{len(time_coords)} time steps successful")
     return total_processed
+
+
+def process_timestep_wrapper_zarr(time_val, zarr_path, verbose=False):
+    """
+    Wrapper function for processing a single time step by reading from zarr file.
+    
+    This approach avoids serialization issues by having each worker read the zarr file
+    directly instead of serializing large xarray Datasets.
+    
+    Args:
+        time_val: Time coordinate value to process
+        zarr_path: Path to the zarr file containing the data
+        verbose: Whether to print verbose output
+        
+    Returns:
+        tuple: (time_str, results_dict) or (time_str, None) if error
+    """
+    try:
+        # Import here to avoid circular imports
+        from make_cooccurrence_masks import process_single_timestep_overlaps
+        
+        # Each worker opens the zarr file independently
+        ds = xr.open_dataset(zarr_path, engine='zarr')
+        
+        # Select the specific time step
+        _ds = ds.sel(time=time_val)
+        
+        # Load the data for this time step into memory
+        _ds = _ds.load()
+        
+        # Close the full dataset to free memory
+        ds.close()
+        
+        # Process this time step
+        timestep_results = process_single_timestep_overlaps(_ds, verbose=verbose)
+        
+        return str(time_val), timestep_results
+        
+    except Exception as e:
+        print(f"Error processing time step {time_val}: {e}")
+        traceback.print_exc()
+        return str(time_val), None
 
