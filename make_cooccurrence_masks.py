@@ -9,7 +9,7 @@ Key Features:
 - Define co-occurrence features based on atmospheric feature scale hierarchy
 - Consider 2-way & 3-way overlaps
 - Vectorized overlap detection for efficiency
-- Processing of full time series datasets
+- Processing of full time series datasets using streaming to minimize memory usage
 - Output in zarr format with proper coordinates and attributes
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
@@ -760,7 +760,7 @@ def promote_dual_etc_overlaps_to_3way(mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_
 
 def process_single_timestep_overlaps(_ds, verbose=True):
     """
-    Process meteorological feature overlaps for a single time step.
+    Process co-occurrence feature overlaps for a single time step.
     
     Parameters:
     -----------
@@ -1034,7 +1034,7 @@ def main():
     """
     
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Process meteorological feature overlaps')
+    parser = argparse.ArgumentParser(description='Process co-occurrence feature overlaps')
     parser.add_argument('--parallel', action='store_true', default=True,
                        help='Use parallel processing with Dask (default: True)')
     parser.add_argument('--no-parallel', action='store_false', dest='parallel',
@@ -1070,7 +1070,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     print("="*80)
-    print("METEOROLOGICAL FEATURE OVERLAP PROCESSING")
+    print("CO-OCCURRENCE FEATURE OVERLAP PROCESSING")
     print("="*80)
     print(f"Source: {source_name}")
     print(f"Input: {in_dir}")
@@ -1135,7 +1135,7 @@ def main():
         # Use a simple default chunk size for time dimension
         # With zarr-path approach, serialization is minimal regardless of chunk size
         # Chunk size only affects processing efficiency and zarr I/O
-        chunk_size_time = 24
+        chunk_size_time = 48
         print(f"Using default chunk_size_time={chunk_size_time} for optimal processing and zarr I/O")
         
         try:
