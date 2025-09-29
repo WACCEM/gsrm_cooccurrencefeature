@@ -9,13 +9,13 @@ source_name="IMERGv7"
 start_date="2019-11-24T00"
 end_date="2019-11-30T23"
 parallel_mode=1
-n_workers=64
+n_workers=32
 fig_width=14
 fig_height=8
 output_dpi=200
 
 # Figure directory
-figdir="/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks/"
+figdir="/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks/"${source_name}"/"
 # Animation parameters
 animation_dir="/global/cfs/cdirs/m1867/zfeng/hk25/animations/"
 animation_filename="${animation_dir}${source_name}_allmasks_$(echo ${start_date} | cut -d'T' -f1).mp4"

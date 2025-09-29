@@ -12,7 +12,7 @@ Optional arguments:
 --dpi DPI for output figures, default: 200
 --workers number of dask workers, default: 4
 
-Author: Generated from Jupyter notebook
+Author: Zhe Feng | zhe.feng@pnnl.gov
 """
 
 import argparse
@@ -24,14 +24,15 @@ import matplotlib as mpl
 # Set non-GUI backend for thread safety
 mpl.use('agg')
 import matplotlib.pyplot as plt
+# Configure matplotlib to be more memory-efficient
+plt.rcParams['figure.max_open_warning'] = 0  # Disable the warning
 from matplotlib.patches import Patch
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import cartopy.crs as ccrs
 import cartopy.feature as cf
 import warnings
-import dask
-from dask.distributed import Client, LocalCluster
 from easygems import healpix as egh
+from zarr_tools import setup_dask_client
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -61,7 +62,8 @@ def parse_args():
     return parser.parse_args()
 
 def plot_all_feature_masks(ds, title="", figsize=(12, 6), colors=None, figname=None, dpi=200, 
-                          alphas=None, title_fontsize=14, legend_fontsize=12):
+                          alphas=None, title_fontsize=14, legend_fontsize=12,
+                          show_track_labels=True, track_fontsize=8):
     """
     Plot all 4 feature masks at a single time step with thread-safe matplotlib.
     
@@ -75,13 +77,12 @@ def plot_all_feature_masks(ds, title="", figsize=(12, 6), colors=None, figname=N
     - alphas: dict with alpha values for each feature type
     - title_fontsize: font size for the plot title (default 14)
     - legend_fontsize: font size for the legend (default 12)
+    - show_track_labels: whether to show track ID labels for ETC and AR features (default True)
+    - track_fontsize: font size for track labels (default 8)
     
     Returns:
-    - fig, ax: matplotlib figure and axes objects
+    - figname: filename of the saved figure
     """
-    # Import healpix here to avoid issues with parallel imports
-    # from easygems import healpix as egh
-    
     # Set default colors
     if colors is None:
         colors = {
@@ -174,6 +175,67 @@ def plot_all_feature_masks(ds, title="", figsize=(12, 6), colors=None, figname=N
             vmin=0.5, 
             vmax=1.5
         )
+
+    # Add track labels for ETC and AR features if requested
+    if show_track_labels:
+        # Helper function for circular longitude averaging (handles dateline crossing)
+        def circular_lon_mean(lon_values):
+            """Calculate circular mean for longitude values to handle dateline crossing."""
+            # Convert to radians
+            lon_rad = np.deg2rad(lon_values)
+            # Calculate circular mean using complex numbers
+            mean_complex = np.mean(np.exp(1j * lon_rad))
+            # Convert back to degrees and ensure 0-360 range
+            mean_lon = np.rad2deg(np.angle(mean_complex))
+            if mean_lon < 0:
+                mean_lon += 360
+            return mean_lon
+        
+        # Add ETC track labels (green)
+        etc_tracks = np.unique(etc_mask.values[etc_mask.values > 0])
+        for track_id in etc_tracks:
+            track_pixels = (etc_mask == track_id)
+            if track_pixels.any():
+                # Calculate average lat/lon for this track using circular statistics for longitude
+                lon_values = ds.lon.where(track_pixels).values
+                lat_values = ds.lat.where(track_pixels).values
+                
+                # Remove NaN values
+                valid_mask = ~np.isnan(lon_values) & ~np.isnan(lat_values)
+                if np.any(valid_mask):
+                    lon_clean = lon_values[valid_mask]
+                    lat_clean = lat_values[valid_mask]
+                    
+                    avg_lon = circular_lon_mean(lon_clean)
+                    avg_lat = np.mean(lat_clean)
+                    
+                    ax.text(avg_lon, avg_lat, str(int(track_id)), 
+                           transform=ccrs.PlateCarree(),
+                           fontsize=track_fontsize, fontweight='bold', 
+                           color='green', ha='center', va='center')
+        
+        # Add AR track labels (darkorange)
+        ar_tracks = np.unique(ar_mask.values[ar_mask.values > 0])
+        for track_id in ar_tracks:
+            track_pixels = (ar_mask == track_id)
+            if track_pixels.any():
+                # Calculate average lat/lon for this track using circular statistics for longitude
+                lon_values = ds.lon.where(track_pixels).values
+                lat_values = ds.lat.where(track_pixels).values
+                
+                # Remove NaN values
+                valid_mask = ~np.isnan(lon_values) & ~np.isnan(lat_values)
+                if np.any(valid_mask):
+                    lon_clean = lon_values[valid_mask]
+                    lat_clean = lat_values[valid_mask]
+                    
+                    avg_lon = circular_lon_mean(lon_clean)
+                    avg_lat = np.mean(lat_clean)
+                    
+                    ax.text(avg_lon, avg_lat, str(int(track_id)), 
+                           transform=ccrs.PlateCarree(),
+                           fontsize=track_fontsize, fontweight='bold', 
+                           color='darkorange', ha='center', va='center')
     
     # Add legend
     legend_elements = [
@@ -194,7 +256,9 @@ def plot_all_feature_masks(ds, title="", figsize=(12, 6), colors=None, figname=N
         fig.savefig(figname, dpi=dpi, bbox_inches='tight')
         print(f"Figure saved as {figname}")
     
-    return fig, ax
+    plt.close(fig)
+    return figname
+
 
 def process_single_time(data_path, time_step_str, source_name, figdir, figsize, dpi):
     """
@@ -220,7 +284,9 @@ def process_single_time(data_path, time_step_str, source_name, figdir, figsize, 
         # Select single time step
         _ds = ds.sel(time=time_step_str, method='nearest')
         _time = ds.time.sel(time=time_step_str, method='nearest')
-        
+        # Attach Healpix coordinates
+        _ds = _ds.pipe(egh.attach_coords)
+
         # Close the full dataset to free memory
         ds.close()
         
@@ -246,7 +312,7 @@ def process_single_time(data_path, time_step_str, source_name, figdir, figsize, 
         }
         
         # Create plot
-        fig, ax = plot_all_feature_masks(
+        _figname = plot_all_feature_masks(
             _ds, 
             title=title_with_time, 
             figsize=figsize,
@@ -255,20 +321,24 @@ def process_single_time(data_path, time_step_str, source_name, figdir, figsize, 
             title_fontsize=18,
             legend_fontsize=12,
             figname=figname,
-            dpi=dpi
+            dpi=dpi,
+            show_track_labels=True,
+            track_fontsize=8,
         )
-        
-        # Close figure to save memory
-        plt.close(fig)
         
         return 1
         
     except Exception as e:
         print(f"Error processing time {time_step_str}: {e}")
+        # Ensure cleanup even on error
+        plt.close('all')
         return 0
 
 def main():
     """Main function to orchestrate the plotting process."""
+    # Configure matplotlib for memory efficiency
+    plt.ioff()  # Turn off interactive mode
+    
     # Parse command line arguments
     args = parse_args()
     
@@ -296,9 +366,13 @@ def main():
         ds = xr.open_zarr(in_dir, consolidated=True)
         # Get available times to validate date range
         available_times = ds.time.values
+        print(f"  ✅ Dataset loaded successfully")
+        print(f"  Time steps: {len(ds.time)}")
+        print(f"  Data variables: {list(ds.data_vars)}")
+        print(f"  Spatial dimensions: {dict(ds.dims)}")
         ds.close()  # Close immediately to free memory
     except Exception as e:
-        print(f"Error loading dataset: {e}")
+        print(f"  ❌ Error loading dataset: {e}")
         return
     
     # Create date range
@@ -327,31 +401,58 @@ def main():
         print(f"Running in parallel mode with {n_workers} workers...")
         
         # Set up Dask cluster
-        cluster = LocalCluster(n_workers=n_workers, threads_per_worker=1, processes=True)
-        client = Client(cluster)
+        client = setup_dask_client(parallel=True, n_workers=n_workers, threads_per_worker=1)
+        print(f"Dask cluster ready with {n_workers} workers")
         
         try:
-            # Create delayed tasks - now passing data path instead of dataset
-            delayed_tasks = []
-            for time_step in time_range:
-                tm_str = time_step.strftime('%Y-%m-%dT%H')
-                task = dask.delayed(process_single_time)(
-                    in_dir, tm_str, source_name, figdir, figsize, dpi
-                )
-                delayed_tasks.append(task)
-            
+            # Process tasks in batches to avoid large graph serialization
             print("Starting parallel computation...")
-            # Execute all tasks
-            results = dask.compute(*delayed_tasks)
+            batch_size = min(n_workers * 2, 32)  # Process in batches of 2x workers or 32, whichever is smaller
+            total_time_steps = len(time_range)
+            success_count = 0
+            completed_count = 0
             
-            # Count successful plots
-            success_count = sum(results)
-            print(f"Completed all {len(time_range)} time steps ({success_count} successful)")
+            from dask.distributed import as_completed
+            
+            # Process time steps in batches
+            for batch_start in range(0, total_time_steps, batch_size):
+                batch_end = min(batch_start + batch_size, total_time_steps)
+                batch_times = time_range[batch_start:batch_end]
+                
+                print(f"Processing batch {batch_start//batch_size + 1}/{-(-total_time_steps//batch_size)}: "
+                      f"time steps {batch_start+1}-{batch_end}")
+                
+                # Submit batch of tasks
+                futures = []
+                for time_step in batch_times:
+                    tm_str = time_step.strftime('%Y-%m-%dT%H')
+                    future = client.submit(
+                        process_single_time, 
+                        in_dir, tm_str, source_name, figdir, figsize, dpi
+                    )
+                    futures.append(future)
+                
+                # Process batch results
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        success_count += result
+                        completed_count += 1
+                        
+                        # Progress update every 10 plots
+                        if completed_count % 10 == 0:
+                            print(f"Progress: {completed_count}/{total_time_steps} plots completed ({success_count} successful)")
+                            
+                    except Exception as e:
+                        print(f"Task failed: {e}")
+                        completed_count += 1
+            
+            print(f"Completed all {total_time_steps} time steps ({success_count} successful)")
             
         finally:
             # Clean up Dask resources
-            client.close()
-            cluster.close()
+            if client is not None:
+                client.close()
     
     print("Finished creating all plots!")
 
