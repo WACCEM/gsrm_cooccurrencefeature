@@ -5,8 +5,11 @@ import cftime
 import os, glob
 import time
 import logging
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from dask.distributed import Client, LocalCluster
-from zarr_tools import write_zarr
+from src.zarr_tools import write_zarr
 
 #-------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logger=None):

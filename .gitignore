@@ -1,0 +1,123 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Scientific Python specific
+*.nc
+*.nc4
+*.hdf5
+*.h5
+*.zarr/
+*.grib
+*.grib2
+*.grb
+*.grb2
+
+# Large data files
+*.dat
+*.bin
+*.raw
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Dask
+dask-worker-space/
+
+# Output directories (customize based on your project)
+output/
+results/
+figures/
+plots/
+animations/
+quicklooks*/
+
+# Configuration files with sensitive data
+*config_local.yaml
+*secrets.yaml
+*.env.local
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Core dumps
+core.*
+
+# SLURM job files
+slurm-*.out
+*.sbatch.out

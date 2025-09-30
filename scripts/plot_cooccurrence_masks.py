@@ -32,8 +32,11 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import cartopy.crs as ccrs
 import cartopy.feature as cf
 import warnings
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from easygems import healpix as egh
-from zarr_tools import setup_dask_client
+from src.zarr_tools import setup_dask_client
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)

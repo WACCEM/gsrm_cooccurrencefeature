@@ -24,7 +24,10 @@ import warnings
 import argparse
 import logging
 # import easygems.healpix as egh  # Commented out for testing
-from zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_dask_client
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from src.zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_dask_client
 
 warnings.filterwarnings('ignore')
 
