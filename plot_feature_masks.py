@@ -58,6 +58,8 @@ def parse_args():
                        help="DPI for output figures")
     parser.add_argument("--workers", type=int, default=4,
                        help="Number of Dask workers for parallel processing")
+    parser.add_argument("--plot-freq", type=str, default=None,
+                       help="Override time frequency for plotting (e.g., '1H', '3H', '6H')")
     
     return parser.parse_args()
 
@@ -375,8 +377,35 @@ def main():
         print(f"  ❌ Error loading dataset: {e}")
         return
     
-    # Create date range
-    time_range = pd.date_range(start=start_date, end=end_date, freq='3H')
+    # Determine time frequency for plotting
+    if args.plot_freq is not None:
+        # Use user-provided frequency
+        freq_str = args.plot_freq
+        print(f"  Using user-specified frequency: {freq_str}")
+    elif len(available_times) > 1:
+        # Calculate average time frequency from the dataset
+        time_diffs = pd.to_datetime(available_times[1:]) - pd.to_datetime(available_times[:-1])
+        avg_freq = time_diffs.mean()
+        
+        # Convert to frequency string (e.g., '3H', '1H', '6H')
+        total_seconds = avg_freq.total_seconds()
+        if total_seconds >= 3600:  # >= 1 hour
+            hours = int(total_seconds / 3600)
+            freq_str = f'{hours}H'
+        elif total_seconds >= 60:  # >= 1 minute
+            minutes = int(total_seconds / 60)
+            freq_str = f'{minutes}T'  # T is pandas notation for minutes
+        else:
+            seconds = int(total_seconds)
+            freq_str = f'{seconds}S'
+        
+        print(f"  Calculated time frequency from dataset: {freq_str} (avg interval: {avg_freq})")
+    else:
+        freq_str = '3H'  # fallback to default
+        print(f"  Using default frequency: {freq_str} (insufficient data points to calculate)")
+    
+    # Create date range using determined frequency
+    time_range = pd.date_range(start=start_date, end=end_date, freq=freq_str)
     
     print(f"Creating plots from {start_date} to {end_date}")
     print(f"Total time steps: {len(time_range)}")
