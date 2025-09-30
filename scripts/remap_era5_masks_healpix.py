@@ -4,11 +4,15 @@ import os
 import glob
 import time
 import logging
+import sys
+from pathlib import Path
+# Add src directory to path for zarr_tools import
+sys.path.append(str(Path(__file__).parent.parent / 'src'))
+from zarr_tools import setup_dask_client
 import intake
 import requests
 import easygems.healpix as egh
 from functools import partial
-from dask.distributed import Client, LocalCluster
 
 def setup_logging():
     """
@@ -23,75 +27,7 @@ def setup_logging():
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 
-def setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker="60GB", logger=None):
-    """
-    Set up a Dask client optimized for HPC hardware
-    
-    Args:
-        parallel: bool
-            Whether to use parallel processing
-        n_workers: int
-            Number of workers for the Dask cluster
-        threads_per_worker: int
-            Number of threads per worker
-        memory_per_worker: str
-            Memory limit per worker (e.g., "60GB")
-        logger: logging.Logger, optional
-            Logger for status messages
-            
-    Returns:
-        dask.distributed.Client or None: Dask client if parallel is True, None otherwise
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-        
-    if not parallel:
-        logger.info("Running in sequential mode (parallel=False)")
-        return None
-    
-    logger.info(f"Setting up Dask cluster optimized for HPC hardware")
-    logger.info(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
-    logger.info(f"Memory per worker: {memory_per_worker}")
-    
-    # # Enable NUMA-aware memory allocation
-    # import os
-    # os.environ['OMP_NUM_THREADS'] = str(threads_per_worker)
-    # os.environ['MKL_NUM_THREADS'] = str(threads_per_worker)
-    # os.environ['OPENBLAS_NUM_THREADS'] = str(threads_per_worker)
-    # os.environ['NUMBA_NUM_THREADS'] = str(threads_per_worker)
-    
-    cluster = LocalCluster(
-        n_workers=n_workers,
-        threads_per_worker=threads_per_worker,
-        memory_limit=memory_per_worker,
-        processes=True,  # Use processes for better memory isolation
-        scheduler_port=0,
-        dashboard_address=':8787',
-        # Worker memory management settings
-        memory_target_fraction=0.8,
-        memory_spill_fraction=0.85,
-        memory_pause_fraction=0.9,
-        silence_logs=False,  # Keep logs for debugging
-    )
-    client = Client(cluster)
-    
-    # Configure client for high-throughput workloads
-    try:
-        client.configure({
-            'distributed.worker.memory.target': 0.8,
-            'distributed.worker.memory.spill': 0.85,
-            'distributed.worker.memory.pause': 0.9,
-            'distributed.worker.memory.terminate': 0.95,
-            'distributed.comm.timeouts.tcp': '300s',
-            'distributed.client.heartbeat': '10s',
-            'distributed.worker.daemon': False,
-        })
-    except Exception as e:
-        logger.warning(f"Could not configure some client settings: {e}")
-    
-    logger.info(f"Dask dashboard: {client.dashboard_link}")
-    
-    return client
+# Dask client setup moved to zarr_tools.py - import it instead
 
 def get_datasets(files_ar, files_tc, files_etc, parallel=False, logger=None):
     """

@@ -8,8 +8,7 @@ import logging
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from dask.distributed import Client, LocalCluster
-from src.zarr_tools import write_zarr
+from src.zarr_tools import write_zarr, setup_dask_client
 
 #-------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logger=None):
@@ -179,41 +178,6 @@ def setup_logging():
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 
-def setup_dask_client(parallel, n_workers, threads_per_worker, logger=None):
-    """
-    Set up a Dask client for parallel processing
-    
-    Args:
-        parallel: bool
-            Whether to use parallel processing
-        n_workers: int
-            Number of workers for the Dask cluster
-        threads_per_worker: int
-            Number of threads per worker
-        logger: logging.Logger, optional
-            Logger for status messages
-            
-    Returns:
-        dask.distributed.Client or None: Dask client if parallel is True, None otherwise
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-        
-    if not parallel:
-        logger.info("Running in sequential mode (parallel=False)")
-        return None
-    
-    logger.info(f"Setting up Dask cluster with {n_workers} workers, {threads_per_worker} threads per worker")
-    cluster = LocalCluster(
-        n_workers=n_workers,
-        threads_per_worker=threads_per_worker,
-        memory_limit='auto',
-    )
-    client = Client(cluster)
-    logger.info(f"Dask dashboard: {client.dashboard_link}")
-    
-    return client
-
 def get_datasets(dir_mcs, files_ar, files_tc, files_etc, parallel=False, logger=None):
     """
     Load datasets from files
@@ -339,7 +303,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     
     # Setup Dask client
-    client = setup_dask_client(parallel, n_workers, threads_per_worker, logger)
+    client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
     
     try:
         # Find input files

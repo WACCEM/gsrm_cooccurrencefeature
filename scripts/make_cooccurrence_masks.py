@@ -1031,7 +1031,7 @@ def main():
         print(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
     
     # Setup Dask client
-    client = setup_dask_client(parallel, n_workers, threads_per_worker, logger)
+    client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
     
     try:
         # Load the full dataset
