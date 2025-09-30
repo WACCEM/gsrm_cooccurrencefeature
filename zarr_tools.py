@@ -549,3 +549,54 @@ def process_timestep_wrapper_zarr(time_val, zarr_path, verbose=False):
         traceback.print_exc()
         return str(time_val), None
 
+def setup_dask_client(parallel, n_workers, threads_per_worker, logger=None):
+    """
+    Set up a Dask client for parallel processing
+    
+    Args:
+        parallel: bool
+            Whether to use parallel processing
+        n_workers: int
+            Number of workers for the Dask cluster
+        threads_per_worker: int
+            Number of threads per worker
+        logger: logging.Logger, optional
+            Logger for status messages
+            
+    Returns:
+        dask.distributed.Client or None: Dask client if parallel is True, None otherwise
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        
+    if not parallel:
+        logger.info("Running in sequential mode (parallel=False)")
+        return None
+    
+    try:
+        from dask.distributed import Client, LocalCluster
+        import psutil
+        
+        # Calculate memory limit per worker
+        total_memory_gb = psutil.virtual_memory().total / (1024**3)  # Convert to GB
+        # Leave 20% for system overhead, divide remaining by number of workers
+        usable_memory_gb = total_memory_gb * 0.8
+        memory_per_worker_gb = usable_memory_gb / n_workers
+        memory_limit = f"{memory_per_worker_gb:.1f}GB"
+        
+        logger.info(f"Setting up Dask cluster with {n_workers} workers, {threads_per_worker} threads per worker")
+        logger.info(f"Detected total memory: {total_memory_gb:.1f}GB, setting {memory_limit} per worker")
+        
+        cluster = LocalCluster(
+            n_workers=n_workers,
+            threads_per_worker=threads_per_worker,
+            memory_limit=memory_limit,
+        )
+        client = Client(cluster)
+        logger.info(f"Dask dashboard: {client.dashboard_link}")
+        
+        return client
+        
+    except ImportError:
+        logger.warning("Dask not available, falling back to sequential processing")
+        return None
