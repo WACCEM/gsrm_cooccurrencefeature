@@ -281,6 +281,7 @@ def main():
 
     # Setup Dask client
     client = setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker, logger)
+    import pdb; pdb.set_trace
 
     try:
         # Load datasets
