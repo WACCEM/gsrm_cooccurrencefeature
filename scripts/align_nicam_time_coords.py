@@ -9,7 +9,7 @@ This script:
 3. Aligns all variables to a unified time coordinate
 4. Writes the aligned dataset to a Zarr file using parallel dask
 
-Variables included: pr, rlut, uas, vas
+Variables included: pr, psl, rlut, rsut, uas, vas
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """
