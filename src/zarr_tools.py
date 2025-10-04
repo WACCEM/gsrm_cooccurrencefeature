@@ -105,6 +105,14 @@ def write_zarr(ds, out_zarr, client=None, logger=None, chunksize_time=24, chunks
     if spatial_dim is None:
         raise ValueError("Could not find spatial dimension ('cell' or 'ncol') in dataset")
     
+    # Clear any existing encoding that might conflict with new chunking
+    # This is critical when rechunking data that was previously written to zarr
+    for var in ds.data_vars:
+        if 'chunks' in ds[var].encoding:
+            del ds[var].encoding['chunks']
+        if 'preferred_chunks' in ds[var].encoding:
+            del ds[var].encoding['preferred_chunks']
+    
     # Set proper chunking
     chunk_dict = {
         "time": chunksize_time, 
