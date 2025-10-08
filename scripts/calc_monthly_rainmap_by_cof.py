@@ -201,45 +201,47 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
     # Initialize accumulators for summations
     # Total precipitation
     totprecip_sum = None
+
+    mcs_pcp_sum = None
     
     # Isolated features
     # MCS statistics
-    mcsprecip_sum = None
-    mcscount_sum = None
-    mcspcpct_sum = None
+    mcs_iso_pcp_sum = None
+    mcs_iso_count_sum = None
+    mcs_iso_pcpcount_sum = None
     
     # AR statistics
-    arprecip_sum = None
-    arcount_sum = None
-    arpcpct_sum = None
+    ar_iso_pcp_sum = None
+    ar_iso_count_sum = None
+    ar_iso_pcpcount_sum = None
     
     # TC statistics
-    tcprecip_sum = None
-    tccount_sum = None
-    tcpcpct_sum = None
+    tc_pcp_sum = None
+    tc_count_sum = None
+    tc_pcpcount_sum = None
     
     # ETC statistics
-    etcprecip_sum = None
-    etccount_sum = None
-    etcpcpct_sum = None
+    etc_iso_pcp_sum = None
+    etc_iso_count_sum = None
+    etc_iso_pcpcount_sum = None
 
     # Co-occurrence features (2-way)
     mcs_ar_pcp_sum = None
     mcs_ar_count_sum = None
-    mcs_ar_pcp_pct_sum = None
+    mcs_ar_pcp_count_sum = None
 
     mcs_etc_pcp_sum = None
     mcs_etc_count_sum = None
-    mcs_etc_pcp_pct_sum = None
+    mcs_etc_pcp_count_sum = None
 
     ar_etc_pcp_sum = None
     ar_etc_count_sum = None
-    ar_etc_pcp_pct_sum = None
+    ar_etc_pcp_count_sum = None
 
     # Co-occurrence features (3-way)
     mcs_ar_etc_pcp_sum = None
     mcs_ar_etc_count_sum = None
-    mcs_ar_etc_pcp_pct_sum = None
+    mcs_ar_etc_pcp_count_sum = None
 
     # Process in chunks of days to limit memory usage
     step = int(chunk_days * steps_per_day)
@@ -251,12 +253,17 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
         
         # Extract chunk of data and compute immediately to free memory
         chunk_ds = month_ds.isel(time=slice(start_idx, end_idx)).compute()
-        
+
+        # Original masks
+        mcs_mask = chunk_ds['mcs_mask']
+        ar_mask = chunk_ds['ar_mask']
+        etc_mask = chunk_ds['etc_mask']
+        tc_mask = chunk_ds['tc_mask']
+
         # Isolated masks
         mcs_isolated_mask = chunk_ds['mcs_isolated_mask']
         ar_isolated_mask = chunk_ds['ar_isolated_mask']
         etc_isolated_mask = chunk_ds['etc_isolated_mask']
-        tc_mask = chunk_ds['tc_mask']
 
         # Co-occurrence masks
         # Create union of 2-way overlap masks
@@ -276,7 +283,7 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
         mcs_ar_etc_3way_mask = create_union_mask([
             chunk_ds['mcs_ar_etc_overlap_mask'],
             chunk_ds['ar_mcs_etc_overlap_mask'],
-            chunk_ds['etc_mcs_ar_overlap_mask']
+            chunk_ds['etc_mcs_ar_overlap_mask'],
         ])
 
         precipitation = chunk_ds['pr']
@@ -284,139 +291,179 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
         # Compute total precipitation - multiply by time interval to get mm
         chunk_totprecip = (precipitation * time_interval).sum(dim='time')
 
+        # Original features
+        chunk_mcs_pcp_sum = (precipitation.where(mcs_mask > 0) * time_interval).sum(dim='time')
+        chunk_mcs_count_sum = (mcs_mask > 0).sum(dim='time')
+        chunk_mcs_pcp_count_sum = (precipitation.where(mcs_mask > 0) > pcp_thresh).sum(dim='time')
+
+        chunk_ar_pcp_sum = (precipitation.where(ar_mask > 0) * time_interval).sum(dim='time')
+        chunk_ar_count_sum = (ar_mask > 0).sum(dim='time')
+        chunk_ar_pcp_count_sum = (precipitation.where(ar_mask > 0) > pcp_thresh).sum(dim='time')
+
+        chunk_etc_pcp_sum = (precipitation.where(etc_mask > 0) * time_interval).sum(dim='time')
+        chunk_etc_count_sum = (etc_mask > 0).sum(dim='time')
+        chunk_etc_pcp_count_sum = (precipitation.where(etc_mask > 0) > pcp_thresh).sum(dim='time')
+
         # Co-occurrence features
         chunk_mcs_ar_pcp_sum = (precipitation.where(mcs_ar_2way_mask > 0) * time_interval).sum(dim='time')
         chunk_mcs_ar_count_sum = (mcs_ar_2way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_pcp_pct_sum = (precipitation.where(mcs_ar_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_ar_pcp_count_sum = (precipitation.where(mcs_ar_2way_mask > 0) > pcp_thresh).sum(dim='time')
 
         chunk_mcs_etc_pcp_sum = (precipitation.where(mcs_etc_2way_mask > 0) * time_interval).sum(dim='time')
         chunk_mcs_etc_count_sum = (mcs_etc_2way_mask > 0).sum(dim='time')
-        chunk_mcs_etc_pcp_pct_sum = (precipitation.where(mcs_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_etc_pcp_count_sum = (precipitation.where(mcs_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
 
         chunk_ar_etc_pcp_sum = (precipitation.where(ar_etc_2way_mask > 0) * time_interval).sum(dim='time')
         chunk_ar_etc_count_sum = (ar_etc_2way_mask > 0).sum(dim='time')
-        chunk_ar_etc_pcp_pct_sum = (precipitation.where(ar_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_ar_etc_pcp_count_sum = (precipitation.where(ar_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
 
         chunk_mcs_ar_etc_pcp_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) * time_interval).sum(dim='time')
         chunk_mcs_ar_etc_count_sum = (mcs_ar_etc_3way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_etc_pcp_pct_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_ar_etc_pcp_count_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) > pcp_thresh).sum(dim='time')
 
         # Isolated features
         # Compute statistics for MCS - multiply by time interval to get mm
-        chunk_mcsprecip = (precipitation.where(mcs_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcscount = (mcs_isolated_mask > 0).sum(dim='time')
-        chunk_mcspcpct = (precipitation.where(mcs_isolated_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_iso_pcp_sum = (precipitation.where(mcs_isolated_mask > 0) * time_interval).sum(dim='time')
+        chunk_mcs_iso_count_sum = (mcs_isolated_mask > 0).sum(dim='time')
+        chunk_mcs_iso_pcp_count_sum = (precipitation.where(mcs_isolated_mask > 0) > pcp_thresh).sum(dim='time')
         
         # Compute statistics for AR - multiply by time interval to get mm
-        chunk_arprecip = (precipitation.where(ar_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_arcount = (ar_isolated_mask > 0).sum(dim='time')
-        chunk_arpcpct = (precipitation.where(ar_isolated_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_ar_iso_pcp_sum = (precipitation.where(ar_isolated_mask > 0) * time_interval).sum(dim='time')
+        chunk_ar_iso_count_sum = (ar_isolated_mask > 0).sum(dim='time')
+        chunk_ar_iso_pcp_count_sum = (precipitation.where(ar_isolated_mask > 0) > pcp_thresh).sum(dim='time')
         
         # Compute statistics for ETC - multiply by time interval to get mm
-        chunk_etcprecip = (precipitation.where(etc_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_etccount = (etc_isolated_mask > 0).sum(dim='time')
-        chunk_etcpcpct = (precipitation.where(etc_isolated_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_etc_iso_pcp_sum = (precipitation.where(etc_isolated_mask > 0) * time_interval).sum(dim='time')
+        chunk_etc_iso_count_sum = (etc_isolated_mask > 0).sum(dim='time')
+        chunk_etc_iso_pcp_count_sum = (precipitation.where(etc_isolated_mask > 0) > pcp_thresh).sum(dim='time')
 
         # Compute statistics for TC - multiply by time interval to get mm
-        chunk_tcprecip = (precipitation.where(tc_mask > 0) * time_interval).sum(dim='time')
-        chunk_tccount = (tc_mask > 0).sum(dim='time')
-        chunk_tcpcpct = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_tc_pcp_sum = (precipitation.where(tc_mask > 0) * time_interval).sum(dim='time')
+        chunk_tc_count_sum = (tc_mask > 0).sum(dim='time')
+        chunk_tc_pcp_count_sum = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
         
         # Accumulate results
         if totprecip_sum is None:
             # Initialize with first chunk results
             totprecip_sum = chunk_totprecip
-            
+
+            # Original features
+            mcs_pcp_sum = chunk_mcs_pcp_sum
+            mcs_count_sum = chunk_mcs_count_sum
+            mcs_pcp_count_sum = chunk_mcs_pcp_count_sum
+
+            ar_pcp_sum = chunk_ar_pcp_sum
+            ar_count_sum = chunk_ar_count_sum
+            ar_pcp_count_sum = chunk_ar_pcp_count_sum
+
+            etc_pcp_sum = chunk_etc_pcp_sum
+            etc_count_sum = chunk_etc_count_sum
+            etc_pcp_count_sum = chunk_etc_pcp_count_sum
+
+            tc_pcp_sum = chunk_tc_pcp_sum
+            tc_count_sum = chunk_tc_count_sum
+            tc_pcpcount_sum = chunk_tc_pcp_count_sum
+
             # Isolated features
             # MCS results
-            mcsprecip_sum = chunk_mcsprecip
-            mcscount_sum = chunk_mcscount
-            mcspcpct_sum = chunk_mcspcpct
+            mcs_iso_pcp_sum = chunk_mcs_iso_pcp_sum
+            mcs_iso_count_sum = chunk_mcs_iso_count_sum
+            mcs_iso_pcpcount_sum = chunk_mcs_iso_pcp_count_sum
             
             # AR results
-            arprecip_sum = chunk_arprecip
-            arcount_sum = chunk_arcount
-            arpcpct_sum = chunk_arpcpct
-            
-            # TC results
-            tcprecip_sum = chunk_tcprecip
-            tccount_sum = chunk_tccount
-            tcpcpct_sum = chunk_tcpcpct
-            
+            ar_iso_pcp_sum = chunk_ar_iso_pcp_sum
+            ar_iso_count_sum = chunk_ar_iso_count_sum
+            ar_iso_pcpcount_sum = chunk_ar_iso_pcp_count_sum
+                       
             # ETC results
-            etcprecip_sum = chunk_etcprecip
-            etccount_sum = chunk_etccount
-            etcpcpct_sum = chunk_etcpcpct
+            etc_iso_pcp_sum = chunk_etc_iso_pcp_sum
+            etc_iso_count_sum = chunk_etc_iso_count_sum
+            etc_iso_pcpcount_sum = chunk_etc_iso_pcp_count_sum
 
             # Co-occurrence features
             mcs_ar_pcp_sum = chunk_mcs_ar_pcp_sum
             mcs_ar_count_sum = chunk_mcs_ar_count_sum
-            mcs_ar_pcp_pct_sum = chunk_mcs_ar_pcp_pct_sum
+            mcs_ar_pcp_count_sum = chunk_mcs_ar_pcp_count_sum
 
             mcs_etc_pcp_sum = chunk_mcs_etc_pcp_sum
             mcs_etc_count_sum = chunk_mcs_etc_count_sum
-            mcs_etc_pcp_pct_sum = chunk_mcs_etc_pcp_pct_sum
+            mcs_etc_pcp_count_sum = chunk_mcs_etc_pcp_count_sum
 
             ar_etc_pcp_sum = chunk_ar_etc_pcp_sum
             ar_etc_count_sum = chunk_ar_etc_count_sum
-            ar_etc_pcp_pct_sum = chunk_ar_etc_pcp_pct_sum
+            ar_etc_pcp_count_sum = chunk_ar_etc_pcp_count_sum
 
             mcs_ar_etc_pcp_sum = chunk_mcs_ar_etc_pcp_sum
             mcs_ar_etc_count_sum = chunk_mcs_ar_etc_count_sum
-            mcs_ar_etc_pcp_pct_sum = chunk_mcs_ar_etc_pcp_pct_sum
+            mcs_ar_etc_pcp_count_sum = chunk_mcs_ar_etc_pcp_count_sum
         else:
             # Add subsequent chunk results
             totprecip_sum += chunk_totprecip
-            
+
+            # Original features
+            mcs_pcp_sum += chunk_mcs_pcp_sum
+            mcs_count_sum += chunk_mcs_count_sum
+            mcs_pcp_count_sum += chunk_mcs_pcp_count_sum
+
+            ar_pcp_sum += chunk_ar_pcp_sum
+            ar_count_sum += chunk_ar_count_sum
+            ar_pcp_count_sum += chunk_ar_pcp_count_sum
+
+            etc_pcp_sum += chunk_etc_pcp_sum
+            etc_count_sum += chunk_etc_count_sum
+            etc_pcp_count_sum += chunk_etc_pcp_count_sum
+
+            tc_pcp_sum += chunk_tc_pcp_sum
+            tc_count_sum += chunk_tc_count_sum
+            tc_pcpcount_sum += chunk_tc_pcp_count_sum
+
             # Isolated features
             # MCS results
-            mcsprecip_sum += chunk_mcsprecip
-            mcscount_sum += chunk_mcscount
-            mcspcpct_sum += chunk_mcspcpct
+            mcs_iso_pcp_sum += chunk_mcs_iso_pcp_sum
+            mcs_iso_count_sum += chunk_mcs_iso_count_sum
+            mcs_iso_pcpcount_sum += chunk_mcs_iso_pcp_count_sum
             
             # AR results
-            arprecip_sum += chunk_arprecip
-            arcount_sum += chunk_arcount
-            arpcpct_sum += chunk_arpcpct
-            
-            # TC results
-            tcprecip_sum += chunk_tcprecip
-            tccount_sum += chunk_tccount
-            tcpcpct_sum += chunk_tcpcpct
+            ar_iso_pcp_sum += chunk_ar_iso_pcp_sum
+            ar_iso_count_sum += chunk_ar_iso_count_sum
+            ar_iso_pcpcount_sum += chunk_ar_iso_pcp_count_sum            
             
             # ETC results
-            etcprecip_sum += chunk_etcprecip
-            etccount_sum += chunk_etccount
-            etcpcpct_sum += chunk_etcpcpct
+            etc_iso_pcp_sum += chunk_etc_iso_pcp_sum
+            etc_iso_count_sum += chunk_etc_iso_count_sum
+            etc_iso_pcpcount_sum += chunk_etc_iso_pcp_count_sum
 
             # Co-occurrence features
             mcs_ar_pcp_sum += chunk_mcs_ar_pcp_sum
             mcs_ar_count_sum += chunk_mcs_ar_count_sum
-            mcs_ar_pcp_pct_sum += chunk_mcs_ar_pcp_pct_sum
+            mcs_ar_pcp_count_sum += chunk_mcs_ar_pcp_count_sum
 
             mcs_etc_pcp_sum += chunk_mcs_etc_pcp_sum
             mcs_etc_count_sum += chunk_mcs_etc_count_sum
-            mcs_etc_pcp_pct_sum += chunk_mcs_etc_pcp_pct_sum
+            mcs_etc_pcp_count_sum += chunk_mcs_etc_pcp_count_sum
 
             ar_etc_pcp_sum += chunk_ar_etc_pcp_sum
             ar_etc_count_sum += chunk_ar_etc_count_sum
-            ar_etc_pcp_pct_sum += chunk_ar_etc_pcp_pct_sum
+            ar_etc_pcp_count_sum += chunk_ar_etc_pcp_count_sum
 
             mcs_ar_etc_pcp_sum += chunk_mcs_ar_etc_pcp_sum
             mcs_ar_etc_count_sum += chunk_mcs_ar_etc_count_sum
-            mcs_ar_etc_pcp_pct_sum += chunk_mcs_ar_etc_pcp_pct_sum
+            mcs_ar_etc_pcp_count_sum += chunk_mcs_ar_etc_pcp_count_sum
 
         # Explicitly delete chunk data to free memory
+        del chunk_mcs_pcp_sum, chunk_mcs_count_sum, chunk_mcs_pcp_count_sum
+        del chunk_ar_pcp_sum, chunk_ar_count_sum, chunk_ar_pcp_count_sum
+        del chunk_etc_pcp_sum, chunk_etc_count_sum, chunk_etc_pcp_count_sum
+        del chunk_tc_pcp_sum, chunk_tc_count_sum, chunk_tc_pcp_count_sum
         del chunk_ds, mcs_isolated_mask, ar_isolated_mask, etc_isolated_mask, tc_mask, precipitation
-        del chunk_mcsprecip, chunk_mcscount, chunk_mcspcpct
-        del chunk_arprecip, chunk_arcount, chunk_arpcpct
-        del chunk_tcprecip, chunk_tccount, chunk_tcpcpct
-        del chunk_etcprecip, chunk_etccount, chunk_etcpcpct
+        del chunk_mcs_iso_pcp_sum, chunk_mcs_iso_count_sum, chunk_mcs_iso_pcp_count_sum
+        del chunk_ar_iso_pcp_sum, chunk_ar_iso_count_sum, chunk_ar_iso_pcp_count_sum
+        del chunk_etc_iso_pcp_sum, chunk_etc_iso_count_sum, chunk_etc_iso_pcp_count_sum
         del chunk_totprecip
-        del chunk_mcs_ar_pcp_sum, chunk_mcs_ar_count_sum, chunk_mcs_ar_pcp_pct_sum
-        del chunk_mcs_etc_pcp_sum, chunk_mcs_etc_count_sum, chunk_mcs_etc_pcp_pct_sum
-        del chunk_ar_etc_pcp_sum, chunk_ar_etc_count_sum, chunk_ar_etc_pcp_pct_sum
-        del chunk_mcs_ar_etc_pcp_sum, chunk_mcs_ar_etc_count_sum, chunk_mcs_ar_etc_pcp_pct_sum
+        del chunk_mcs_ar_pcp_sum, chunk_mcs_ar_count_sum, chunk_mcs_ar_pcp_count_sum
+        del chunk_mcs_etc_pcp_sum, chunk_mcs_etc_count_sum, chunk_mcs_etc_pcp_count_sum
+        del chunk_ar_etc_pcp_sum, chunk_ar_etc_count_sum, chunk_ar_etc_pcp_count_sum
+        del chunk_mcs_ar_etc_pcp_sum, chunk_mcs_ar_etc_count_sum, chunk_mcs_ar_etc_pcp_count_sum
         del mcs_ar_2way_mask, mcs_etc_2way_mask, ar_etc_2way_mask, mcs_ar_etc_3way_mask
         gc.collect()
     
@@ -426,45 +473,57 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
         'ntimes': ntimes,
         'time_interval': time_interval,
         'totprecip': totprecip_sum,
-        
+
+        # Original features
+        'mcs_precip': mcs_pcp_sum,
+        'mcs_count': mcs_count_sum,
+        'mcs_precip_count': mcs_pcp_count_sum,
+
+        'ar_precip': ar_pcp_sum,
+        'ar_count': ar_count_sum,
+        'ar_precip_count': ar_pcp_count_sum,
+
+        'etc_precip': etc_pcp_sum,
+        'etc_count': etc_count_sum,
+        'etc_precip_count': etc_pcp_count_sum,
+
+        'tc_precip': tc_pcp_sum,
+        'tc_count': tc_count_sum,
+        'tc_precip_count': tc_pcpcount_sum,
+
         # Isolated features
         # MCS statistics
-        'mcsprecip': mcsprecip_sum,
-        'mcscount': mcscount_sum,
-        'mcspcpct': mcspcpct_sum,
+        'mcs_iso_precip': mcs_iso_pcp_sum,
+        'mcs_iso_count': mcs_iso_count_sum,
+        'mcs_iso_precip_count': mcs_iso_pcpcount_sum,
         
         # AR statistics
-        'arprecip': arprecip_sum,
-        'arcount': arcount_sum,
-        'arpcpct': arpcpct_sum,
-        
-        # TC statistics
-        'tcprecip': tcprecip_sum,
-        'tccount': tccount_sum,
-        'tcpcpct': tcpcpct_sum,
-        
+        'ar_iso_precip': ar_iso_pcp_sum,
+        'ar_iso_count': ar_iso_count_sum,
+        'ar_iso_precip_count': ar_iso_pcpcount_sum,
+                
         # ETC statistics
-        'etcprecip': etcprecip_sum,
-        'etccount': etccount_sum,
-        'etcpcpct': etcpcpct_sum,
+        'etc_iso_precip': etc_iso_pcp_sum,
+        'etc_iso_count': etc_iso_count_sum,
+        'etc_iso_precip_count': etc_iso_pcpcount_sum,
 
         # Co-occurrence features (2-way)
         'mcs_ar_precip': mcs_ar_pcp_sum,
         'mcs_ar_count': mcs_ar_count_sum,
-        'mcs_ar_precip_count': mcs_ar_pcp_pct_sum,
+        'mcs_ar_precip_count': mcs_ar_pcp_count_sum,
 
         'mcs_etc_precip': mcs_etc_pcp_sum,
         'mcs_etc_count': mcs_etc_count_sum,
-        'mcs_etc_precip_count': mcs_etc_pcp_pct_sum,
+        'mcs_etc_precip_count': mcs_etc_pcp_count_sum,
 
         'ar_etc_precip': ar_etc_pcp_sum,
         'ar_etc_count': ar_etc_count_sum,
-        'ar_etc_precip_count': ar_etc_pcp_pct_sum,
+        'ar_etc_precip_count': ar_etc_pcp_count_sum,
         
         # Co-occurrence features (3-way)
         'mcs_ar_etc_precip': mcs_ar_etc_pcp_sum,
         'mcs_ar_etc_count': mcs_ar_etc_count_sum,
-        'mcs_ar_etc_precip_count': mcs_ar_etc_pcp_pct_sum,
+        'mcs_ar_etc_precip_count': mcs_ar_etc_pcp_count_sum,
     }
 
 
@@ -484,23 +543,36 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     
     # Extract total precipitation values
     totprecip_values = [r['totprecip'] for r in results]
-    
+
+    # Extract values for original features
+    mcs_precip_values = [r['mcs_precip'] for r in results]
+    mcs_count_values = [r['mcs_count'] for r in results]
+    mcs_precip_count_values = [r['mcs_precip_count'] for r in results]
+
+    ar_precip_values = [r['ar_precip'] for r in results]
+    ar_count_values = [r['ar_count'] for r in results]
+    ar_precip_count_values = [r['ar_precip_count'] for r in results]
+
+    etc_precip_values = [r['etc_precip'] for r in results]
+    etc_count_values = [r['etc_count'] for r in results]
+    etc_precip_count_values = [r['etc_precip_count'] for r in results]
+
     # Extract values for isolated features
-    mcsprecip_values = [r['mcsprecip'] for r in results]
-    mcscount_values = [r['mcscount'] for r in results]
-    mcspcpct_values = [r['mcspcpct'] for r in results]
-    
-    arprecip_values = [r['arprecip'] for r in results]
-    arcount_values = [r['arcount'] for r in results]
-    arpcpct_values = [r['arpcpct'] for r in results]
-    
-    tcprecip_values = [r['tcprecip'] for r in results]
-    tccount_values = [r['tccount'] for r in results]
-    tcpcpct_values = [r['tcpcpct'] for r in results]
-    
-    etcprecip_values = [r['etcprecip'] for r in results]
-    etccount_values = [r['etccount'] for r in results]
-    etcpcpct_values = [r['etcpcpct'] for r in results]
+    mcs_iso_precip_values = [r['mcs_iso_precip'] for r in results]
+    mcs_iso_count_values = [r['mcs_iso_count'] for r in results]
+    mcs_iso_precip_count_values = [r['mcs_iso_precip_count'] for r in results]
+
+    ar_iso_precip_values = [r['ar_iso_precip'] for r in results]
+    ar_iso_count_values = [r['ar_iso_count'] for r in results]
+    ar_iso_precip_count_values = [r['ar_iso_precip_count'] for r in results]
+
+    etc_iso_precip_values = [r['etc_iso_precip'] for r in results]
+    etc_iso_count_values = [r['etc_iso_count'] for r in results]
+    etc_iso_precip_count_values = [r['etc_iso_precip_count'] for r in results]
+
+    tcprecip_values = [r['tc_precip'] for r in results]
+    tccount_values = [r['tc_count'] for r in results]
+    tcpcpct_values = [r['tc_precip_count'] for r in results]
 
     # Extract values for co-occurrence features (2-way)
     mcs_ar_precip_values = [r['mcs_ar_precip'] for r in results]
@@ -524,27 +596,36 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     var_dict = {
         'precipitation': (['time', 'cell'], np.stack([r.values for r in totprecip_values])),
         'ntimes': (['time'], np.array(ntimes_values)),
-        
-        # Isolated features
-        # MCS variables
-        'mcs_precipitation': (['time', 'cell'], np.stack([r.values for r in mcsprecip_values])),
-        'mcs_count': (['time', 'cell'], np.stack([r.values for r in mcscount_values])),
-        'mcs_precipitation_count': (['time', 'cell'], np.stack([r.values for r in mcspcpct_values])),
-        
-        # AR variables
-        'ar_precipitation': (['time', 'cell'], np.stack([r.values for r in arprecip_values])),
-        'ar_count': (['time', 'cell'], np.stack([r.values for r in arcount_values])),
-        'ar_precipitation_count': (['time', 'cell'], np.stack([r.values for r in arpcpct_values])),
-        
-        # TC variables
+
+        # Original features
+        'mcs_precipitation': (['time', 'cell'], np.stack([r.values for r in mcs_precip_values])),
+        'mcs_count': (['time', 'cell'], np.stack([r.values for r in mcs_count_values])),
+        'mcs_precipitation_count': (['time', 'cell'], np.stack([r.values for r in mcs_precip_count_values])),
+
+        'ar_precipitation': (['time', 'cell'], np.stack([r.values for r in ar_precip_values])),
+        'ar_count': (['time', 'cell'], np.stack([r.values for r in ar_count_values])),
+        'ar_precipitation_count': (['time', 'cell'], np.stack([r.values for r in ar_precip_count_values])),
+
+        'etc_precipitation': (['time', 'cell'], np.stack([r.values for r in etc_precip_values])),
+        'etc_count': (['time', 'cell'], np.stack([r.values for r in etc_count_values])),
+        'etc_precipitation_count': (['time', 'cell'], np.stack([r.values for r in etc_precip_count_values])),
+
         'tc_precipitation': (['time', 'cell'], np.stack([r.values for r in tcprecip_values])),
         'tc_count': (['time', 'cell'], np.stack([r.values for r in tccount_values])),
         'tc_precipitation_count': (['time', 'cell'], np.stack([r.values for r in tcpcpct_values])),
         
-        # ETC variables
-        'etc_precipitation': (['time', 'cell'], np.stack([r.values for r in etcprecip_values])),
-        'etc_count': (['time', 'cell'], np.stack([r.values for r in etccount_values])),
-        'etc_precipitation_count': (['time', 'cell'], np.stack([r.values for r in etcpcpct_values])),
+        # Isolated features
+        'mcs_iso_precipitation': (['time', 'cell'], np.stack([r.values for r in mcs_iso_precip_values])),
+        'mcs_iso_count': (['time', 'cell'], np.stack([r.values for r in mcs_iso_count_values])),
+        'mcs_iso_precipitation_count': (['time', 'cell'], np.stack([r.values for r in mcs_iso_precip_count_values])),
+        
+        'ar_iso_precipitation': (['time', 'cell'], np.stack([r.values for r in ar_iso_precip_values])),
+        'ar_iso_count': (['time', 'cell'], np.stack([r.values for r in ar_iso_count_values])),
+        'ar_iso_precipitation_count': (['time', 'cell'], np.stack([r.values for r in ar_iso_precip_count_values])),
+        
+        'etc_iso_precipitation': (['time', 'cell'], np.stack([r.values for r in etc_iso_precip_values])),
+        'etc_iso_count': (['time', 'cell'], np.stack([r.values for r in etc_iso_count_values])),
+        'etc_iso_precipitation_count': (['time', 'cell'], np.stack([r.values for r in etc_iso_precip_count_values])),
 
         # Co-occurrence features (2-way)
         'mcs_ar_precipitation': (['time', 'cell'], np.stack([r.values for r in mcs_ar_precip_values])),
@@ -606,24 +687,29 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     # Total precipitation
     dsout['precipitation'].attrs['long_name'] = 'Total precipitation'
     dsout['precipitation'].attrs['units'] = 'mm'
-    
-    # Isolated features
-    # MCS attributes
-    dsout['mcs_precipitation'].attrs['long_name'] = 'MCS precipitation'
+
+    # Original features
+    dsout['mcs_precipitation'].attrs['long_name'] = 'MCS precipitation (all)'
     dsout['mcs_precipitation'].attrs['units'] = 'mm'
     dsout['mcs_count'].attrs['long_name'] = 'Number of hours MCS is present'
     dsout['mcs_count'].attrs['units'] = 'hour'
     dsout['mcs_precipitation_count'].attrs['long_name'] = 'Number of hours MCS precipitation exceeds threshold'
     dsout['mcs_precipitation_count'].attrs['units'] = 'hour'
-    
-    # AR attributes
-    dsout['ar_precipitation'].attrs['long_name'] = 'AR precipitation'
+
+    dsout['ar_precipitation'].attrs['long_name'] = 'AR precipitation (all)'
     dsout['ar_precipitation'].attrs['units'] = 'mm'
     dsout['ar_count'].attrs['long_name'] = 'Number of hours AR is present'
     dsout['ar_count'].attrs['units'] = 'hour'
     dsout['ar_precipitation_count'].attrs['long_name'] = 'Number of hours AR precipitation exceeds threshold'
     dsout['ar_precipitation_count'].attrs['units'] = 'hour'
-    
+
+    dsout['etc_precipitation'].attrs['long_name'] = 'ETC precipitation (all)'
+    dsout['etc_precipitation'].attrs['units'] = 'mm'
+    dsout['etc_count'].attrs['long_name'] = 'Number of hours ETC is present'
+    dsout['etc_count'].attrs['units'] = 'hour'
+    dsout['etc_precipitation_count'].attrs['long_name'] = 'Number of hours ETC precipitation exceeds threshold'
+    dsout['etc_precipitation_count'].attrs['units'] = 'hour'
+
     # TC attributes
     dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation'
     dsout['tc_precipitation'].attrs['units'] = 'mm'
@@ -632,13 +718,30 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['tc_precipitation_count'].attrs['long_name'] = 'Number of hours TC precipitation exceeds threshold'
     dsout['tc_precipitation_count'].attrs['units'] = 'hour'
     
+    # Isolated features
+    # MCS attributes
+    dsout['mcs_iso_precipitation'].attrs['long_name'] = 'MCS isolated precipitation'
+    dsout['mcs_iso_precipitation'].attrs['units'] = 'mm'
+    dsout['mcs_iso_count'].attrs['long_name'] = 'Number of hours MCS is present'
+    dsout['mcs_iso_count'].attrs['units'] = 'hour'
+    dsout['mcs_iso_precipitation_count'].attrs['long_name'] = 'Number of hours MCS isolated precipitation exceeds threshold'
+    dsout['mcs_iso_precipitation_count'].attrs['units'] = 'hour'
+    
+    # AR attributes
+    dsout['ar_iso_precipitation'].attrs['long_name'] = 'AR isolated precipitation'
+    dsout['ar_iso_precipitation'].attrs['units'] = 'mm'
+    dsout['ar_iso_count'].attrs['long_name'] = 'Number of hours AR is present'
+    dsout['ar_iso_count'].attrs['units'] = 'hour'
+    dsout['ar_iso_precipitation_count'].attrs['long_name'] = 'Number of hours AR isolated precipitation exceeds threshold'
+    dsout['ar_iso_precipitation_count'].attrs['units'] = 'hour'
+    
     # ETC attributes
-    dsout['etc_precipitation'].attrs['long_name'] = 'ETC precipitation'
-    dsout['etc_precipitation'].attrs['units'] = 'mm'
-    dsout['etc_count'].attrs['long_name'] = 'Number of hours ETC is present'
-    dsout['etc_count'].attrs['units'] = 'hour'
-    dsout['etc_precipitation_count'].attrs['long_name'] = 'Number of hours ETC precipitation exceeds threshold'
-    dsout['etc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['etc_iso_precipitation'].attrs['long_name'] = 'ETC isolated precipitation'
+    dsout['etc_iso_precipitation'].attrs['units'] = 'mm'
+    dsout['etc_iso_count'].attrs['long_name'] = 'Number of hours ETC is present'
+    dsout['etc_iso_count'].attrs['units'] = 'hour'
+    dsout['etc_iso_precipitation_count'].attrs['long_name'] = 'Number of hours ETC isolated precipitation exceeds threshold'
+    dsout['etc_iso_precipitation_count'].attrs['units'] = 'hour'
 
     # Co-occurrence features (2-way)
     dsout['mcs_ar_precipitation'].attrs['long_name'] = 'MCS-AR co-occurrence precipitation'
@@ -1008,6 +1111,11 @@ def main():
 
     # Write output to NetCDF file
     write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger)
+
+    # Always cleanup client
+    if client and parallel:
+        logger.info("Shutting down Dask client")
+        client.close()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,19 @@
 # Configuration file for different data sources
 catalog_file: "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 
+# IMERG configuration
+IR_IMERG:
+  source_name: IMERGv7
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+    time: PT6H
+    time_method: mean
+  varname_precip_liq: precipitation
+  pr_convert_factor: 1.0  # Convert from [mm/s] to [mm/h]
+  start_datetime: 2019-08-01T00:00
+  end_datetime: 2020-08-31T23:59
+
 # SCREAM model configuration
 scream_ne120:
   source_name: scream

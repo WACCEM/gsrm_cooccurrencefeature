@@ -211,7 +211,7 @@ def main():
     vars_to_include = ['pr', 'psl', 'rlut', 'rsut', 'uas', 'vas']
     
     # Output configuration
-    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/NICAM/NICAM_2d1h_z{zoom}_shifted.zarr"
+    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/NICAM/shifted/NICAM_2d1h_z{zoom}.zarr"
     
     # Dask configuration
     use_parallel = True
