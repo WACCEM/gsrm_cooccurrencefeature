@@ -40,6 +40,7 @@ venv.bak/
 
 # VS Code
 .vscode/
+.sockfile.*
 
 # Spyder
 .spyderproject
