@@ -607,6 +607,7 @@ def setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker
     
     try:
         from dask.distributed import Client, LocalCluster
+        import dask
         import psutil
         
         # Auto-calculate memory limit per worker if not provided
@@ -632,6 +633,17 @@ def setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker
         # os.environ['OPENBLAS_NUM_THREADS'] = str(threads_per_worker)
         # os.environ['NUMBA_NUM_THREADS'] = str(threads_per_worker)
         
+        # Configure Dask settings before creating cluster (new approach)
+        dask.config.set({
+            'distributed.worker.memory.target': memory_target_fraction,
+            'distributed.worker.memory.spill': memory_spill_fraction,
+            'distributed.worker.memory.pause': memory_pause_fraction,
+            'distributed.worker.memory.terminate': memory_terminate_fraction,
+            'distributed.comm.timeouts.tcp': tcp_timeout,
+            'distributed.client.heartbeat': client_heartbeat,
+            'distributed.worker.daemon': False,
+        })
+        
         cluster = LocalCluster(
             n_workers=n_workers,
             threads_per_worker=threads_per_worker,
@@ -639,27 +651,9 @@ def setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker
             processes=processes,  # Use processes for better memory isolation
             scheduler_port=scheduler_port,
             dashboard_address=dashboard_address,
-            # Worker memory management settings
-            memory_target_fraction=memory_target_fraction,
-            memory_spill_fraction=memory_spill_fraction,
-            memory_pause_fraction=memory_pause_fraction,
             silence_logs=False,  # Keep logs for debugging
         )
         client = Client(cluster)
-        
-        # Configure client for high-throughput workloads
-        try:
-            client.configure({
-                'distributed.worker.memory.target': memory_target_fraction,
-                'distributed.worker.memory.spill': memory_spill_fraction,
-                'distributed.worker.memory.pause': memory_pause_fraction,
-                'distributed.worker.memory.terminate': memory_terminate_fraction,
-                'distributed.comm.timeouts.tcp': tcp_timeout,
-                'distributed.client.heartbeat': client_heartbeat,
-                'distributed.worker.daemon': False,
-            })
-        except Exception as e:
-            logger.warning(f"Could not configure some client settings: {e}")
         
         logger.info(f"Dask dashboard: {client.dashboard_link}")
         

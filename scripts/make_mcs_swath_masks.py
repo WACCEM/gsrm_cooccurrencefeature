@@ -210,25 +210,24 @@ def process_timechunk_wrapper_zarr(time_vals, zarr_path, verbose=False):
         return str(time_vals[0]), None
 
 #--------------------------------------------------------------------------------------------------
-def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, template_coords, attrs,
-                          client=None, logger=None, parallel=True, chunk_size_time=6, input_zarr_path=None):
+def stream_process_to_zarr(time_coords, mask_variables, output_path,
+                          client=None, logger=None, parallel=True, chunk_size_time=6, 
+                          input_zarr_path=None, batch_size=100):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
     
+    Uses a batched submission approach to avoid overwhelming the Dask scheduler with
+    too many tasks at once. Instead of submitting all chunks at once, submits them
+    in batches (super-chunks), waits for each batch to complete, then moves to the next.
+    
     Parameters:
     -----------
-    ds : xarray.Dataset
-        Input dataset (used only for template, not for processing)
     time_coords : array-like
         Array of time coordinates to process
     mask_variables : list
         List of mask variable names to create
     output_path : str
         Path to output zarr file
-    template_coords : xarray.Coordinates
-        Template coordinates for output
-    attrs : dict
-        Global attributes for output dataset
     client : dask.distributed.Client, optional
         Dask client for parallel processing
     logger : logging.Logger, optional
@@ -239,6 +238,8 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         Number of input time steps per output chunk (e.g., 6 hourly → 1 swath)
     input_zarr_path : str
         Path to input zarr file for workers to read from
+    batch_size : int
+        Number of chunks to submit per batch (default: 100)
         
     Returns:
     --------
@@ -255,8 +256,9 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     logger.info(f"Each chunk will aggregate {chunk_size_time} hourly time steps into 1 swath mask")
     
     if parallel and client is not None:
-        # PARALLEL MODE: Submit all chunks at once, then process results as they complete
-        logger.info(f"Submitting all {total_chunks} chunks to Dask workers for parallel processing...")
+        # PARALLEL MODE: Submit chunks in batches to avoid overwhelming scheduler
+        total_batches = (total_chunks + batch_size - 1) // batch_size
+        logger.info(f"Using batched submission: {total_batches} batches of up to {batch_size} chunks each")
         
         # Prepare all chunk metadata
         chunk_metadata = []
@@ -271,66 +273,79 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                 'end_idx': end_idx
             })
         
-        # Submit all chunks to Dask workers
-        futures = {}
-        for meta in chunk_metadata:
-            future = client.submit(
-                process_timechunk_wrapper_zarr,
-                meta['chunk_times'],
-                input_zarr_path,
-                verbose=False
-            )
-            futures[future] = meta
-        
-        logger.info(f"All {total_chunks} chunks submitted to workers. Processing in parallel...")
-        
-        # Process results as they complete
-        for future in as_completed(futures):
-            meta = futures[future]
-            chunk_idx = meta['chunk_idx']
-            chunk_times = meta['chunk_times']
+        # Process chunks in batches
+        for batch_idx in range(total_batches):
+            batch_start = batch_idx * batch_size
+            batch_end = min((batch_idx + 1) * batch_size, total_chunks)
+            batch_chunks = chunk_metadata[batch_start:batch_end]
             
-            logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {meta['start_idx']}-{meta['end_idx']-1}")
+            logger.info(f"")
+            logger.info(f"{'='*80}")
+            logger.info(f"BATCH {batch_idx + 1}/{total_batches}: Processing chunks {batch_start + 1}-{batch_end}")
+            logger.info(f"{'='*80}")
             
-            chunk_results = {}
-            try:
-                time_str, result = future.result()
-                if result is not None:
-                    chunk_results[time_str] = result
-                else:
-                    logger.warning(f"Skipping chunk {chunk_idx + 1} starting at {time_str} due to processing error")
-            except Exception as e:
-                logger.error(f"Error in Dask task for chunk {chunk_idx + 1}: {e}")
-                traceback.print_exc()
-                continue
+            # Submit all chunks in this batch to Dask workers
+            futures = {}
+            for meta in batch_chunks:
+                future = client.submit(
+                    process_timechunk_wrapper_zarr,
+                    meta['chunk_times'],
+                    input_zarr_path,
+                    verbose=False
+                )
+                futures[future] = meta
             
-            # Write this chunk to zarr immediately
-            if len(chunk_results) > 0:
+            logger.info(f"Submitted {len(futures)} chunks to workers for this batch...")
+            
+            # Process results as they complete within this batch
+            for future in as_completed(futures):
+                meta = futures[future]
+                chunk_idx = meta['chunk_idx']
+                chunk_times = meta['chunk_times']
+                
+                logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {meta['start_idx']}-{meta['end_idx']-1}")
+                
+                chunk_results = {}
                 try:
-                    logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
-                    append_chunk_to_zarr(
-                        chunk_results=chunk_results,
-                        chunk_times=chunk_times,
-                        chunk_idx=chunk_idx,
-                        mask_variables=mask_variables,
-                        output_path=output_path,
-                        logger=logger
-                    )
-                    
-                    # Update progress
-                    processed_this_chunk = len(chunk_results)
-                    total_processed += processed_this_chunk
-                    logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk} swath mask(s) written")
-                    
-                    # Free memory
-                    del chunk_results
-                    
+                    time_str, result = future.result()
+                    if result is not None:
+                        chunk_results[time_str] = result
+                    else:
+                        logger.warning(f"Skipping chunk {chunk_idx + 1} starting at {time_str} due to processing error")
                 except Exception as e:
-                    logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
+                    logger.error(f"Error in Dask task for chunk {chunk_idx + 1}: {e}")
                     traceback.print_exc()
                     continue
-            else:
-                logger.warning(f"No valid results for chunk {chunk_idx + 1}, skipping write")
+                
+                # Write this chunk to zarr immediately
+                if len(chunk_results) > 0:
+                    try:
+                        logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
+                        append_chunk_to_zarr(
+                            chunk_results=chunk_results,
+                            chunk_times=chunk_times,
+                            chunk_idx=chunk_idx,
+                            mask_variables=mask_variables,
+                            output_path=output_path,
+                            logger=logger
+                        )
+                        
+                        # Update progress
+                        processed_this_chunk = len(chunk_results)
+                        total_processed += processed_this_chunk
+                        logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk} swath mask(s) written")
+                        
+                        # Free memory
+                        del chunk_results
+                        
+                    except Exception as e:
+                        logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
+                        traceback.print_exc()
+                        continue
+                else:
+                    logger.warning(f"No valid results for chunk {chunk_idx + 1}, skipping write")
+            
+            logger.info(f"Batch {batch_idx + 1}/{total_batches} complete: {total_processed}/{total_chunks} total chunks processed")
     
     else:
         # SERIAL MODE: Process chunks one at a time
@@ -396,6 +411,8 @@ def main():
                        help='Number of Dask workers (default: 32)')
     parser.add_argument('--threads-per-worker', type=int, default=1,
                        help='Number of threads per worker (default: 1)')
+    parser.add_argument('--batch-size', type=int, default=100,
+                       help='Number of chunks to submit per batch to avoid overwhelming scheduler (default: 100)')
     # parser.add_argument('--source', type=str, default='scream',
     #                    help='Source name (default: scream)')
     parser.add_argument('--test-steps', type=int, default=None,
@@ -414,6 +431,7 @@ def main():
     parallel = args.parallel
     n_workers = args.workers
     threads_per_worker = args.threads_per_worker
+    batch_size = args.batch_size
     config_file = args.config
 
     # Load configuration for the specified source
@@ -443,6 +461,7 @@ def main():
     print(f"Parallel processing: {parallel}")
     if parallel:
         print(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
+        print(f"Batch size: {batch_size} chunks per batch")
 
     # Setup Dask client
     client = setup_dask_client(
@@ -510,17 +529,15 @@ def main():
 
             # Stream process with chunked zarr writing
             total_processed = stream_process_to_zarr(
-                ds=ds,
                 time_coords=time_coords,
                 mask_variables=mask_variables,
                 output_path=out_zarr,
-                template_coords=ds.coords,
-                attrs=attrs,
                 client=client,
                 logger=logger,
                 parallel=parallel,
                 chunk_size_time=chunk_size_time,
-                input_zarr_path=in_zarr  # Pass the input zarr path for workers
+                input_zarr_path=in_zarr,  # Pass the input zarr path for workers
+                batch_size=batch_size  # Number of chunks per batch
             )
             
             logger.info(f"✅ Processing complete: {total_processed} chunks written to {out_zarr}")
