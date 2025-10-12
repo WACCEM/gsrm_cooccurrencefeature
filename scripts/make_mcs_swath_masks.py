@@ -236,11 +236,11 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
     parallel : bool
         Whether to use parallel processing
     chunk_size_time : int
-        Number of input time steps per output chunk (e.g., 6 hourly → 1 swath)
+        Aggregation window - number of input hourly time steps to aggregate into 1 swath mask (e.g., 6)
     input_zarr_path : str
         Path to input zarr file for workers to read from
     batch_size : int
-        Number of chunks to submit per batch (default: 100)
+        Number of output chunks to submit per batch (default: 100)
     chunks_to_process : list of int, optional
         If provided, only process these chunk indices (for resume mode)
         
@@ -331,13 +331,14 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                 # Write this chunk to zarr immediately
                 if len(chunk_results) > 0:
                     try:
-                        # Get the actual time values for this chunk for zarr writing
-                        chunk_times = time_coords[start_idx:end_idx]
+                        # Get the output time for this chunk (first time of the aggregation window)
+                        # We aggregate multiple input times into 1 swath, so output has only 1 time
+                        output_time = np.array([time_coords[start_idx]])
                         
                         logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
                         append_chunk_to_zarr(
                             chunk_results=chunk_results,
-                            chunk_times=chunk_times,
+                            chunk_times=output_time,
                             chunk_idx=chunk_idx,
                             mask_variables=mask_variables,
                             output_path=output_path,
@@ -369,7 +370,6 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         for chunk_idx in chunk_indices:
             start_idx = chunk_idx * chunk_size_time
             end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
-            chunk_times = time_coords[start_idx:end_idx]
             
             logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
             
@@ -383,10 +383,14 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             # Write this chunk to zarr immediately
             if len(chunk_results) > 0:
                 try:
+                    # Get the output time for this chunk (first time of the aggregation window)
+                    # We aggregate multiple input times into 1 swath, so output has only 1 time
+                    output_time = np.array([time_coords[start_idx]])
+                    
                     logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
                     append_chunk_to_zarr(
                         chunk_results=chunk_results,
-                        chunk_times=chunk_times,
+                        chunk_times=output_time,
                         chunk_idx=chunk_idx,
                         mask_variables=mask_variables,
                         output_path=output_path,
@@ -503,6 +507,8 @@ def main():
                        help='Number of Dask workers (default: 32)')
     parser.add_argument('--threads-per-worker', type=int, default=1,
                        help='Number of threads per worker (default: 1)')
+    parser.add_argument('--aggregation-window', type=int, default=6,
+                       help='Number of hourly time steps to aggregate into one swath mask (default: 6)')
     parser.add_argument('--batch-size', type=int, default=100,
                        help='Number of chunks to submit per batch to avoid overwhelming scheduler (default: 100)')
     parser.add_argument('--check-missing', action='store_true',
@@ -520,6 +526,17 @@ def main():
 
     start_time = time.time()
     logger.info("Starting tracking MCS mask swath...")
+
+    # Get aggregation window from input argument 
+    # This determines the time window size to aggregate MCS masks (e.g., 6 = aggregate 6 hourly steps into 1 swath)
+    aggregation_window = args.aggregation_window
+    
+    # Zarr storage chunk size (number of output time steps per zarr chunk)
+    # 28 = 1 week of 6-hourly data (7 days * 4 swaths/day)
+    zarr_chunk_size_time = 28
+    
+    # Define output variables (default only do mcs_mask)
+    mask_variables = ['mcs_mask']
     
     # Parallel processing configuration
     parallel = args.parallel
@@ -559,19 +576,21 @@ def main():
         try:
             ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
             time_coords = ds["time"].values
-            mask_variables = ['mcs_mask']
-            chunk_size_time = 6
+            
+            # Create output time coordinates (same as processing)
+            total_output_chunks = (len(time_coords) + aggregation_window - 1) // aggregation_window
+            output_time_coords = time_coords[::aggregation_window][:total_output_chunks]
             
             missing_chunks = check_missing_chunks(
                 output_zarr=out_zarr,
-                time_coords=time_coords,
-                chunk_size_time=chunk_size_time,
+                time_coords=output_time_coords,  # Use output time coords
+                chunk_size_time=1,  # Output has 1 time per chunk
                 mask_variables=mask_variables,
                 logger=logger
             )
             
             if len(missing_chunks) > 0:
-                print(f"\n⚠️  Found {len(missing_chunks)} missing chunks out of {(len(time_coords) + chunk_size_time - 1) // chunk_size_time} total")
+                print(f"\n⚠️  Found {len(missing_chunks)} missing chunks out of {len(output_time_coords)} total")
                 print(f"Missing chunk indices: {missing_chunks}")
                 print(f"\nTo resume processing, run:")
                 print(f"python {os.path.basename(__file__)} -c {args.config} --resume --workers {n_workers}")
@@ -625,9 +644,6 @@ def main():
         print(f"\nInitializing streaming zarr processing...")
         time_coords = ds["time"].values
 
-        # Define all output variables
-        mask_variables = ['mcs_mask']
-
         # Add processing metadata
         attrs = ds.attrs.copy()
         attrs.update({
@@ -639,22 +655,27 @@ def main():
         # Stream processing and writing to zarr
         print(f"\nStreaming processing and writing {len(time_coords)} time steps to zarr...")
         
-        # Use a simple default chunk size for time dimension
-        # With zarr-path approach, serialization is minimal regardless of chunk size
-        # Chunk size only affects processing efficiency and zarr I/O
-        chunk_size_time = 6
-        print(f"Using default chunk_size_time={chunk_size_time} for optimal processing and zarr I/O")
+        print(f"Using aggregation_window={aggregation_window} hours for swath computation")
+
+        # Create output time coordinates (aggregated times)
+        # Each output time represents the start of an aggregation_window period
+        total_output_chunks = (len(time_coords) + aggregation_window - 1) // aggregation_window
+        output_time_coords = time_coords[::aggregation_window][:total_output_chunks]
+        
+        logger.info(f"Input: {len(time_coords)} hourly time steps")
+        logger.info(f"Output: {len(output_time_coords)} {aggregation_window}-hourly swath times")
+        logger.info(f"Zarr time chunking: {zarr_chunk_size_time} time steps per chunk (optimized for weekly access)")
 
         try:
             # Initialize the zarr store structure (once only)
             logger.info("Initializing zarr store...")
             initialize_zarr_store(
                 output_path=out_zarr,
-                time_coords=time_coords,
+                time_coords=output_time_coords,  # Use aggregated time coordinates
                 mask_variables=mask_variables,
                 template_coords=ds.coords,
                 attrs=attrs,
-                chunk_size_time=chunk_size_time
+                chunk_size_time=zarr_chunk_size_time  # Zarr storage chunks (28 = 1 week)
             )
 
             # Determine which chunks to process
@@ -663,8 +684,8 @@ def main():
                 logger.info("Checking for missing chunks...")
                 missing_chunks = check_missing_chunks(
                     output_zarr=out_zarr,
-                    time_coords=time_coords,
-                    chunk_size_time=chunk_size_time,
+                    time_coords=output_time_coords,  # Use output time coords for checking
+                    chunk_size_time=1,  # Output has 1 time per chunk
                     mask_variables=mask_variables,
                     logger=logger
                 )
@@ -677,13 +698,13 @@ def main():
 
             # Stream process with chunked zarr writing
             total_processed = stream_process_to_zarr(
-                time_coords=time_coords,
+                time_coords=time_coords,  # Pass input time coords for processing
                 mask_variables=mask_variables,
                 output_path=out_zarr,
                 client=client,
                 logger=logger,
                 parallel=parallel,
-                chunk_size_time=chunk_size_time,
+                chunk_size_time=aggregation_window,  # Aggregation window (e.g., 6 hours)
                 input_zarr_path=in_zarr,  # Pass the input zarr path for workers
                 batch_size=batch_size,  # Number of chunks per batch
                 chunks_to_process=chunks_to_process  # Only process these chunks if resume mode
