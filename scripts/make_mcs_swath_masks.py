@@ -168,15 +168,17 @@ def process_timechunk_swath(_ds, verbose=False):
         'ccs_mask': combined_ccs_swath,
     }
 
-def process_timechunk_wrapper_zarr(time_vals, zarr_path, verbose=False):
+def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False):
     """
     Wrapper function for processing a time chunk by reading from zarr file.
     
-    This approach avoids serialization issues by having each worker read the zarr file
-    directly instead of serializing large xarray Datasets.
+    This approach avoids serialization issues by:
+    1. Having each worker read the zarr file directly
+    2. Using integer indices instead of passing time arrays (reduces graph size)
     
     Args:
-        time_vals: Array/list of time coordinate values to process as a chunk
+        start_idx: Start index in the time dimension
+        end_idx: End index in the time dimension (exclusive)
         zarr_path: Path to the zarr file containing the data
         verbose: Whether to print verbose output
         
@@ -185,13 +187,13 @@ def process_timechunk_wrapper_zarr(time_vals, zarr_path, verbose=False):
     """
     try:
         # Each worker opens the zarr file independently
-        ds = xr.open_dataset(zarr_path, engine='zarr')
+        ds = xr.open_dataset(zarr_path, engine='zarr', chunks=None)
         
-        # Select the specific times for this chunk
-        _ds = ds.sel(time=time_vals)
+        # Select the specific times for this chunk using integer indexing
+        _ds = ds.isel(time=slice(start_idx, end_idx))
         
-        # Select the first time as output time value
-        out_time_val = time_vals[0]
+        # Get the first time value for output
+        out_time_val = _ds.time.values[0]
         
         # Load the data into memory
         _ds = _ds.load()
@@ -205,9 +207,9 @@ def process_timechunk_wrapper_zarr(time_vals, zarr_path, verbose=False):
         return str(out_time_val), timestep_results
         
     except Exception as e:
-        print(f"Error processing time chunk starting at {time_vals[0]}: {e}")
+        print(f"Error processing time chunk {start_idx}-{end_idx}: {e}")
         traceback.print_exc()
-        return str(time_vals[0]), None
+        return None, None
 
 #--------------------------------------------------------------------------------------------------
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
@@ -260,15 +262,13 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         total_batches = (total_chunks + batch_size - 1) // batch_size
         logger.info(f"Using batched submission: {total_batches} batches of up to {batch_size} chunks each")
         
-        # Prepare all chunk metadata
+        # Prepare all chunk metadata (using indices instead of time arrays to reduce graph size)
         chunk_metadata = []
         for chunk_idx in range(total_chunks):
             start_idx = chunk_idx * chunk_size_time
             end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
-            chunk_times = time_coords[start_idx:end_idx]
             chunk_metadata.append({
                 'chunk_idx': chunk_idx,
-                'chunk_times': chunk_times,
                 'start_idx': start_idx,
                 'end_idx': end_idx
             })
@@ -284,12 +284,13 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             logger.info(f"BATCH {batch_idx + 1}/{total_batches}: Processing chunks {batch_start + 1}-{batch_end}")
             logger.info(f"{'='*80}")
             
-            # Submit all chunks in this batch to Dask workers
+            # Submit all chunks in this batch to Dask workers (using indices only)
             futures = {}
             for meta in batch_chunks:
                 future = client.submit(
                     process_timechunk_wrapper_zarr,
-                    meta['chunk_times'],
+                    meta['start_idx'],
+                    meta['end_idx'],
                     input_zarr_path,
                     verbose=False
                 )
@@ -301,17 +302,18 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             for future in as_completed(futures):
                 meta = futures[future]
                 chunk_idx = meta['chunk_idx']
-                chunk_times = meta['chunk_times']
+                start_idx = meta['start_idx']
+                end_idx = meta['end_idx']
                 
-                logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {meta['start_idx']}-{meta['end_idx']-1}")
+                logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
                 
                 chunk_results = {}
                 try:
                     time_str, result = future.result()
-                    if result is not None:
+                    if result is not None and time_str is not None:
                         chunk_results[time_str] = result
                     else:
-                        logger.warning(f"Skipping chunk {chunk_idx + 1} starting at {time_str} due to processing error")
+                        logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
                 except Exception as e:
                     logger.error(f"Error in Dask task for chunk {chunk_idx + 1}: {e}")
                     traceback.print_exc()
@@ -320,6 +322,9 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                 # Write this chunk to zarr immediately
                 if len(chunk_results) > 0:
                     try:
+                        # Get the actual time values for this chunk for zarr writing
+                        chunk_times = time_coords[start_idx:end_idx]
+                        
                         logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
                         append_chunk_to_zarr(
                             chunk_results=chunk_results,
@@ -359,11 +364,11 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
             
             chunk_results = {}
-            time_str, result = process_timechunk_wrapper_zarr(chunk_times, input_zarr_path, verbose=False)
-            if result is not None:
+            time_str, result = process_timechunk_wrapper_zarr(start_idx, end_idx, input_zarr_path, verbose=False)
+            if result is not None and time_str is not None:
                 chunk_results[time_str] = result
             else:
-                logger.warning(f"Skipping chunk starting at {time_str} due to processing error")
+                logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
             
             # Write this chunk to zarr immediately
             if len(chunk_results) > 0:
