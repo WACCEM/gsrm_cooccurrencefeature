@@ -221,7 +221,7 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False)
 #--------------------------------------------------------------------------------------------------
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
                           client=None, logger=None, parallel=True, chunk_size_time=6, 
-                          input_zarr_path=None, batch_size=100, chunks_to_process=None,
+                          input_zarr_path=None, batch_size=100,
                           time_groups=None, output_time_coords=None):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
@@ -250,8 +250,6 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         Path to input zarr file for workers to read from
     batch_size : int
         Number of output chunks to submit per batch (default: 100)
-    chunks_to_process : list of int, optional
-        If provided, only process these chunk indices (for resume mode)
     time_groups : dict, optional
         Dictionary mapping aligned output times to lists of input time indices
     output_time_coords : array-like, optional
@@ -269,31 +267,17 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         # Time-aligned processing: use time groups
         total_chunks = len(output_time_coords)
         output_times_list = list(output_time_coords)
+        chunk_indices = list(range(total_chunks))
         
-        # Determine which chunks to process
-        if chunks_to_process is not None:
-            logger.info(f"RESUME MODE: Processing {len(chunks_to_process)} missing chunks out of {total_chunks} total")
-            chunk_indices = chunks_to_process
-        else:
-            logger.info(f"Processing all {total_chunks} chunks")
-            chunk_indices = list(range(total_chunks))
-        
-        logger.info(f"Processing {len(time_coords)} input time steps into {len(chunk_indices)} aligned time groups")
+        logger.info(f"Processing {len(time_coords)} input time steps into {total_chunks} aligned time groups")
         logger.info(f"Each chunk aggregates multiple hourly time steps into 1 swath mask at standard hours")
         
     else:
         # Legacy simple chunking (every N time steps)
         total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
-        
-        # Determine which chunks to process
-        if chunks_to_process is not None:
-            logger.info(f"RESUME MODE: Processing {len(chunks_to_process)} missing chunks out of {total_chunks} total")
-            chunk_indices = chunks_to_process
-        else:
-            logger.info(f"Processing all {total_chunks} chunks")
-            chunk_indices = list(range(total_chunks))
+        chunk_indices = list(range(total_chunks))
 
-        logger.info(f"Processing {len(time_coords)} time steps in {len(chunk_indices)} chunks of {chunk_size_time}")
+        logger.info(f"Processing {len(time_coords)} time steps in {total_chunks} chunks of {chunk_size_time}")
         logger.info(f"Each chunk will aggregate {chunk_size_time} hourly time steps into 1 swath mask")
     
     # Process and write time steps in chunks
@@ -475,82 +459,6 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
     return total_processed
 
 #--------------------------------------------------------------------------------------------------
-def check_missing_chunks(output_zarr, time_coords, chunk_size_time, mask_variables, logger=None):
-    """
-    Check which chunks are missing or incomplete in the output zarr file.
-    
-    Parameters:
-    -----------
-    output_zarr : str
-        Path to output zarr file
-    time_coords : array-like
-        Expected time coordinates
-    chunk_size_time : int
-        Number of input time steps per output chunk
-    mask_variables : list
-        List of mask variable names to check
-    logger : logging.Logger, optional
-        Logger instance
-        
-    Returns:
-    --------
-    missing_chunks : list
-        List of chunk indices that are missing or have all zeros
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-    
-    if not os.path.exists(output_zarr):
-        logger.warning(f"Output file does not exist: {output_zarr}")
-        return list(range((len(time_coords) + chunk_size_time - 1) // chunk_size_time))
-    
-    try:
-        # Open zarr store
-        ds_out = xr.open_zarr(output_zarr)
-        
-        total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
-        missing_chunks = []
-        
-        logger.info(f"Checking {total_chunks} chunks for missing/incomplete data...")
-        
-        for chunk_idx in range(total_chunks):
-            start_idx = chunk_idx * chunk_size_time
-            end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
-            
-            # For output, we only have 1 time per chunk (aggregated swath)
-            output_time_idx = chunk_idx
-            
-            if output_time_idx >= len(ds_out.time):
-                logger.warning(f"Chunk {chunk_idx + 1} is beyond dataset size")
-                missing_chunks.append(chunk_idx)
-                continue
-            
-            # Check if all mask variables have non-zero data
-            is_missing = False
-            for var_name in mask_variables:
-                data_slice = ds_out[var_name].isel(time=output_time_idx).values
-                if np.all(data_slice == 0):
-                    is_missing = True
-                    break
-            
-            if is_missing:
-                missing_chunks.append(chunk_idx)
-        
-        ds_out.close()
-        
-        if len(missing_chunks) > 0:
-            logger.warning(f"Found {len(missing_chunks)} missing/incomplete chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
-        else:
-            logger.info(f"All {total_chunks} chunks are complete!")
-        
-        return missing_chunks
-        
-    except Exception as e:
-        logger.error(f"Error checking zarr file: {e}")
-        traceback.print_exc()
-        return []
-
-#--------------------------------------------------------------------------------------------------
 def main():
     """Main function to run the make MCS swath process"""
 
@@ -569,10 +477,6 @@ def main():
                        help='Number of hourly time steps to aggregate into one swath mask (default: 6)')
     parser.add_argument('--batch-size', type=int, default=100,
                        help='Number of chunks to submit per batch to avoid overwhelming scheduler (default: 100)')
-    parser.add_argument('--check-missing', action='store_true',
-                       help='Check for missing chunks in existing output file and exit')
-    parser.add_argument('--resume', action='store_true',
-                       help='Resume processing by only processing missing chunks')
     parser.add_argument('--test-steps', type=int, default=None,
                        help='Number of time steps to process for testing (default: all)')
     
@@ -627,56 +531,10 @@ def main():
     print(f"Source: {source_name}")
     print(f"Input: {in_zarr}")
     print(f"Output: {out_zarr}")
-    
-    # Handle check-missing mode
-    if args.check_missing:
-        print(f"\nCHECK MISSING MODE: Analyzing existing output file...")
-        try:
-            ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
-            time_coords = ds["time"].values
-            
-            # Create output time coordinates aligned to standard hours (00, 06, 12, 18)
-            # Convert to pandas for easier time manipulation
-            time_df = pd.DataFrame({'time': pd.to_datetime(time_coords)})
-            
-            # Round times to nearest aggregation_window hour boundary
-            # For 6-hour aggregation: rounds to 00, 06, 12, 18
-            time_df['time_aligned'] = time_df['time'].dt.floor(f'{aggregation_window}h')
-            
-            # Get unique aligned times (these are the output time coordinates)
-            output_time_coords = time_df['time_aligned'].unique()
-            output_time_coords = np.array(output_time_coords, dtype='datetime64[ns]')
-            
-            missing_chunks = check_missing_chunks(
-                output_zarr=out_zarr,
-                time_coords=output_time_coords,  # Use output time coords
-                chunk_size_time=1,  # Output has 1 time per chunk
-                mask_variables=mask_variables,
-                logger=logger
-            )
-            
-            if len(missing_chunks) > 0:
-                print(f"\n⚠️  Found {len(missing_chunks)} missing chunks out of {len(output_time_coords)} total")
-                print(f"Missing chunk indices: {missing_chunks}")
-                print(f"\nTo resume processing, run:")
-                print(f"python {os.path.basename(__file__)} -c {args.config} --resume --workers {n_workers}")
-            else:
-                print(f"\n✅ All chunks are complete!")
-            
-            ds.close()
-            return
-            
-        except Exception as e:
-            print(f"❌ Error checking missing chunks: {e}")
-            traceback.print_exc()
-            return
-    
     print(f"Parallel processing: {parallel}")
     if parallel:
         print(f"Workers: {n_workers}, Threads per worker: {threads_per_worker}")
         print(f"Batch size: {batch_size} chunks per batch")
-    if args.resume:
-        print(f"Resume mode: Will only process missing chunks")
 
     # Setup Dask client
     client = setup_dask_client(
@@ -757,24 +615,6 @@ def main():
                 chunk_size_time=zarr_chunk_size_time  # Zarr storage chunks (28 = 1 week)
             )
 
-            # Determine which chunks to process
-            chunks_to_process = None
-            if args.resume:
-                logger.info("Checking for missing chunks...")
-                missing_chunks = check_missing_chunks(
-                    output_zarr=out_zarr,
-                    time_coords=output_time_coords,  # Use output time coords for checking
-                    chunk_size_time=1,  # Output has 1 time per chunk
-                    mask_variables=mask_variables,
-                    logger=logger
-                )
-                if len(missing_chunks) > 0:
-                    chunks_to_process = missing_chunks
-                    logger.info(f"Will process {len(missing_chunks)} missing chunks")
-                else:
-                    logger.info("No missing chunks found. All data is complete!")
-                    return
-
             # Stream process with chunked zarr writing
             total_processed = stream_process_to_zarr(
                 time_coords=time_coords,  # Pass input time coords for processing
@@ -786,7 +626,6 @@ def main():
                 chunk_size_time=aggregation_window,  # Aggregation window (e.g., 6 hours)
                 input_zarr_path=in_zarr,  # Pass the input zarr path for workers
                 batch_size=batch_size,  # Number of chunks per batch
-                chunks_to_process=chunks_to_process,  # Only process these chunks if resume mode
                 time_groups=time_groups,  # Mapping of aligned times to input indices
                 output_time_coords=output_time_coords  # Aligned output time coordinates
             )
