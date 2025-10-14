@@ -651,7 +651,7 @@ def setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker
             processes=processes,  # Use processes for better memory isolation
             scheduler_port=scheduler_port,
             dashboard_address=dashboard_address,
-            silence_logs=False,  # Keep logs for debugging
+            silence_logs=True,  # Suppress Dask cluster logs
         )
         client = Client(cluster)
         

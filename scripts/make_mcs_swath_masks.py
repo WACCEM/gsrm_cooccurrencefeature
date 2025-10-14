@@ -29,6 +29,14 @@ def setup_logging():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+    
+    # Suppress verbose Dask logging
+    logging.getLogger('distributed').setLevel(logging.WARNING)
+    logging.getLogger('distributed.worker').setLevel(logging.WARNING)
+    logging.getLogger('distributed.core').setLevel(logging.WARNING)
+    logging.getLogger('distributed.comm').setLevel(logging.WARNING)
+    logging.getLogger('distributed.nanny').setLevel(logging.WARNING)
+    logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
 
 
 #--------------------------------------------------------------------------------------------------
@@ -213,7 +221,8 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False)
 #--------------------------------------------------------------------------------------------------
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
                           client=None, logger=None, parallel=True, chunk_size_time=6, 
-                          input_zarr_path=None, batch_size=100, chunks_to_process=None):
+                          input_zarr_path=None, batch_size=100, chunks_to_process=None,
+                          time_groups=None, output_time_coords=None):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
     
@@ -224,7 +233,7 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
     Parameters:
     -----------
     time_coords : array-like
-        Array of time coordinates to process
+        Array of input time coordinates to process
     mask_variables : list
         List of mask variable names to create
     output_path : str
@@ -243,6 +252,10 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         Number of output chunks to submit per batch (default: 100)
     chunks_to_process : list of int, optional
         If provided, only process these chunk indices (for resume mode)
+    time_groups : dict, optional
+        Dictionary mapping aligned output times to lists of input time indices
+    output_time_coords : array-like, optional
+        Array of aligned output time coordinates
         
     Returns:
     --------
@@ -251,20 +264,40 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
     if logger is None:
         logger = logging.getLogger(__name__)
     
+    # Use time groups if provided, otherwise fall back to simple chunking
+    if time_groups is not None and output_time_coords is not None:
+        # Time-aligned processing: use time groups
+        total_chunks = len(output_time_coords)
+        output_times_list = list(output_time_coords)
+        
+        # Determine which chunks to process
+        if chunks_to_process is not None:
+            logger.info(f"RESUME MODE: Processing {len(chunks_to_process)} missing chunks out of {total_chunks} total")
+            chunk_indices = chunks_to_process
+        else:
+            logger.info(f"Processing all {total_chunks} chunks")
+            chunk_indices = list(range(total_chunks))
+        
+        logger.info(f"Processing {len(time_coords)} input time steps into {len(chunk_indices)} aligned time groups")
+        logger.info(f"Each chunk aggregates multiple hourly time steps into 1 swath mask at standard hours")
+        
+    else:
+        # Legacy simple chunking (every N time steps)
+        total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
+        
+        # Determine which chunks to process
+        if chunks_to_process is not None:
+            logger.info(f"RESUME MODE: Processing {len(chunks_to_process)} missing chunks out of {total_chunks} total")
+            chunk_indices = chunks_to_process
+        else:
+            logger.info(f"Processing all {total_chunks} chunks")
+            chunk_indices = list(range(total_chunks))
+
+        logger.info(f"Processing {len(time_coords)} time steps in {len(chunk_indices)} chunks of {chunk_size_time}")
+        logger.info(f"Each chunk will aggregate {chunk_size_time} hourly time steps into 1 swath mask")
+    
     # Process and write time steps in chunks
     total_processed = 0
-    total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
-    
-    # Determine which chunks to process
-    if chunks_to_process is not None:
-        logger.info(f"RESUME MODE: Processing {len(chunks_to_process)} missing chunks out of {total_chunks} total")
-        chunk_indices = chunks_to_process
-    else:
-        logger.info(f"Processing all {total_chunks} chunks")
-        chunk_indices = list(range(total_chunks))
-
-    logger.info(f"Processing {len(time_coords)} time steps in {len(chunk_indices)} chunks of {chunk_size_time}")
-    logger.info(f"Each chunk will aggregate {chunk_size_time} hourly time steps into 1 swath mask")
     
     if parallel and client is not None:
         # PARALLEL MODE: Submit chunks in batches to avoid overwhelming scheduler
@@ -274,12 +307,26 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         # Prepare chunk metadata for chunks we're actually processing
         chunk_metadata = []
         for chunk_idx in chunk_indices:
-            start_idx = chunk_idx * chunk_size_time
-            end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
+            if time_groups is not None and output_time_coords is not None:
+                # Time-aligned processing: get indices from time groups
+                aligned_time = output_times_list[chunk_idx]
+                # Convert numpy datetime64 to pandas Timestamp for dictionary lookup
+                aligned_time_pd = pd.Timestamp(aligned_time)
+                time_indices = time_groups[aligned_time_pd]
+                start_idx = int(time_indices[0])
+                end_idx = int(time_indices[-1]) + 1
+                output_time = aligned_time
+            else:
+                # Legacy simple chunking
+                start_idx = chunk_idx * chunk_size_time
+                end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
+                output_time = time_coords[start_idx]
+            
             chunk_metadata.append({
                 'chunk_idx': chunk_idx,
                 'start_idx': start_idx,
-                'end_idx': end_idx
+                'end_idx': end_idx,
+                'output_time': output_time
             })
         
         # Process chunks in batches
@@ -331,9 +378,9 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                 # Write this chunk to zarr immediately
                 if len(chunk_results) > 0:
                     try:
-                        # Get the output time for this chunk (first time of the aggregation window)
-                        # We aggregate multiple input times into 1 swath, so output has only 1 time
-                        output_time = np.array([time_coords[start_idx]])
+                        # Get the output time for this chunk
+                        # Use aligned time from metadata (already computed)
+                        output_time = np.array([meta['output_time']], dtype='datetime64[ns]')
                         
                         logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
                         append_chunk_to_zarr(
@@ -368,8 +415,20 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         logger.info("Processing chunks in serial mode...")
         
         for chunk_idx in chunk_indices:
-            start_idx = chunk_idx * chunk_size_time
-            end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
+            if time_groups is not None and output_time_coords is not None:
+                # Time-aligned processing: get indices from time groups
+                aligned_time = output_times_list[chunk_idx]
+                # Convert numpy datetime64 to pandas Timestamp for dictionary lookup
+                aligned_time_pd = pd.Timestamp(aligned_time)
+                time_indices = time_groups[aligned_time_pd]
+                start_idx = int(time_indices[0])
+                end_idx = int(time_indices[-1]) + 1
+                output_time_val = aligned_time
+            else:
+                # Legacy simple chunking
+                start_idx = chunk_idx * chunk_size_time
+                end_idx = min((chunk_idx + 1) * chunk_size_time, len(time_coords))
+                output_time_val = time_coords[start_idx]
             
             logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
             
@@ -383,9 +442,8 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             # Write this chunk to zarr immediately
             if len(chunk_results) > 0:
                 try:
-                    # Get the output time for this chunk (first time of the aggregation window)
-                    # We aggregate multiple input times into 1 swath, so output has only 1 time
-                    output_time = np.array([time_coords[start_idx]])
+                    # Get the output time for this chunk (aligned time)
+                    output_time = np.array([output_time_val], dtype='datetime64[ns]')
                     
                     logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
                     append_chunk_to_zarr(
@@ -497,7 +555,7 @@ def main():
     """Main function to run the make MCS swath process"""
 
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Process co-occurrence feature overlaps')
+    parser = argparse.ArgumentParser(description='Process MCS swath masks')
     parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
     parser.add_argument('--parallel', action='store_true', default=True,
                        help='Use parallel processing with Dask (default: True)')
@@ -525,7 +583,7 @@ def main():
     logger = logging.getLogger(__name__)
 
     start_time = time.time()
-    logger.info("Starting tracking MCS mask swath...")
+    logger.info("Starting making MCS mask swath...")
 
     # Get aggregation window from input argument 
     # This determines the time window size to aggregate MCS masks (e.g., 6 = aggregate 6 hourly steps into 1 swath)
@@ -577,9 +635,17 @@ def main():
             ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
             time_coords = ds["time"].values
             
-            # Create output time coordinates (same as processing)
-            total_output_chunks = (len(time_coords) + aggregation_window - 1) // aggregation_window
-            output_time_coords = time_coords[::aggregation_window][:total_output_chunks]
+            # Create output time coordinates aligned to standard hours (00, 06, 12, 18)
+            # Convert to pandas for easier time manipulation
+            time_df = pd.DataFrame({'time': pd.to_datetime(time_coords)})
+            
+            # Round times to nearest aggregation_window hour boundary
+            # For 6-hour aggregation: rounds to 00, 06, 12, 18
+            time_df['time_aligned'] = time_df['time'].dt.floor(f'{aggregation_window}h')
+            
+            # Get unique aligned times (these are the output time coordinates)
+            output_time_coords = time_df['time_aligned'].unique()
+            output_time_coords = np.array(output_time_coords, dtype='datetime64[ns]')
             
             missing_chunks = check_missing_chunks(
                 output_zarr=out_zarr,
@@ -657,13 +723,26 @@ def main():
         
         print(f"Using aggregation_window={aggregation_window} hours for swath computation")
 
-        # Create output time coordinates (aggregated times)
-        # Each output time represents the start of an aggregation_window period
-        total_output_chunks = (len(time_coords) + aggregation_window - 1) // aggregation_window
-        output_time_coords = time_coords[::aggregation_window][:total_output_chunks]
+        # Create output time coordinates aligned to standard hours (00, 06, 12, 18)
+        # Convert to pandas for easier time manipulation
+        time_df = pd.DataFrame({'time': pd.to_datetime(time_coords)})
+        
+        # Round times to nearest aggregation_window hour boundary
+        # For 6-hour aggregation: rounds to 00, 06, 12, 18
+        time_df['time_aligned'] = time_df['time'].dt.floor(f'{aggregation_window}h')
+        
+        # Get unique aligned times (these are the output time coordinates)
+        output_time_coords = time_df['time_aligned'].unique()
+        output_time_coords = np.array(output_time_coords, dtype='datetime64[ns]')
+        
+        # Create mapping from aligned times to input time indices
+        # This tells us which input times belong to each output time
+        time_groups = time_df.groupby('time_aligned').groups
         
         logger.info(f"Input: {len(time_coords)} hourly time steps")
-        logger.info(f"Output: {len(output_time_coords)} {aggregation_window}-hourly swath times")
+        logger.info(f"Output: {len(output_time_coords)} {aggregation_window}-hourly swath times (aligned to standard hours)")
+        logger.info(f"First input time: {time_coords[0]}, First output time: {output_time_coords[0]}")
+        logger.info(f"Last input time: {time_coords[-1]}, Last output time: {output_time_coords[-1]}")
         logger.info(f"Zarr time chunking: {zarr_chunk_size_time} time steps per chunk (optimized for weekly access)")
 
         try:
@@ -707,7 +786,9 @@ def main():
                 chunk_size_time=aggregation_window,  # Aggregation window (e.g., 6 hours)
                 input_zarr_path=in_zarr,  # Pass the input zarr path for workers
                 batch_size=batch_size,  # Number of chunks per batch
-                chunks_to_process=chunks_to_process  # Only process these chunks if resume mode
+                chunks_to_process=chunks_to_process,  # Only process these chunks if resume mode
+                time_groups=time_groups,  # Mapping of aligned times to input indices
+                output_time_coords=output_time_coords  # Aligned output time coordinates
             )
             
             logger.info(f"✅ Processing complete: {total_processed} chunks written to {out_zarr}")
@@ -721,18 +802,35 @@ def main():
         # Calculate total processing time
         end_time = time.time()
         elapsed_time = end_time - start_time
-        logger.info(f"Total processing time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-        print(f"\n✅ Processing complete!")
-        print(f"   Output: {out_zarr}")
-        print(f"   Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-        print(f"   Chunks processed: {total_processed}")
+        
+        # Store success info to print after Dask cleanup
+        success_info = {
+            'elapsed_time': elapsed_time,
+            'out_zarr': out_zarr,
+            'total_processed': total_processed
+        }
 
 
     finally:
         # Always cleanup client
         if client and parallel:
-            logger.info("Shutting down Dask client")
+            # Suppress Dask shutdown messages by temporarily raising log level
+            logging.getLogger('distributed').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.worker').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.nanny').setLevel(logging.CRITICAL)
+            
             client.close()
+        
+        # Print success message after Dask cleanup (so it's always visible at the end)
+        if 'success_info' in locals():
+            elapsed = success_info['elapsed_time']
+            print(f"\n{'='*80}")
+            print(f"✅ PROCESSING COMPLETE!")
+            print(f"{'='*80}")
+            print(f"Output: {success_info['out_zarr']}")
+            print(f"Chunks processed: {success_info['total_processed']}")
+            print(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+            print(f"{'='*80}\n")
 
 if __name__ == "__main__":
     main()
