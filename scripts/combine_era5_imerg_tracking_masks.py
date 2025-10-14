@@ -1,4 +1,5 @@
 import xarray as xr
+import pandas as pd
 import numpy as np
 import os
 import glob
@@ -9,12 +10,8 @@ from pathlib import Path
 # Add src directory to path for zarr_tools import
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 from zarr_tools import setup_dask_client
-import intake
-import requests
-import easygems.healpix as egh
-from functools import partial
 
-#-------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 def setup_logging():
     """
     Set the logging message level
@@ -27,10 +24,7 @@ def setup_logging():
     """
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-#-------------------------------------------------------------------
-# Dask client setup moved to zarr_tools.py - import it instead
-
-#-------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 def get_datasets(dir_mcs, dir_te, parallel=False, logger=None):
     """
     Load datasets from directories
@@ -71,7 +65,19 @@ def get_datasets(dir_mcs, dir_te, parallel=False, logger=None):
 
     return ds_mcs, ds_te
 
-#-------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+def find_matching_times(target_times, source_times, tolerance):
+    """Find times in source that match target within tolerance"""
+    matching = []
+    for t in target_times:
+        # Find closest time in source
+        time_diffs = np.abs(source_times - t)
+        min_diff_idx = time_diffs.argmin()
+        if time_diffs[min_diff_idx] <= tolerance:
+            matching.append(source_times[min_diff_idx])
+    return matching
+    
+#--------------------------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_te, client=None, out_zarr=None, logger=None):
     """
     Combine MCS and TempestExtremes tracking datasets.
@@ -104,15 +110,40 @@ def combine_masks(ds_mcs, ds_te, client=None, out_zarr=None, logger=None):
     # }
     
     # Find common time range across all datasets
-    common_times = sorted(set(ds_mcs['time'].values)
-                         .intersection(set(ds_te['time'].values)))
+    # Use pd.DatetimeIndex for robust time matching with tolerance    
+    time_mcs = pd.DatetimeIndex(ds_mcs['time'].values)
+    time_te = pd.DatetimeIndex(ds_te['time'].values)
+    
+    logger.info(f"MCS dataset has {len(time_mcs)} time steps")
+    logger.info(f"TempestExtremes dataset has {len(time_te)} time steps")
+    
+    # Find overlapping time range
+    start_time = max(time_mcs.min(), time_te.min())
+    end_time = min(time_mcs.max(), time_te.max())
+    
+    # Create a common 6-hourly time coordinate from start to end
+    # This ensures both datasets align to the same times
+    common_times = pd.date_range(start=start_time, end=end_time, freq='6h')
+    
+    # Filter to only times that exist in both datasets (with small tolerance)
+    tolerance = pd.Timedelta('10m')  # Allow 10 minutes difference for rounding
+    
+    # Find times present in both datasets
+    mcs_matched = find_matching_times(common_times, time_mcs, tolerance)
+    te_matched = find_matching_times(common_times, time_te, tolerance)
+    
+    # Get intersection of matched times (convert to timestamps for comparison)
+    common_times = sorted(set(pd.DatetimeIndex(mcs_matched)).intersection(set(pd.DatetimeIndex(te_matched))))
+
+    logger.info(f"Found {len(common_times)} common time steps")
+    
     if not common_times:
         logger.warning("No common time values between all datasets!")
         return None
     else:
-        # Select only the common times in all datasets
-        ds_mcs = ds_mcs.sel(time=common_times)
-        ds_te = ds_te.sel(time=common_times)
+        # Select only the common times in all datasets (use nearest method for tolerance)
+        ds_mcs = ds_mcs.sel(time=common_times, method='nearest', tolerance=tolerance)
+        ds_te = ds_te.sel(time=common_times, method='nearest', tolerance=tolerance)
 
     # Fix for lat/lon coordinates issue: ensure consistent treatment
     datasets = [ds_mcs, ds_te]
@@ -124,9 +155,50 @@ def combine_masks(ds_mcs, ds_te, client=None, out_zarr=None, logger=None):
     # Rename variables, drop unwanted ones in the DataSet
     ds = ds.drop_vars(drop_var_list, errors='ignore')
     # ds = ds.rename(rename_dict).drop_vars(drop_var_list, errors='ignore')
+    
+    # Remove _FillValue from attributes and set it in encoding instead
+    # This prevents conflicts when xarray tries to encode the variables
+    for var in ds.data_vars:
+        # Remove _FillValue from attributes if it exists
+        if '_FillValue' in ds[var].attrs:
+            fill_value = ds[var].attrs.pop('_FillValue')
+        else:
+            fill_value = 0  # Default for mask variables
+        
+        # Set fill value in encoding based on dtype
+        if np.issubdtype(ds[var].dtype, np.integer):
+            ds[var].encoding['_FillValue'] = int(fill_value)
+        elif np.issubdtype(ds[var].dtype, np.floating):
+            # Use 0.0 for float mask variables instead of NaN
+            ds[var].encoding['_FillValue'] = 0.0 if np.isnan(fill_value) else float(fill_value)
+        
+        # Clear other encoding that might cause conflicts
+        for key in ['chunks', 'preferred_chunks']:
+            ds[var].encoding.pop(key, None)
+    
+    # Also handle coordinates
+    for coord in ds.coords:
+        if coord in ds.variables:
+            # Remove _FillValue from coordinate attributes
+            if '_FillValue' in ds[coord].attrs:
+                ds[coord].attrs.pop('_FillValue')
+            # Clear encoding that might cause conflicts
+            for key in ['chunks', 'preferred_chunks', '_FillValue']:
+                ds[coord].encoding.pop(key, None)
 
-    # TODO: Modify global attributes if needed
-    # ds.attrs['history'] = f"Created on {time.ctime()} by combining tracking data"
+    # # Rechunk to ensure consistent chunking across all variables
+    # # Fix the inconsistent cell chunking that results from the merge
+    # # Get the HEALPix zoom level to calculate proper cell chunk size
+    # zoom_level = zoom_level_from_nside(ds.crs.attrs['healpix_nside'])
+    # chunksize_cell = 12 * 4**zoom_level
+    
+    # logger.info(f"Before rechunk: {dict(ds.chunks)}")
+    # ds = ds.chunk({'time': 28, 'cell': chunksize_cell})
+    # logger.info(f"After rechunk: {dict(ds.chunks)}")
+
+    # Add global attributes
+    ds.attrs['processing_date'] = str(np.datetime64('today'))
+    ds.attrs['processing_script'] = os.path.basename(__file__)
 
     # Write to Zarr
     if out_zarr:
@@ -258,8 +330,8 @@ def main():
     version = "v1"
     parallel = True
     n_workers = 8
-    threads_per_worker = 16
-    memory_per_worker = "60GB"
+    threads_per_worker = 4
+    # memory_per_worker = "60GB"
     # chunksize_cell = 12 * 4**zoom
     # chunksize_time = 24
 
@@ -270,18 +342,21 @@ def main():
     #     "catalog_params": {"zoom": zoom},
     # }
 
-    in_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
+    in_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     dir_te = f"{in_dir}ERA5_AR_TC_ETC_hp{zoom}_{version}.zarr"
-    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/{source_name}_hrly_mcsmask_hp{zoom}_v1.zarr"
+    # dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/{source_name}_hrly_mcsmask_hp{zoom}_v1.zarr"
+    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
 
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
+    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     out_basename = f"{source_name}_allmasks_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)
+    # import pdb; pdb.set_trace()
 
+    # # Setup Dask client
+    # client = setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker, logger)
     # Setup Dask client
-    client = setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker, logger)
-    import pdb; pdb.set_trace
+    client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
 
     try:
         # Load datasets
@@ -289,7 +364,6 @@ def main():
 
         # Combine datasets
         ds = combine_masks(ds_mcs, ds_te, client=client, out_zarr=out_zarr, logger=logger)
-        # import pdb; pdb.set_trace()
         
         # Cleanup
         ds_mcs.close()
@@ -299,15 +373,23 @@ def main():
     finally:
         # Always cleanup client
         if client and parallel:
-            logger.info("Shutting down Dask client")
+            # Suppress Dask shutdown messages by temporarily raising log level
+            logging.getLogger('distributed').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.worker').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.nanny').setLevel(logging.CRITICAL)
+            
             client.close()
-
+    
     # Log completion time
     end_time = time.time()
     elapsed_time = end_time - start_time
     hours, rem = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(rem, 60)
-    logger.info(f"Conversion completed in {int(hours):02}:{int(minutes):02}:{int(seconds):02} (hh:mm:ss).")
+    print(f"\n{'='*80}")
+    print(f"✅ PROCESSING COMPLETE!")
+    print(f"{'='*80}")
+    print(f"Output: '{out_zarr}'")
+    print(f"Total time: {int(seconds):02} seconds ({int(minutes):02} minutes)")
 
 if __name__ == "__main__":
     main()

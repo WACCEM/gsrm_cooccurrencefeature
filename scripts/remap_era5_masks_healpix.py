@@ -327,7 +327,7 @@ def remap_to_healpix_and_save(ds, catalog_dict, out_zarr,
     # Report dataset size and chunking info
     logger.info(f"HEALPix dataset dimensions: {dict(chunked_hp.sizes)}")
     logger.info(f"HEALPix chunking scheme: time={chunksize_time}, cell={chunksize_cell}")
-    
+
     # ---------- WRITE HEALPIX ZARR OUTPUT ----------
     logger.info(f"Starting HEALPix Zarr write to: {out_zarr}")
     
@@ -390,15 +390,15 @@ def main():
     version = "v1"
     parallel = True
     n_workers = 8
-    threads_per_worker = 16
-    memory_per_worker = "60GB"
+    threads_per_worker = 4
     chunksize_cell = 12 * 4**zoom
-    chunksize_time = 24
+    chunksize_time = 28
 
+    # Pick a catalog source to get appropriate HEALPix grid for remapping
     catalog_dict = {
         "catalog_file": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
         "catalog_location": "NERSC",
-        "catalog_source": "IR_IMERG",
+        "catalog_source": "scream_ne120",
         "catalog_params": {"zoom": zoom},
     }
 
@@ -410,13 +410,13 @@ def main():
     basename_tc = f"e5.accumulated_tp_6h.*.tc_filtered.nc"
     basename_etc = f"ERA5_ETCtag_*.nc"
 
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
+    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     out_basename = f"{source_name}_AR_TC_ETC_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)
 
     # Setup Dask client
-    client = setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker, logger)
+    client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
 
     try:
         # Find input files
