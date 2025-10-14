@@ -15,11 +15,11 @@ import tempfile
 ###############################################################################################
 
 # Choose feature type: "all" or "cof"
-feature_type = "cof"  # Change this to "all" or "cof"
+feature_type = "all"  # Change this to "all" or "cof"
 
 # Script parameters
-source_name = "scream"
-# source_name = "IMERGv7"
+# source_name = "scream"
+source_name = "IMERGv7"
 
 # start_date = "2019-11-24T00"
 # end_date = "2019-11-30T23"
@@ -33,11 +33,11 @@ n_workers = 32
 output_dpi = 200
 
 # Optional: Override time frequency for plotting (set to None to auto-calculate)
-# Examples: '1H', '3H', '6H', '12H', '1D'
-plot_freq = '6H'  # Set to desired frequency string or None for auto-calculation
+# Examples: '1h', '3h', '6h', '12h'
+plot_freq = '6h'  # Set to desired frequency string or None for auto-calculation
 
 # Execution control options
-run_plotting = False   # Set to False to skip plotting and use existing PNG files
+run_plotting = True   # Set to False to skip plotting and use existing PNG files
 run_ffmpeg = True     # Set to False to skip animation creation (plotting only)
 
 # FFmpeg animation parameters
