@@ -6,6 +6,8 @@ import os, glob
 import time
 import logging
 import sys
+import yaml
+import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import write_zarr, setup_dask_client
@@ -177,6 +179,27 @@ def setup_logging():
     """
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+def load_config(config_file, catalog_source):
+    """
+    Load configuration from YAML file for a specific catalog source.
+    
+    Args:
+        config_file: str
+            Path to the YAML configuration file
+        catalog_source: str
+            The catalog source key to load configuration for
+            
+    Returns:
+        dict: Configuration dictionary for the specified source
+    """
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if catalog_source not in config:
+        raise ValueError(f"Catalog source '{catalog_source}' not found in config file. "
+                        f"Available sources: {list(config.keys())}")
+    
+    return config[catalog_source]
 
 def get_datasets(dir_mcs, files_ar, files_tc, files_etc, parallel=False, logger=None):
     """
@@ -257,12 +280,30 @@ def get_datasets(dir_mcs, files_ar, files_tc, files_etc, parallel=False, logger=
 
 def main():
     """Main function to run the mask combination process"""
+
     # Set up logging
     setup_logging()
     logger = logging.getLogger(__name__)
-
+    
     start_time = time.time()
     logger.info("Starting tracking mask combination...")
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Process combined feature masks')
+    parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
+    parser.add_argument('--source', type=str, help='Source name', required=True)
+
+    # Configuration from arguments
+    args = parser.parse_args()
+    source = args.source
+    config_file = args.config
+
+    # Load configuration for the specified source
+    config = load_config(config_file, source)
+    dir_te = config.get("dir_te")
+    source_name = config.get("source_name")
+    source_te = config.get("source_te")
+    source_res = config.get("source_res")
     
     # Configuration parameters
     zoom = 8
@@ -288,16 +329,17 @@ def main():
     # basename_tc = f"TC_tracks_{source_name}_{source_res}."
     # basename_etc = f"ETC_tracks_{source_name}_{source_res}."
 
-    source_name = "casesm2_10km_nocumulus"
-    source_res = f"hp{zoom}_H"
-    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/casesm2_hrly_mcsmask_hp{zoom}_v1.zarr"
-    dir_te = f"/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/{source_name}_testpy/"
-    basename_ar = f"AR_tracks_{source_name}_{source_res}."
-    basename_tc = f"TC_tracks_{source_name}_{source_res}."
-    basename_etc = f"ETC_tracks_{source_name}_{source_res}."
+    # source_name = "casesm2_10km_nocumulus"
+    # source_res = f"hp{zoom}_H"
+    # dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/casesm2_hrly_mcsmask_hp{zoom}_v1.zarr"
+    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
+    # dir_te = f"/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/{source_name}_testpy/"
+    basename_ar = f"AR_tracks_{source_te}_{source_res}."
+    basename_tc = f"TC_tracks_{source_te}_{source_res}."
+    basename_etc = f"ETC_tracks_{source_te}_{source_res}."
 
     # Output paths
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
+    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     out_basename = f"{source_name}_allmasks_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)
@@ -313,7 +355,22 @@ def main():
         logger.info(f"Number of AR files: {len(files_ar)}")
         logger.info(f"Number of TC files: {len(files_tc)}")
         logger.info(f"Number of ETC files: {len(files_etc)}")
-        
+
+        # Check MCS directory
+        if not os.path.exists(dir_mcs):
+            logger.error(f"MCS directory does not exist: {dir_mcs}")
+            sys.exit(1)
+        # Check TE files
+        if len(files_ar) == 0:
+            logger.error(f"Missing AR files")
+            sys.exit(1)
+        if len(files_tc) == 0:
+            logger.error(f"Missing TC files")
+            sys.exit(1)
+        if len(files_etc) == 0:
+            logger.error(f"Missing ETC files")
+            sys.exit(1)
+
         # Load datasets
         ds_mcs, ds_ar, ds_tc, ds_etc = get_datasets(dir_mcs, files_ar, files_tc, files_etc, parallel, logger)
 
@@ -331,7 +388,11 @@ def main():
     finally:
         # Always cleanup client
         if client and parallel:
-            logger.info("Shutting down Dask client")
+            # Suppress Dask shutdown messages by temporarily raising log level
+            logging.getLogger('distributed').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.worker').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.nanny').setLevel(logging.CRITICAL)
+            
             client.close()
     
     # Log completion time
@@ -339,7 +400,11 @@ def main():
     elapsed_time = end_time - start_time
     hours, rem = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(rem, 60)
-    logger.info(f"Combine completed in {int(hours):02}:{int(minutes):02}:{int(seconds):02} (hh:mm:ss).")
+    print(f"\n{'='*80}")
+    print(f"✅ PROCESSING COMPLETE!")
+    print(f"{'='*80}")
+    print(f"Output: '{out_zarr}'")
+    print(f"Total time: {int(seconds):02} seconds ({int(minutes):02} minutes)")
 
 if __name__ == "__main__":
     main()

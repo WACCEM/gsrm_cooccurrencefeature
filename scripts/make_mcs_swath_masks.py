@@ -12,7 +12,6 @@ import sys
 import gc
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-# from src.zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_dask_client
 from src.zarr_tools import setup_dask_client, initialize_zarr_store, append_chunk_to_zarr
 from pyflextrkr.ft_utilities import load_config
 

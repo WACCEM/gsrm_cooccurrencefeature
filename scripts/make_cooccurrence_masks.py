@@ -1007,7 +1007,7 @@ def main():
     
     # Configuration from arguments
     source_name = args.source
-    root_dir = "/pscratch/sd/w/wcmca1/hackathon/allmasks/"
+    root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
     # output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"

@@ -26,6 +26,9 @@ scream_ne120:
   pr_convert_factor: 3600000.0  # Convert from [m/s] to [mm/h]
   start_datetime: 2019-08-01T00:00
   end_datetime: 2020-08-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre//screamv2_ne120_testpy/
+  source_te: screamv2_ne120
+  source_res: hp8_hp8
 
 # ICON model configuration  
 icon_d3hp003:
@@ -40,6 +43,9 @@ icon_d3hp003:
   pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
   start_datetime: 2020-01-02T00:00
   end_datetime: 2020-12-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/icon_d3hp003_1year_testpy/
+  source_te: icon_d3hp003
+  source_res: hp8_PT6H
 
 # CASESM2 model configuration  
 casesm2_10km_nocumulus:
@@ -53,3 +59,6 @@ casesm2_10km_nocumulus:
   pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
   start_datetime: 2020-03-01T00:00
   end_datetime: 2021-02-28T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/casesm2_10km_nocumulus_testpy/
+  source_te: casesm2_10km_nocumulus
+  source_res: hp8_H
