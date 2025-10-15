@@ -547,7 +547,7 @@ def main():
     
     # Set up data paths
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
-    in_dir = f"{root_dir}/{source_name}_cofmasks_hp8_v1_stream.zarr"
+    in_dir = f"{root_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     
     print(f"Loading data from: {in_dir}")
     

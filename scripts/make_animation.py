@@ -15,16 +15,16 @@ import tempfile
 ###############################################################################################
 
 # Choose feature type: "all" or "cof"
-feature_type = "all"  # Change this to "all" or "cof"
+feature_type = "cof"  # Change this to "all" or "cof"
 
 # Script parameters
-# source_name = "scream"
-source_name = "IMERGv7"
+source_name = "scream"
+# source_name = "IMERGv7"
 
 # start_date = "2019-11-24T00"
 # end_date = "2019-11-30T23"
-# start_date = "2019-08-02T00"
-# end_date = "2019-08-31T23"
+# start_date = "2020-05-01T00"
+# end_date = "2020-05-31T23"
 start_date = "2019-08-03T00"
 end_date = "2019-08-08T23"
 
