@@ -10,7 +10,7 @@ import yaml
 import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from src.zarr_tools import write_zarr, setup_dask_client
+from src.zarr_tools import zoom_level_from_nside, write_zarr, setup_dask_client
 
 #-------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logger=None):
@@ -39,11 +39,12 @@ def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logg
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    drop_var_list = ['ccs_mask', 'pr']
+    drop_var_list = ['ccs_mask', 'pr', 'ETC_binary_tag', 'sfcWind']
     rename_dict = {
         'AR_count_index': 'ar_mask',
         'TC_count_index': 'tc_mask',
-        'ETC_count_index': 'etc_mask',
+        # 'ETC_count_index': 'etc_mask',
+        'ETC_int_tag': 'etc_mask',
     }
 
     # Check the calendar type of the time coordinate in ds_ar
@@ -96,6 +97,15 @@ def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logg
 
     # Rename variables, drop unwanted ones in the DataSet
     ds = ds.rename(rename_dict).drop_vars(drop_var_list, errors='ignore')
+
+    # Get the HEALPix zoom level to calculate proper cell chunk size
+    zoom_level = zoom_level_from_nside(ds.crs.attrs['healpix_nside'])
+    chunksize_cell = 12 * 4**zoom_level
+    chunksize_time = 28
+
+    # Rechunk to ensure consistent chunking across all variables
+    ds = ds.chunk({'time': chunksize_time, 'cell': chunksize_cell})
+    logger.info(f"After rechunk: {dict(ds.chunks)}")
 
     # Write to Zarr
     if out_zarr:
@@ -333,10 +343,9 @@ def main():
     # source_res = f"hp{zoom}_H"
     # dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/casesm2_hrly_mcsmask_hp{zoom}_v1.zarr"
     dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
-    # dir_te = f"/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/{source_name}_testpy/"
     basename_ar = f"AR_tracks_{source_te}_{source_res}."
     basename_tc = f"TC_tracks_{source_te}_{source_res}."
-    basename_etc = f"ETC_tracks_{source_te}_{source_res}."
+    basename_etc = f"ETC_test_tracks_{source_te}_{source_res}."
 
     # Output paths
     out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"

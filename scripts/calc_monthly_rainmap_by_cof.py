@@ -22,29 +22,23 @@ def parse_cmd_args():
         description="Calculate monthly MCS precipitation statistics."
     )
     parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
-    # parser.add_argument("-s", "--start", help="first time to process, format=YYYY-mm-ddTHH", required=True)
-    # parser.add_argument("-e", "--end", help="last time to process, format=YYYY-mm-ddTHH", required=True)
     parser.add_argument("--source", help="catalog source name from config file", required=True)
     # parser.add_argument("--zoom", help="HEALPix zoom level", type=int, default=None)
-    # parser.add_argument("--nworkers", help="number of Dask workers", type=int, default=14)
-    # parser.add_argument("--threads", help="threads per worker", type=int, default=4)
-    # parser.add_argument("--memory", help="memory limit per worker, e.g. '40GB' (default: auto)", default=None)
-    # parser.add_argument("--chunk_days", help="number of days to process in each chunk", type=int, default=5)
-    # parser.add_argument("--pcp_thresh", help="precipitation threshold in mm/h", type=float, default=2.0)
+    parser.add_argument("--nworkers", help="number of Dask workers (default: 14)", type=int, default=14)
+    parser.add_argument("--threads", help="threads per worker (default: 4)", type=int, default=4)
+    parser.add_argument("--chunk_days", help="number of days to process in each chunk (default: 6)", type=int, default=6)
+    parser.add_argument("--pcp_thresh", help="precipitation threshold in mm/h (default: 0.1)", type=float, default=0.1)
     args = parser.parse_args()
 
     # Put arguments in a dictionary
     args_dict = {
         'config_file': args.config,
-        # 'start_datetime': args.start,
-        # 'end_datetime': args.end,
         'source': args.source,
         # 'zoom': args.zoom,
-        # 'n_workers': args.nworkers,
-        # 'threads_per_worker': args.threads,
-        # 'memory_limit': args.memory,
-        # 'chunk_days': args.chunk_days,
-        # 'pcp_thresh': args.pcp_thresh,
+        'n_workers': args.nworkers,
+        'threads_per_worker': args.threads,
+        'chunk_days': args.chunk_days,
+        'pcp_thresh': args.pcp_thresh,
     }
 
     return args_dict
@@ -162,7 +156,7 @@ def create_union_mask(mask_list):
 
 print("✅ create_union_mask() function defined")
 
-def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=2.0):
+def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
     """Process one month of data in time chunks to reduce memory pressure"""
     # Current month's time value for output
     out_time = month_ds.time[0]
@@ -926,24 +920,21 @@ def main():
     args_dict = parse_cmd_args()
     config_file = args_dict.get('config_file')
     catalog_source = args_dict.get('source')
-    # start_datetime = args_dict.get('start_datetime')
-    # end_datetime = args_dict.get('end_datetime')
     # zoom = args_dict.get('zoom')
-    # n_workers = args_dict.get('n_workers')
-    # threads_per_worker = args_dict.get('threads_per_worker')
-    # memory_limit = args_dict.get('memory_limit')
-    # chunk_days = args_dict.get('chunk_days')
-    # pcp_thresh = args_dict.get('pcp_thresh')
+    n_workers = args_dict.get('n_workers')
+    threads_per_worker = args_dict.get('threads_per_worker')
+    chunk_days = args_dict.get('chunk_days')
+    pcp_thresh = args_dict.get('pcp_thresh')
 
-    chunk_days = 6
-    pcp_thresh = 0.1  # mm/h
+    # chunk_days = 6
+    # pcp_thresh = 0.1  # mm/h
 
     # Configuration parameters
     zoom = 8
     version = 'v1'
     parallel = True
-    n_workers = 13
-    threads_per_worker = 4
+    # n_workers = 13
+    # threads_per_worker = 4
     
     # Load configuration for the specified source
     config = load_config(config_file, catalog_source)
@@ -963,7 +954,7 @@ def main():
 
     # Input combined mask file
     in_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
-    in_basename = f"{source_name}_cofmasks_hp{zoom}_{version}_stream.zarr"
+    in_basename = f"{source_name}_cofmasks_hp{zoom}_{version}.zarr"
     in_zarr = f"{in_dir}{in_basename}"
 
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/stats/monthly/"
@@ -991,6 +982,16 @@ def main():
         in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
         # Read IMERG dataset
         print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
+        ds_p = xr.open_zarr(in_zarr, consolidated=True)
+        ds_p = ds_p.pipe(egh.attach_coords)
+
+    elif catalog_source == "nicam_gl11":
+        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/NICAM/shifted/"
+        in_basename = f"NICAM_pr"
+        time_res = "6h"
+        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+        # Read NICAM dataset
+        print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)
 
@@ -1064,6 +1065,7 @@ def main():
         ds = ds.sel(time=common_times)
         # Add precipitation to the dataset
         ds["pr"] = pr
+        logger.info(f"Successfully merged datasets with {len(common_times)} common time points")
 
     # Subset to the specified time range using robust method
     if start_datetime and end_datetime:

@@ -946,6 +946,7 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         'ar_mask': _ds.ar_mask,
         'etc_mask': _ds.etc_mask,
         'tc_mask': _ds.tc_mask,
+        'ccs_mask': _ds.ccs_mask,
         
         # Isolated masks
         'mcs_isolated_mask': mcs_isolated_mask,
@@ -986,6 +987,7 @@ def main():
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process co-occurrence feature overlaps')
+    parser.add_argument('--source', type=str, required=True, help='Source name')
     parser.add_argument('--parallel', action='store_true', default=True,
                        help='Use parallel processing with Dask (default: True)')
     parser.add_argument('--no-parallel', action='store_false', dest='parallel',
@@ -994,8 +996,6 @@ def main():
                        help='Number of Dask workers (default: 32)')
     parser.add_argument('--threads-per-worker', type=int, default=1,
                        help='Number of threads per worker (default: 1)')
-    parser.add_argument('--source', type=str, default='scream',
-                       help='Source name (default: scream)')
     parser.add_argument('--test-steps', type=int, default=None,
                        help='Number of time steps to process for testing (default: all)')
     
@@ -1010,8 +1010,7 @@ def main():
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
-    # output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
-    output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1_stream.zarr"
+    output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     
     # Parallel processing configuration
     parallel = args.parallel
@@ -1058,7 +1057,7 @@ def main():
         
         # Define all output variables
         mask_variables = [
-            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask',
+            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask', 'ccs_mask',
             'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
             'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
             'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
@@ -1116,54 +1115,60 @@ def main():
                 input_zarr_path=in_dir  # Pass the input zarr path for workers
             )
             
-            print(f"  ✅ Zarr dataset created successfully")
-            print(f"  ✅ Processed {successful_times}/{len(time_coords)} time steps")
-            
-            # Verify the saved dataset
-            test_ds = xr.open_dataset(output_path, engine='zarr')
-            print(f"  ✅ Verification successful - {len(test_ds.time)} time steps")
-            print(f"  ✅ Variables: {list(test_ds.data_vars)}")
-            test_ds.close()
+            logger.info(f"✅ Processing complete: {successful_times} time steps written to {output_path}")
             
         except Exception as e:
             logger.error(f"Error writing chunked zarr: {e}")
             print(f"  ❌ Error writing zarr: {e}")
             return
         
-        print(f"\n" + "="*80)
-        print("PROCESSING COMPLETE!")
-        print("="*80)
-        print(f"Output saved to: {output_path}")
-        print(f"Time steps processed: {len(time_coords)}")
-        print(f"Variables created: {len(mask_variables)}")
-        print(f"Processing mode: {'Parallel' if parallel else 'Sequential'}")
-        print(f"Memory approach: Streaming zarr writing")
-        
-        # Print summary statistics
-        print(f"\nSUMMARY STATISTICS:")
-        print(f"  Successful time steps: {successful_times}/{len(time_coords)}")
-        
-        # Verify the saved dataset for sample statistics
-        if successful_times > 0:
-            try:
-                # Open the written zarr to get sample statistics
-                test_ds = xr.open_dataset(output_path, engine='zarr')
-                sample_time = test_ds.time.values[0]
-                
-                print(f"  Example from {sample_time}:")
-                print(f"    Dataset successfully written with {len(test_ds.time)} time steps")
-                print(f"    Variables created: {len([v for v in test_ds.data_vars if 'mask' in v])}")
-                print(f"    Spatial cells: {test_ds.sizes.get('cell', 'unknown')}")
-                test_ds.close()
-            except Exception as e:
-                logger.warning(f"Could not read sample statistics: {e}")
-                print(f"  Dataset written but could not read sample statistics")
-            
+        # Store success info to print after Dask cleanup
+        success_info = {
+            'output_path': output_path,
+            'successful_times': successful_times,
+            'total_times': len(time_coords),
+            'mask_variables': mask_variables,
+            'parallel': parallel
+        }
+
     finally:
         # Always cleanup client
         if client and parallel:
-            logger.info("Shutting down Dask client")
+            # Suppress Dask shutdown messages by temporarily raising log level
+            logging.getLogger('distributed').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.worker').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.nanny').setLevel(logging.CRITICAL)
+            
             client.close()
+        
+        # Print success message after Dask cleanup (so it's always visible at the end)
+        if 'success_info' in locals():
+            print(f"\n{'='*80}")
+            print(f"✅ PROCESSING COMPLETE!")
+            print(f"{'='*80}")
+            print(f"Output: {success_info['output_path']}")
+            print(f"Time steps processed: {success_info['successful_times']}/{success_info['total_times']}")
+            print(f"Variables created: {len(success_info['mask_variables'])}")
+            print(f"Processing mode: {'Parallel' if success_info['parallel'] else 'Sequential'}")
+            print(f"Memory approach: Streaming zarr writing")
+            
+            # Verify the saved dataset for sample statistics
+            if success_info['successful_times'] > 0:
+                try:
+                    # Open the written zarr to get sample statistics
+                    test_ds = xr.open_dataset(success_info['output_path'], engine='zarr')
+                    sample_time = test_ds.time.values[0]
+                    
+                    print(f"\nSUMMARY STATISTICS:")
+                    print(f"  Example from {sample_time}:")
+                    print(f"    Dataset successfully written with {len(test_ds.time)} time steps")
+                    print(f"    Variables created: {len([v for v in test_ds.data_vars if 'mask' in v])}")
+                    print(f"    Spatial cells: {test_ds.sizes.get('cell', 'unknown')}")
+                    test_ds.close()
+                except Exception as e:
+                    logger.warning(f"Could not read sample statistics: {e}")
+                    print(f"  Dataset written but could not read sample statistics")
+            print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":

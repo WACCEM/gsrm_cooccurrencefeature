@@ -158,16 +158,22 @@ def process_timechunk_swath(_ds, verbose=False):
     
     # Extract track number arrays
     mcs_mask = _ds['mcs_mask'].values  # shape (time, cell)
+    # Sum CCS mask over time and convert to binary
+    ccs_mask_sum = ((_ds['ccs_mask'] > 0).sum(dim='time') > 0).values  # shape (cell)
     
     # Create swaths and coverage for MCS
     mcs_swaths_dict, mcs_coverage_dict = create_track_swaths_and_coverage(mcs_mask)
     combined_mcs_swath = combine_swaths_with_priority(mcs_swaths_dict, mcs_coverage_dict)
+
+    # Filter out CCS that overlap with MCS swaths
+    ccs_mask_sum[combined_mcs_swath > 0] = 0
     
     if verbose:
         print(f"  ✅ Completed processing for this time chunk")
 
     return {
         'mcs_mask': combined_mcs_swath,
+        'ccs_mask': ccs_mask_sum,
     }
 
 def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False):
@@ -472,8 +478,8 @@ def main():
     # 28 = 1 week of 6-hourly data (7 days * 4 swaths/day)
     zarr_chunk_size_time = 28
     
-    # Define output variables (default only do mcs_mask)
-    mask_variables = ['mcs_mask']
+    # Define output variables
+    mask_variables = ['mcs_mask', 'ccs_mask']
     
     # Parallel processing configuration
     parallel = args.parallel
