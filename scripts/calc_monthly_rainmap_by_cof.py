@@ -24,8 +24,8 @@ def parse_cmd_args():
     parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
     parser.add_argument("--source", help="catalog source name from config file", required=True)
     # parser.add_argument("--zoom", help="HEALPix zoom level", type=int, default=None)
-    parser.add_argument("--nworkers", help="number of Dask workers (default: 14)", type=int, default=14)
-    parser.add_argument("--threads", help="threads per worker (default: 4)", type=int, default=4)
+    parser.add_argument("--workers", help="number of Dask workers (default: 14)", type=int, default=14)
+    parser.add_argument("--threads-per-worker", help="threads per worker (default: 4)", type=int, default=4)
     parser.add_argument("--chunk_days", help="number of days to process in each chunk (default: 6)", type=int, default=6)
     parser.add_argument("--pcp_thresh", help="precipitation threshold in mm/h (default: 0.1)", type=float, default=0.1)
     args = parser.parse_args()
@@ -35,8 +35,8 @@ def parse_cmd_args():
         'config_file': args.config,
         'source': args.source,
         # 'zoom': args.zoom,
-        'n_workers': args.nworkers,
-        'threads_per_worker': args.threads,
+        'n_workers': args.workers,
+        'threads_per_worker': args.threads_per_worker,
         'chunk_days': args.chunk_days,
         'pcp_thresh': args.pcp_thresh,
     }
@@ -986,12 +986,22 @@ def main():
         ds_p = ds_p.pipe(egh.attach_coords)
 
     elif catalog_source == "nicam_gl11":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/NICAM/shifted/"
+        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
         in_basename = f"NICAM_pr"
         time_res = "6h"
         in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
         # Read NICAM dataset
         print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
+        ds_p = xr.open_zarr(in_zarr, consolidated=True)
+        ds_p = ds_p.pipe(egh.attach_coords)
+
+    elif catalog_source == "um_glm_n2560_RAL3p3":
+        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
+        in_basename = f"um_glm_n2560_RAL3p3_pr"
+        time_res = "6h"
+        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+        # Read UM dataset
+        print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)
 

@@ -39,7 +39,7 @@ def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logg
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    drop_var_list = ['ccs_mask', 'pr', 'ETC_binary_tag', 'sfcWind']
+    drop_var_list = ['pr', 'ETC_binary_tag', 'sfcWind']
     rename_dict = {
         'AR_count_index': 'ar_mask',
         'TC_count_index': 'tc_mask',
@@ -300,7 +300,7 @@ def main():
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process combined feature masks')
-    parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
+    parser.add_argument("-c", "--config", help="yaml config file for processing", required=True)
     parser.add_argument('--source', type=str, help='Source name', required=True)
 
     # Configuration from arguments

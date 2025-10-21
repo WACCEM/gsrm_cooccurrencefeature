@@ -26,7 +26,7 @@ source_name = "scream"
 # start_date = "2020-05-01T00"
 # end_date = "2020-05-31T23"
 start_date = "2019-08-03T00"
-end_date = "2019-08-08T23"
+end_date = "2019-08-31T23"
 
 parallel_mode = 1
 n_workers = 32
@@ -64,7 +64,8 @@ elif feature_type == "cof":
 # Animation parameters
 animation_dir = "/global/cfs/cdirs/m1867/zfeng/hk25/animations/"
 start_date_str = start_date.split('T')[0]  # Extract YYYY-MM-DD
-animation_filename = f"{animation_dir}{source_name}_{fig_basename}_{start_date_str}.mp4"
+end_date_str = end_date.split('T')[0]      # Extract YYYY-MM-DD
+animation_filename = f"{animation_dir}{source_name}_{fig_basename}_{start_date_str}_{end_date_str}.mp4"
 
 ###############################################################################################
 # Main execution

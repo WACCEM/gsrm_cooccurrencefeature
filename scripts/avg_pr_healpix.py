@@ -49,7 +49,7 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def load_dataset(catalog_path, location, source, zoom, time, vars_to_include):
+def load_dataset(catalog_path, location, source, catalog_params, vars_to_include):
     """
     Load dataset from intake catalog.
     
@@ -61,10 +61,8 @@ def load_dataset(catalog_path, location, source, zoom, time, vars_to_include):
         Location key in catalog
     source : str
         Source identifier (e.g., 'nicam_gl11')
-    zoom : int
-        Zoom level
-    time : str
-        Time resolution (e.g., 'PT1H')
+    catalog_params : dict
+        Parameters to pass to the catalog source (e.g., zoom, time)
     
     Returns:
     --------
@@ -72,11 +70,11 @@ def load_dataset(catalog_path, location, source, zoom, time, vars_to_include):
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Loading dataset: {source} from {location}")
-    logger.info(f"  Zoom level: {zoom}, Time resolution: {time}")
-    
+    logger.info(f"  Catalog parameters: {catalog_params}")
+
     # Load dataset from catalog
-    cat = intake.open_catalog(catalog_path)
-    ds = cat[source](zoom=zoom, time=time).to_dask()
+    cat = intake.open_catalog(catalog_path)[location]
+    ds = cat[source](**catalog_params).to_dask()
     ds = ds.pipe(egh.attach_coords)
 
     # Select only the variables of interest
@@ -199,21 +197,32 @@ def main():
     logger.info("="*80)
     
     # Configuration
-    catalog_path = "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
-    location = "NERSC"
-    source = "nicam_gl11"
-    zoom = 8
-    time = "PT3H"
+    # catalog_path = "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
+    catalog_path = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+    # location = "NERSC"
+    # source = "nicam_gl11"
+    # zoom = 8
+    # time = "PT3H"
+
+    location = "online"
+    source = "um_glm_n2560_RAL3p3"
+    catalog_params = {
+        'zoom': 8,
+        'time': 'PT1H',
+    }
     
     # Variables to include in unified dataset
     vars_to_include = ['pr']
+    vars_to_include += ['prs']  # Add more variables if needed
 
     # Temporal aggregation settings
     output_freq = '6h'  # Target frequency: 6-hourly
     target_hours = [0, 6, 12, 18]  # Align to these hours
     
     # Output configuration
-    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/NICAM/shifted/NICAM_pr6h_z{zoom}.zarr"
+    zoom = catalog_params['zoom']
+    # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/NICAM_pr6h_z{zoom}.zarr"
+    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/um_glm_n2560_RAL3p3_pr6h_z{zoom}.zarr"
     
     # Dask configuration
     use_parallel = True
@@ -249,7 +258,7 @@ def main():
     logger.info("\n" + "="*80)
     logger.info("Step 2: Loading dataset")
     logger.info("="*80)
-    ds = load_dataset(catalog_path, location, source, zoom, time, vars_to_include)
+    ds = load_dataset(catalog_path, location, source, catalog_params, vars_to_include)
     logger.info(f"   Dataset loaded lazily (Dask-backed): {type(ds.pr.data)}")
 
     # Get the HEALPix zoom level to calculate proper cell chunk size

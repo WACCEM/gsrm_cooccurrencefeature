@@ -100,7 +100,7 @@ def combine_masks(ds_mcs, ds_te, client=None, out_zarr=None, logger=None):
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    drop_var_list = ['ccs_mask']
+    drop_var_list = ['']
     # rename_dict = {
     #     'AR_binary_tag': 'ar_mask',
     #     'TC_binary_tag': 'tc_mask',
@@ -155,7 +155,7 @@ def combine_masks(ds_mcs, ds_te, client=None, out_zarr=None, logger=None):
     # Rename variables, drop unwanted ones in the DataSet
     ds = ds.drop_vars(drop_var_list, errors='ignore')
     # ds = ds.rename(rename_dict).drop_vars(drop_var_list, errors='ignore')
-    
+
     # Remove _FillValue from attributes and set it in encoding instead
     # This prevents conflicts when xarray tries to encode the variables
     for var in ds.data_vars:

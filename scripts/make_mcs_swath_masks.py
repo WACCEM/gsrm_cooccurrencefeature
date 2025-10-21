@@ -445,7 +445,7 @@ def main():
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process MCS swath masks')
-    parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
+    parser.add_argument("-c", "--config", help="yaml config file for PyFLEXTRKR MCS tracking", required=True)
     parser.add_argument('--parallel', action='store_true', default=True,
                        help='Use parallel processing with Dask (default: True)')
     parser.add_argument('--no-parallel', action='store_false', dest='parallel',

@@ -24,6 +24,7 @@ import warnings
 import argparse
 import logging
 # import easygems.healpix as egh  # Commented out for testing
+import yaml
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -38,6 +39,28 @@ def setup_logging():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+
+def load_config(config_file, catalog_source):
+    """
+    Load configuration from YAML file for a specific catalog source.
+    
+    Args:
+        config_file: str
+            Path to the YAML configuration file
+        catalog_source: str
+            The catalog source key to load configuration for
+            
+    Returns:
+        dict: Configuration dictionary for the specified source
+    """
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if catalog_source not in config:
+        raise ValueError(f"Catalog source '{catalog_source}' not found in config file. "
+                        f"Available sources: {list(config.keys())}")
+    
+    return config[catalog_source]
 
 def find_overlapping_tracks_and_pairs(mask1, mask2, binary_sum_mask, 
                                      thresh1=0.1, thresh2=0.1, overlap_threshold=1,
@@ -734,19 +757,27 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     etc_thresh_2way = 0.05  # 5% - largest features for 2-way overlaps
     etc_thresh_3way = 0.00  # 0% - environmental context for 3-way overlaps
     
-    # ===== STEP 1: MCS-TC FILTERING =====
+    # ===== STEP 1: TC FILTERING =====
     if verbose:
         print("  Step 1: Filtering MCS-TC overlaps...")
     
-    tc_filtering_results = filter_mcs_tc_overlaps(
+    # Filter MCS and CCS tracks that significantly overlap with TCs
+    mcs_filtering_results = filter_mcs_tc_overlaps(
         mcs_mask=_ds.mcs_mask,
         tc_mask=_ds.tc_mask,
         overlap_threshold=0.10,  # 10% threshold
         verbose=verbose
     )
-    
-    mcs_filtered = tc_filtering_results['mcs_filtered']
-    
+    ccs_filtering_results = filter_mcs_tc_overlaps(
+        mcs_mask=_ds.ccs_mask,
+        tc_mask=_ds.tc_mask,
+        overlap_threshold=0.10,  # 10% threshold
+        verbose=verbose
+    )
+
+    mcs_filtered = mcs_filtering_results['mcs_filtered']
+    ccs_filtered = ccs_filtering_results['mcs_filtered']
+
     # ===== STEP 2: CREATE BINARY MASKS =====
     if verbose:
         print("  Step 2: Creating binary masks...")
@@ -941,12 +972,12 @@ def process_single_timestep_overlaps(_ds, verbose=True):
 
     # Return all masks and metadata
     return {
-        # Original masks (TC-filtered for MCS)
-        'mcs_mask': mcs_filtered,
+        # Original masks
+        'mcs_mask': mcs_filtered,   # TC-filtered MCS
+        'ccs_mask': ccs_filtered,   # TC-filtered CCS
         'ar_mask': _ds.ar_mask,
         'etc_mask': _ds.etc_mask,
         'tc_mask': _ds.tc_mask,
-        'ccs_mask': _ds.ccs_mask,
         
         # Isolated masks
         'mcs_isolated_mask': mcs_isolated_mask,
@@ -971,7 +1002,7 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         'ar_etc_pairs_2way': ar_etc_pairs_2way_only,
         'mcs_etc_pairs_2way': mcs_etc_pairs_2way_only,
         'validated_triplets': validated_triplets,
-        'tc_filtering_summary': tc_filtering_results['summary'],
+        'mcs_filtering_summary': mcs_filtering_results['summary'],
         
         # Track lists for reference
         'mcs_tracks_3way': mcs_tracks_with_ar_etc_overlap,
@@ -984,9 +1015,14 @@ def main():
     """
     Main function that processes the full time series dataset.
     """
+
+    # Set up logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process co-occurrence feature overlaps')
+    parser.add_argument("-c", "--config", help="yaml config file for processing", required=True)
     parser.add_argument('--source', type=str, required=True, help='Source name')
     parser.add_argument('--parallel', action='store_true', default=True,
                        help='Use parallel processing with Dask (default: True)')
@@ -999,14 +1035,16 @@ def main():
     parser.add_argument('--test-steps', type=int, default=None,
                        help='Number of time steps to process for testing (default: all)')
     
-    args = parser.parse_args()
-    
-    # Set up logging
-    setup_logging()
-    logger = logging.getLogger(__name__)
-    
     # Configuration from arguments
-    source_name = args.source
+    args = parser.parse_args()
+    source = args.source
+    config_file = args.config
+
+    # Load configuration for the specified source
+    config = load_config(config_file, source)
+    source_name = config.get("source_name")
+    # source_name = args.source
+
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
