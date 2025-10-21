@@ -62,6 +62,21 @@ nicam_gl11:
   source_te: nicam_gl11
   source_res: hp8_H
 
+# UM model
+um_glm_n2560_RAL3p3:
+  source_name: um_glm_n2560_RAL3p3
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+    # time: PT6H
+  varname_precip_liq: pr
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-01-01T00:00
+  end_datetime: 2021-02-28T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/um_glm_n2560_RAL3p3_tracking/
+  source_te: um_glm_n2560_RAL3p3
+  source_res: hp8_H
+
 # CASESM2 model configuration  
 casesm2_10km_nocumulus:
   source_name: casesm2_10km_nocumulus
@@ -77,3 +92,19 @@ casesm2_10km_nocumulus:
   dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/casesm2_10km_nocumulus_tracking/
   source_te: casesm2_10km_nocumulus
   source_res: hp8_H
+
+# IFS model configuration  
+ifs_tco3999_rcbmf:
+  source_name: ifs_tco3999_rcbmf
+  catalog_location: online
+  catalog_params:
+    zoom: 8
+    time: PT6H
+    time_method: mean
+  varname_precip_liq: pr
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-01-01T00:00
+  end_datetime: 2021-03-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/ifs_tco3999_rcbmf_tracking/
+  source_te: ifs_tco3999_rcbmf
+  source_res: PT1H
