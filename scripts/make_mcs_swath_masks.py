@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import cftime
 import yaml
+import calendar
 import os, glob
 import time
 import argparse
@@ -10,10 +11,13 @@ import logging
 import traceback
 import sys
 import gc
+import intake
+import easygems.healpix as egh
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import setup_dask_client, initialize_zarr_store, append_chunk_to_zarr
 from pyflextrkr.ft_utilities import load_config
+from pyflextrkr.ftfunctions import olr_to_tb
 
 # Import for parallel processing
 try:
@@ -36,6 +40,66 @@ def setup_logging():
     logging.getLogger('distributed.comm').setLevel(logging.WARNING)
     logging.getLogger('distributed.nanny').setLevel(logging.WARNING)
     logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
+
+#-------------------------------------------------------------------
+def convert_cftime_to_standard_calendar(cftime_times):
+    """
+    Convert cftime datetime objects (non-standard calendars) to numpy datetime64 (standard calendar).
+    
+    This function handles conversion from calendars like DatetimeNoLeap, Datetime360Day, etc.
+    to standard proleptic_gregorian calendar (numpy.datetime64).
+    
+    Args:
+        cftime_times: array-like of cftime datetime objects
+            Timestamps with non-standard calendar (e.g., DatetimeNoLeap, Datetime360Day)
+            
+    Returns:
+        numpy.ndarray: Array of numpy.datetime64 objects with standard calendar
+    """
+    
+    # Check if input is a single timestamp
+    is_single_object = not hasattr(cftime_times, '__iter__')
+    
+    # Convert to list for uniform processing
+    times_list = [cftime_times] if is_single_object else cftime_times
+    
+    # Convert each cftime timestamp to numpy datetime64
+    converted_times = []
+    for t in times_list:
+        # Check if it's already a standard datetime type
+        if isinstance(t, (np.datetime64, pd.Timestamp)):
+            converted_times.append(np.datetime64(t, 'ns'))
+        # If it's a cftime object, extract components and create datetime64
+        elif hasattr(t, 'year'):
+            # Create a pandas Timestamp from the cftime components
+            # Note: This may shift dates for non-standard calendars that have different
+            # day counts (e.g., Feb 30 in 360_day calendar doesn't exist in standard)
+            try:
+                pd_time = pd.Timestamp(
+                    year=t.year, month=t.month, day=t.day,
+                    hour=t.hour, minute=t.minute, second=t.second
+                )
+                converted_times.append(pd_time.to_datetime64())
+            except ValueError as e:
+                # Handle invalid dates (e.g., Feb 30)
+                # For simplicity, we'll skip invalid dates or adjust them
+                print(f"Warning: Could not convert {t} to standard calendar: {e}")
+                # Try to adjust the day to the last valid day of the month
+                last_day = calendar.monthrange(t.year, t.month)[1]
+                adjusted_day = min(t.day, last_day)
+                pd_time = pd.Timestamp(
+                    year=t.year, month=t.month, day=adjusted_day,
+                    hour=t.hour, minute=t.minute, second=t.second
+                )
+                converted_times.append(pd_time.to_datetime64())
+        else:
+            raise TypeError(f"Unsupported time type: {type(t)}")
+    
+    # Return a single object or array based on input type
+    if is_single_object:
+        return converted_times[0]
+    else:
+        return np.array(converted_times, dtype='datetime64[ns]')
 
 
 #--------------------------------------------------------------------------------------------------
@@ -137,29 +201,255 @@ def combine_swaths_with_priority(track_swaths_dict, track_coverage_dict):
     return combined_swath
 
 #--------------------------------------------------------------------------------------------------
-def process_timechunk_swath(_ds, verbose=False):
+def create_latitude_dependent_tb_threshold(lat_values):
     """
-    Process a time chunk of dataset to create MCS swath masks.
+    Create latitude-dependent brightness temperature thresholds.
+    
+    Parameters:
+    -----------
+    lat_values : numpy.ndarray
+        Array of latitude values
+        
+    Returns:
+    --------
+    tb_thresh : numpy.ndarray
+        Array of temperature thresholds (K) matching lat_values shape
+    """
+    abs_lat = np.abs(lat_values)
+    tb_thresh = np.zeros_like(lat_values, dtype=np.float32)
+    
+    # Tropics: |lat| <= 30, tb_thresh = 250 K
+    tropical_mask = abs_lat <= 30
+    tb_thresh[tropical_mask] = 250.0
+    
+    # Mid-latitudes: 30 < |lat| <= 60, linearly decrease from 250 to 230 K
+    midlat_mask = (abs_lat > 30) & (abs_lat <= 60)
+    tb_thresh[midlat_mask] = 250.0 - 20.0 * ((abs_lat[midlat_mask] - 30.0) / 30.0)
+    
+    # High latitudes: |lat| > 60, tb_thresh = 230 K
+    highlat_mask = abs_lat > 60
+    tb_thresh[highlat_mask] = 230.0
+    
+    return tb_thresh
+
+#--------------------------------------------------------------------------------------------------
+def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
+    """
+    Classify cloud types based on brightness temperature and precipitation.
+    
+    Parameters:
+    -----------
+    tb : numpy.ndarray
+        Brightness temperature (K)
+    pr : numpy.ndarray
+        Precipitation rate (mm/h)
+    tb_thresh : numpy.ndarray
+        Latitude-dependent brightness temperature threshold (K)
+    nonmcs_ccs_mask : numpy.ndarray
+        Non-MCS CCS mask (only classify where > 0)
+    pr_threshold : float, optional
+        Precipitation threshold for classification (default: 0.5 mm/h)
+    
+    Returns:
+    --------
+    cloud_type : numpy.ndarray
+        Cloud type classification:
+        0 = No cloud (or outside nonmcs_ccs_mask)
+        1 = Deep convective (tb < tb_thresh)
+        2 = Non-deep convective (tb >= tb_thresh & pr >= pr_threshold)
+        3 = Drizzle (tb >= tb_thresh & pr < pr_threshold)
+    """
+    # Initialize cloud type array with zeros
+    cloud_type = np.zeros_like(tb, dtype=np.int8)
+    
+    # Only classify where nonmcs_ccs_mask > 0
+    valid_mask = nonmcs_ccs_mask > 0
+    
+    # Classification conditions (only applied where valid_mask is True)
+    # 1. Deep convective: tb < tb_thresh (includes both stratiform and deep convective)
+    deep_conv = (tb < tb_thresh) & valid_mask
+    cloud_type[deep_conv] = 1
+    
+    # 2. Non-deep convective: tb >= tb_thresh & pr >= pr_threshold
+    nondeep_conv = (tb >= tb_thresh) & (pr >= pr_threshold) & valid_mask
+    cloud_type[nondeep_conv] = 2
+    
+    # 3. Drizzle: tb >= tb_thresh & pr < pr_threshold
+    drizzle = (tb >= tb_thresh) & (pr < pr_threshold) & valid_mask
+    cloud_type[drizzle] = 3
+    
+    return cloud_type
+
+#--------------------------------------------------------------------------------------------------
+def find_most_frequent_cloud_type(cloud_types_time_series):
+    """
+    Find the most frequent cloud type over time for each cell.
+    
+    For ties, prioritize in order: deep_conv (1) > nondeep_conv (2) > drizzle (3)
+    
+    Parameters:
+    -----------
+    cloud_types_time_series : numpy.ndarray
+        Array of shape (n_times, n_cells) with cloud type values
+        
+    Returns:
+    --------
+    most_frequent : numpy.ndarray
+        Array of shape (n_cells,) with the most frequent cloud type
+    """
+    n_times, n_cells = cloud_types_time_series.shape
+    most_frequent = np.zeros(n_cells, dtype=np.int8)
+    
+    # Priority order for tie-breaking: deep_conv=1, nondeep_conv=2, drizzle=3
+    priority_order = [1, 2, 3]
+    
+    for cell_idx in range(n_cells):
+        cell_values = cloud_types_time_series[:, cell_idx]
+        
+        # Get only non-zero values (exclude no clouds)
+        nonzero_values = cell_values[cell_values > 0]
+        
+        # Skip if all zeros (no clouds)
+        if len(nonzero_values) == 0:
+            most_frequent[cell_idx] = 0
+            continue
+        
+        # Count occurrences of each cloud type (excluding 0)
+        unique_vals, counts = np.unique(nonzero_values, return_counts=True)
+        
+        # Find maximum count
+        max_count = counts.max()
+        
+        # Get all types with maximum count
+        tied_types = unique_vals[counts == max_count]
+        
+        # If only one type has max count, use it
+        if len(tied_types) == 1:
+            most_frequent[cell_idx] = tied_types[0]
+        else:
+            # Break tie using priority order
+            for priority_type in priority_order:
+                if priority_type in tied_types:
+                    most_frequent[cell_idx] = priority_type
+                    break
+    
+    return most_frequent
+
+#--------------------------------------------------------------------------------------------------
+def add_tb_pr_to_dataset(_ds, catalog_file, catalog_location, catalog_source, catalog_params, 
+                         varname_precip_liq, varname_precip_ice, pr_convert_factor):
+    """
+    Add brightness temperature (tb) and precipitation (pr) variables to a dataset chunk.
+    
+    This function reads OLR and precipitation data from a catalog, handles calendar conversions
+    if necessary, and adds tb and pr variables to the input dataset.
     
     Parameters:
     -----------
     _ds : xarray.Dataset
-        Input dataset chunk with dimensions (time, cell) containing 'mcs_mask'.
+        Input dataset chunk with time coordinate
+    catalog_file : str
+        Path to the intake catalog file
+    catalog_location : str
+        Location within the catalog
+    catalog_source : str
+        Source name within the catalog
+    catalog_params : dict
+        Parameters for the catalog source
+    varname_precip_liq : str
+        Variable name for liquid precipitation
+    varname_precip_ice : str
+        Variable name for ice precipitation
+    pr_convert_factor : float
+        Conversion factor for precipitation (e.g., to convert to mm/h)
+    
+    Returns:
+    --------
+    _ds : xarray.Dataset
+        Dataset with added 'tb' and 'pr' variables
+    """
+    # Read OLR/precipitation data from catalog
+    cat = intake.open_catalog(catalog_file)[catalog_location]
+    ds_p = cat[catalog_source](**catalog_params).to_dask()
+
+    # Check liquid precipitation variable
+    if varname_precip_liq in list(ds_p.keys()):
+        # Convert liquid precipitation to mm/h
+        pr = ds_p[varname_precip_liq] * pr_convert_factor
+    # Check if the ice precipitation variable exist in the dataset
+    if varname_precip_ice in list(ds_p.keys()):
+        # Convert ice precipitation to liquid equivalent
+        prs = ds_p[varname_precip_ice] * pr_convert_factor
+        # Add ice precipitation to get total precipitation
+        pr = pr + prs
+
+    # Determine calendar types
+    ds_p_calendar_type = type(ds_p.time.values[0]).__name__
+    ds_calendar_type = type(_ds.time.values[0]).__name__
+
+    # Convert ds_p time to match _ds if they differ (convert non-standard to standard)
+    if ds_p_calendar_type != ds_calendar_type:
+        # Convert cftime objects to numpy datetime64 (standard calendar)
+        converted_times = convert_cftime_to_standard_calendar(ds_p.time.values)
+        
+        # Create new datasets with converted time coordinate
+        ds_p = ds_p.assign_coords(time=converted_times)
+        pr = pr.assign_coords(time=converted_times)
+
+    # Find common time range between datasets
+    common_times = sorted(set(ds_p['time'].values)
+                            .intersection(set(_ds['time'].values)))
+    
+    if not common_times:
+        raise ValueError("No common time values between mask dataset and catalog dataset!")
+    
+    # Select only the common times
+    pr = pr.sel(time=common_times)
+    tb = olr_to_tb(ds_p["rlut"].sel(time=common_times))  # Convert OLR to Tb
+    
+    # Add precipitation & tb to the dataset
+    _ds = _ds.sel(time=common_times)
+    _ds["pr"] = pr
+    _ds["tb"] = tb
+    
+    return _ds
+
+#--------------------------------------------------------------------------------------------------
+def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
+    """
+    Process a time chunk of dataset to create MCS swath masks and cloud type classification.
+    
+    Parameters:
+    -----------
+    _ds : xarray.Dataset
+        Input dataset chunk with dimensions (time, cell) containing 'mcs_mask', 'ccs_mask', 
+        'tb', 'pr', and coordinates 'lat', 'lon'.
+    tb_thresh : numpy.ndarray, optional
+        Pre-computed latitude-dependent brightness temperature threshold.
+        If None, will be computed from lat coordinate.
     verbose : bool
         If True, print progress information.
     
     Returns:
     --------
-    out_ds : xarray.Dataset
-        Output dataset with dimensions (time, cell) containing 'mcs_mask' swath mask.
+    dict : Dictionary containing:
+        'mcs_mask': MCS swath mask (1D array, cell dimension)
+        'ccs_mask': Non-MCS CCS mask (1D array, cell dimension)
+        'cloud_types': Aggregated cloud type classification (1D array, cell dimension)
     """
     if verbose:
         print(f"Processing time chunk with {len(_ds.time)} time steps...")
     
     # Extract track number arrays
     mcs_mask = _ds['mcs_mask'].values  # shape (time, cell)
+    # Replace NaN with 0 (when mask_and_scale=True, fill_value becomes NaN)
+    mcs_mask = np.nan_to_num(mcs_mask, nan=0.0).astype(int)
+    
     # Sum CCS mask over time and convert to binary
-    ccs_mask_sum = ((_ds['ccs_mask'] > 0).sum(dim='time') > 0).values  # shape (cell)
+    # First replace NaN with 0, then sum
+    ccs_mask_values = _ds['ccs_mask'].values
+    ccs_mask_values = np.nan_to_num(ccs_mask_values, nan=0.0)
+    ccs_mask_sum = ((ccs_mask_values > 0).sum(axis=0) > 0).astype(int)  # shape (cell)
     
     # Create swaths and coverage for MCS
     mcs_swaths_dict, mcs_coverage_dict = create_track_swaths_and_coverage(mcs_mask)
@@ -168,15 +458,56 @@ def process_timechunk_swath(_ds, verbose=False):
     # Filter out CCS that overlap with MCS swaths
     ccs_mask_sum[combined_mcs_swath > 0] = 0
     
+    # ===== Cloud Type Classification =====
+    # Create latitude-dependent tb threshold if not provided
+    if tb_thresh is None:
+        lat_values = _ds['lat'].values
+        tb_thresh = create_latitude_dependent_tb_threshold(lat_values)
+    
+    # Classify cloud types for each time step
+    cloud_types_timeseries = []
+    for t in range(len(_ds.time)):
+        tb_t = _ds['tb'].isel(time=t).values
+        pr_t = _ds['pr'].isel(time=t).values
+        mcs_mask_t = _ds['mcs_mask'].isel(time=t).values
+        ccs_mask_t = _ds['ccs_mask'].isel(time=t).values
+        
+        # Replace NaN with 0 (when mask_and_scale=True, fill_value becomes NaN)
+        mcs_mask_t = np.nan_to_num(mcs_mask_t, nan=0.0).astype(int)
+        ccs_mask_t = np.nan_to_num(ccs_mask_t, nan=0.0).astype(int)
+        
+        # Compute non-MCS CCS mask for this time step
+        nmcs_ccs_mask_t = np.where(mcs_mask_t == 0, ccs_mask_t, 0)
+        
+        # Classify cloud types
+        cloud_type_t = classify_cloud_types(tb_t, pr_t, tb_thresh, nmcs_ccs_mask_t, pr_threshold=0.5)
+        cloud_types_timeseries.append(cloud_type_t)
+    
+    # Stack into array (time, cell)
+    cloud_types_timeseries = np.stack(cloud_types_timeseries, axis=0)
+    
+    # Find the most frequent cloud type over the time window
+    cloud_types_aggregated = find_most_frequent_cloud_type(cloud_types_timeseries)
+
+    # import matplotlib.pyplot as plt
+    # cloud_types_da = xr.DataArray(cloud_types_aggregated, dims=['cell'], coords={'lat': ('cell', _ds['lat'].values), 'lon': ('cell', _ds['lon'].values), 'cell': _ds['cell'].values})
+    # egh.healpix_show(cloud_types_da.where(cloud_types_da > 0), cmap='tab10', vmin=0, vmax=3)
+    # import pdb; pdb.set_trace()
     if verbose:
+        n_classified = (cloud_types_aggregated > 0).sum()
         print(f"  ✅ Completed processing for this time chunk")
+        print(f"     Classified {n_classified:,} cells with cloud types")
 
     return {
         'mcs_mask': combined_mcs_swath,
         'ccs_mask': ccs_mask_sum,
+        'cloud_types': cloud_types_aggregated,
     }
 
-def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False):
+def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, 
+                                   catalog_file, catalog_location, catalog_source, catalog_params,
+                                   varname_precip_liq, varname_precip_ice, pr_convert_factor,
+                                   verbose=False):
     """
     Wrapper function for processing a time chunk by reading from zarr file.
     
@@ -188,6 +519,13 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False)
         start_idx: Start index in the time dimension
         end_idx: End index in the time dimension (exclusive)
         zarr_path: Path to the zarr file containing the data
+        catalog_file: Path to the intake catalog file
+        catalog_location: Location within the catalog
+        catalog_source: Source name within the catalog
+        catalog_params: Parameters for the catalog source
+        varname_precip_liq: Variable name for liquid precipitation
+        varname_precip_ice: Variable name for ice precipitation
+        pr_convert_factor: Conversion factor for precipitation
         verbose: Whether to print verbose output
         
     Returns:
@@ -205,9 +543,16 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False)
         
         # Load the data into memory
         _ds = _ds.load()
+        _ds = _ds.pipe(egh.attach_coords)
         
         # Close the full dataset to free memory
         ds.close()
+        
+        # Add tb and pr variables to the dataset chunk
+        _ds = add_tb_pr_to_dataset(
+            _ds, catalog_file, catalog_location, catalog_source, catalog_params,
+            varname_precip_liq, varname_precip_ice, pr_convert_factor
+        )
         
         # Process this time chunk (all times in the chunk)
         timestep_results = process_timechunk_swath(_ds, verbose=verbose)
@@ -227,7 +572,10 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, verbose=False)
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
                           time_groups, output_time_coords,
                           client=None, logger=None, parallel=True, 
-                          input_zarr_path=None, batch_size=100):
+                          input_zarr_path=None, batch_size=100,
+                          catalog_file=None, catalog_location=None, catalog_source=None, 
+                          catalog_params=None, varname_precip_liq=None, 
+                          varname_precip_ice=None, pr_convert_factor=None):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
     
@@ -257,6 +605,20 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         Path to input zarr file for workers to read from
     batch_size : int
         Number of output chunks to submit per batch (default: 100)
+    catalog_file : str
+        Path to the intake catalog file
+    catalog_location : str
+        Location within the catalog
+    catalog_source : str
+        Source name within the catalog
+    catalog_params : dict
+        Parameters for the catalog source
+    varname_precip_liq : str
+        Variable name for liquid precipitation
+    varname_precip_ice : str
+        Variable name for ice precipitation
+    pr_convert_factor : float
+        Conversion factor for precipitation
         
     Returns:
     --------
@@ -319,6 +681,13 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                     meta['start_idx'],
                     meta['end_idx'],
                     input_zarr_path,
+                    catalog_file,
+                    catalog_location,
+                    catalog_source,
+                    catalog_params,
+                    varname_precip_liq,
+                    varname_precip_ice,
+                    pr_convert_factor,
                     verbose=False
                 )
                 futures[future] = meta
@@ -398,7 +767,12 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
             
             chunk_results = {}
-            time_str, result = process_timechunk_wrapper_zarr(start_idx, end_idx, input_zarr_path, verbose=False)
+            time_str, result = process_timechunk_wrapper_zarr(
+                start_idx, end_idx, input_zarr_path,
+                catalog_file, catalog_location, catalog_source, catalog_params,
+                varname_precip_liq, varname_precip_ice, pr_convert_factor,
+                verbose=False
+            )
             if result is not None and time_str is not None:
                 chunk_results[time_str] = result
             else:
@@ -479,7 +853,7 @@ def main():
     zarr_chunk_size_time = 28
     
     # Define output variables
-    mask_variables = ['mcs_mask', 'ccs_mask']
+    mask_variables = ['mcs_mask', 'ccs_mask', 'cloud_types']
     
     # Parallel processing configuration
     parallel = args.parallel
@@ -496,6 +870,17 @@ def main():
     pixel_path = f"{root_path}{pixel_path_name}/"
     in_basename = config.get("zarr_output_presets", {}).get("healpix").get("out_filebase")
     in_zarr = f"{pixel_path}{in_basename}hp{zoom}_v1.zarr"
+    # Catalog information
+    catalog_file = config.get('catalog_file')
+    catalog_location = config.get('catalog_location')
+    catalog_source = config.get('catalog_source')
+    catalog_params = config.get('catalog_params', {})
+    # Update the zoom in the catalog_params to match the zoom in the mask file
+    catalog_params.update({'zoom': zoom})
+    # Precipitation variable names and conversion factor
+    varname_precip_liq = 'pr'
+    varname_precip_ice = 'prs'
+    pr_convert_factor = config.get('pcp_convert_factor')
     
     # Get source name from root path (e.g., /pscratch/sd/w/wcmca1/hackathon/mcs/scream/)
     source_name = os.path.basename(os.path.normpath(root_path))
@@ -529,6 +914,7 @@ def main():
         # Load the full dataset
         print(f"\nLoading full dataset...")
         try:
+            # Read MCS mask dataset from zarr
             # ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=False)
             ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
             # ds = ds.pipe(egh.attach_coords)  # Commented out for testing
@@ -536,6 +922,7 @@ def main():
             print(f"  Time steps: {len(ds.time)}")
             print(f"  Data variables: {list(ds.data_vars)}")
             print(f"  Spatial dimensions: {dict(ds.dims)}")
+
         except Exception as e:
             print(f"  ❌ Error loading dataset: {e}")
             return
@@ -608,6 +995,13 @@ def main():
                 parallel=parallel,
                 input_zarr_path=in_zarr,  # Pass the input zarr path for workers
                 batch_size=batch_size,  # Number of chunks per batch
+                catalog_file=catalog_file,
+                catalog_location=catalog_location,
+                catalog_source=catalog_source,
+                catalog_params=catalog_params,
+                varname_precip_liq=varname_precip_liq,
+                varname_precip_ice=varname_precip_ice,
+                pr_convert_factor=pr_convert_factor,
             )
             
             logger.info(f"✅ Processing complete: {total_processed} chunks written to {out_zarr}")
