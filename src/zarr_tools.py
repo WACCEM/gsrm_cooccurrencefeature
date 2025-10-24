@@ -208,7 +208,8 @@ def write_zarr_simple(ds, out_zarr, logger=None):
     logger.info(f"Zarr write completed: {out_zarr}")
 
 
-def initialize_zarr_store(output_path, time_coords, mask_variables, template_coords, attrs, chunk_size_time=24):
+def initialize_zarr_store(output_path, time_coords, mask_variables, template_coords, attrs, 
+                         chunk_size_time=24, var_attrs=None):
     """
     Initialize zarr store with proper structure for streaming writes using xarray.
     
@@ -229,6 +230,9 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
         Global attributes for the dataset
     chunk_size_time : int
         Time dimension chunk size
+    var_attrs : dict, optional
+        Dictionary mapping variable names to their attributes
+        Example: {'mcs_mask': {'long_name': 'MCS swath mask', 'units': '1'}}
     """
     
     if os.path.exists(output_path):
@@ -249,10 +253,17 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
     # Create data variables dictionary
     data_vars = {}
     for var_name in mask_variables:
+        # Start with default attributes
+        default_attrs = {'grid_mapping': 'crs', '_FillValue': 0.0}
+        
+        # Add user-specified attributes if provided
+        if var_attrs and var_name in var_attrs:
+            default_attrs.update(var_attrs[var_name])
+        
         # Initialize with zeros
         data_vars[var_name] = (['time', 'cell'], 
                               np.zeros((len(time_coords), n_cells), dtype=np.float32),
-                              {'grid_mapping': 'crs', '_FillValue': 0.0})
+                              default_attrs)
     
     # Create coordinates dictionary (only the actual coordinates)
     coords = {
