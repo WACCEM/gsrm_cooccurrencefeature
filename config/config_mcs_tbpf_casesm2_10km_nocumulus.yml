@@ -27,11 +27,12 @@ startdate: '20200301.0000'
 enddate: '20210301.0000'
 
 # HEALPix parameters
-# catalog_source: casesm2_10km_cumulus
-# catalog_location: online
-catalog_source: scream2D_hrly
-catalog_location: NERSC
-catalog_file: https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml
+# catalog_file: https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml
+catalog_file: /global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml
+catalog_source: casesm2_10km_nocumulus
+# catalog_location: NERSC
+# catalog_source: scream2D_hrly
+# catalog_location: NERSC
 
 # Catalog parameters, can have multiple entries
 catalog_params:

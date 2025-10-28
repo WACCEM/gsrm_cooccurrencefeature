@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
     # Set wallclock_time based on which code is used
     if "make_mcs_swath_masks" in code_name:
-        wallclock_time = "00:15:00"
+        wallclock_time = "00:45:00"
     elif "combine_tracking_masks" in code_name:
         wallclock_time = "00:05:00"
     elif "make_cooccurrence_masks" in code_name:

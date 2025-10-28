@@ -27,16 +27,16 @@ enddate: '20210228.2330'
 
 # HEALPix parameters
 #catalog_file: /global/cfs/cdirs/m4549/scream-cess-healpix/scream_catalog.yaml
-# catalog_source: ifs_tco3999_rcbmf
-# catalog_location: online
-catalog_source: scream2D_hrly
-catalog_location: NERSC
+catalog_source: ifs_tco3999_rcbmf
+catalog_location: online
+# catalog_source: scream2D_hrly
+# catalog_location: NERSC
 catalog_file: https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml
 
 # Catalog parameters, can have multiple entries
 catalog_params:
   zoom: 9
-  # time: PT1H
+  time: PT1H
   # time_method: inst
 olr_varname: rlut  # OLR variable name
 pcp_varname: pr   # Precipitation variable name

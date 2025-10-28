@@ -29,14 +29,16 @@ enddate: '20200901.0000'
 
 # HEALPix parameters
 # catalog_file: /global/cfs/cdirs/m4581/gsharing/scream-cess-healpix/main.yaml
-catalog_file: https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml
-catalog_location: NERSC
+catalog_file: /global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml
+# catalog_file: https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml
+# catalog_location: NERSC
 catalog_source: IR_IMERG
 # This is only used for remapping back to HEALPix, the IR_IMERG source is not remapping correctly at lower zoom levels
 # catalog_source: scream2D_hrly
 # Catalog parameters, can have multiple entries
 catalog_params:
   zoom: 9
+  time: 1H
 
 # Specify tracking input data date/time string format
 # This is the preprocessed file that contains Tb & rainrate
