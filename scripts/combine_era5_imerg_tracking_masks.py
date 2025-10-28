@@ -230,7 +230,7 @@ def write_zarr(ds, out_zarr, client=None, logger=None):
 
     # Optimize cell chunking for HEALPix grid
     zoom_level = zoom_level_from_nside(ds.crs.attrs['healpix_nside'])
-    chunksize_time = 24
+    chunksize_time = 28
     chunksize_cell = 12 * 4**zoom_level
     
     # Make time chunks more even if needed
@@ -296,7 +296,7 @@ def write_zarr(ds, out_zarr, client=None, logger=None):
         # Compute locally if no client
         write_task.compute()
 
-    logger.info(f"Zarr file complete: {out_zarr}")
+    logger.info(f"✅ Zarr file complete: {out_zarr}")
 
 #-------------------------------------------------------------------
 def zoom_level_from_nside(nside):
@@ -331,30 +331,16 @@ def main():
     parallel = True
     n_workers = 8
     threads_per_worker = 4
-    # memory_per_worker = "60GB"
-    # chunksize_cell = 12 * 4**zoom
-    # chunksize_time = 24
-
-    # catalog_dict = {
-    #     "catalog_file": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
-    #     "catalog_location": "NERSC",
-    #     "catalog_source": "IR_IMERG",
-    #     "catalog_params": {"zoom": zoom},
-    # }
 
     in_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     dir_te = f"{in_dir}ERA5_AR_TC_ETC_hp{zoom}_{version}.zarr"
-    # dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs/{source_name}/mcstracking/{source_name}_hrly_mcsmask_hp{zoom}_v1.zarr"
     dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
 
     out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     out_basename = f"{source_name}_allmasks_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)
-    # import pdb; pdb.set_trace()
 
-    # # Setup Dask client
-    # client = setup_dask_client(parallel, n_workers, threads_per_worker, memory_per_worker, logger)
     # Setup Dask client
     client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
 
