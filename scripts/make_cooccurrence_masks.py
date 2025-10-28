@@ -761,22 +761,23 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     if verbose:
         print("  Step 1: Filtering MCS-TC overlaps...")
     
-    # Filter MCS and CCS tracks that significantly overlap with TCs
+    # Filter MCS masks that significantly overlap with TCs
     mcs_filtering_results = filter_mcs_tc_overlaps(
         mcs_mask=_ds.mcs_mask,
         tc_mask=_ds.tc_mask,
         overlap_threshold=0.10,  # 10% threshold
         verbose=verbose
     )
-    ccs_filtering_results = filter_mcs_tc_overlaps(
-        mcs_mask=_ds.ccs_mask,
+    # Filter cloud_types that significantly overlap with TCs
+    cloudtypes_filtering_results = filter_mcs_tc_overlaps(
+        mcs_mask=_ds.cloud_types,
         tc_mask=_ds.tc_mask,
-        overlap_threshold=0.10,  # 10% threshold
+        overlap_threshold=0.01,  # 1% threshold
         verbose=verbose
     )
 
     mcs_filtered = mcs_filtering_results['mcs_filtered']
-    ccs_filtered = ccs_filtering_results['mcs_filtered']
+    cloud_types = cloudtypes_filtering_results['mcs_filtered']
 
     # ===== STEP 2: CREATE BINARY MASKS =====
     if verbose:
@@ -974,7 +975,7 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     return {
         # Original masks
         'mcs_mask': mcs_filtered,   # TC-filtered MCS
-        'ccs_mask': ccs_filtered,   # TC-filtered CCS
+        'cloud_types': cloud_types,   # TC-filtered cloud types
         'ar_mask': _ds.ar_mask,
         'etc_mask': _ds.etc_mask,
         'tc_mask': _ds.tc_mask,
@@ -1095,7 +1096,7 @@ def main():
         
         # Define all output variables
         mask_variables = [
-            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask', 'ccs_mask',
+            'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask', 'cloud_types',
             'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
             'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
             'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 

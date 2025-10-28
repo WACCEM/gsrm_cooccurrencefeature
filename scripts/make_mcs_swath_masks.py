@@ -311,8 +311,8 @@ def find_most_frequent_cloud_type(cloud_types_time_series):
     n_times, n_cells = cloud_types_time_series.shape
     
     # Determine the number of unique cloud types from the data
-    # max_type = int(cloud_types_time_series.max())
-    max_type = 4
+    max_type = int(cloud_types_time_series.max())
+    # max_type = 4
     n_types = max_type + 1  # e.g., if max is 4, we have types 0-4 (5 types)
     
     # Count occurrences of each type for all cells at once

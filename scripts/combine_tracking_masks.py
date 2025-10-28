@@ -319,7 +319,7 @@ def main():
     zoom = 8
     version = 'v1'
     parallel = True
-    n_workers = 32
+    n_workers = 16
     threads_per_worker = 4
     
     # Input/output paths

@@ -21,7 +21,7 @@ def parse_cmd_args():
     parser = argparse.ArgumentParser(
         description="Calculate monthly MCS precipitation statistics."
     )
-    parser.add_argument("-c", "--config", help="yaml config file for tracking", required=True)
+    parser.add_argument("-c", "--config", help="yaml config file for datasets", required=True)
     parser.add_argument("--source", help="catalog source name from config file", required=True)
     # parser.add_argument("--zoom", help="HEALPix zoom level", type=int, default=None)
     parser.add_argument("--workers", help="number of Dask workers (default: 14)", type=int, default=14)
@@ -237,6 +237,23 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
     mcs_ar_etc_count_sum = None
     mcs_ar_etc_pcp_count_sum = None
 
+    # Cloud types
+    # Deep convection (dc)
+    dc_pcp_sum = None
+    dc_count_sum = None
+    
+    # Stratiform (st)
+    st_pcp_sum = None
+    st_count_sum = None
+    
+    # Non-deep convective (nd)
+    nd_pcp_sum = None
+    nd_count_sum = None
+    
+    # Drizzle (dz)
+    dz_pcp_sum = None
+    dz_count_sum = None
+
     # Process in chunks of days to limit memory usage
     step = int(chunk_days * steps_per_day)
     for start_idx in range(0, ntimes, step):
@@ -253,6 +270,7 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         ar_mask = chunk_ds['ar_mask']
         etc_mask = chunk_ds['etc_mask']
         tc_mask = chunk_ds['tc_mask']
+        cloud_types = chunk_ds['cloud_types']
 
         # Isolated masks
         mcs_isolated_mask = chunk_ds['mcs_isolated_mask']
@@ -336,6 +354,23 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         chunk_tc_count_sum = (tc_mask > 0).sum(dim='time')
         chunk_tc_pcp_count_sum = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
         
+        # Cloud types
+        # Deep convection (dc): cloud_types == 1
+        chunk_dc_pcp_sum = (precipitation.where(cloud_types == 1) * time_interval).sum(dim='time')
+        chunk_dc_count_sum = (cloud_types == 1).sum(dim='time')
+        
+        # Stratiform (st): cloud_types == 2
+        chunk_st_pcp_sum = (precipitation.where(cloud_types == 2) * time_interval).sum(dim='time')
+        chunk_st_count_sum = (cloud_types == 2).sum(dim='time')
+        
+        # Non-deep convective (nd): cloud_types == 3
+        chunk_nd_pcp_sum = (precipitation.where(cloud_types == 3) * time_interval).sum(dim='time')
+        chunk_nd_count_sum = (cloud_types == 3).sum(dim='time')
+        
+        # Drizzle (dz): cloud_types == 4
+        chunk_dz_pcp_sum = (precipitation.where(cloud_types == 4) * time_interval).sum(dim='time')
+        chunk_dz_count_sum = (cloud_types == 4).sum(dim='time')
+        
         # Accumulate results
         if totprecip_sum is None:
             # Initialize with first chunk results
@@ -390,6 +425,19 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
             mcs_ar_etc_pcp_sum = chunk_mcs_ar_etc_pcp_sum
             mcs_ar_etc_count_sum = chunk_mcs_ar_etc_count_sum
             mcs_ar_etc_pcp_count_sum = chunk_mcs_ar_etc_pcp_count_sum
+            
+            # Cloud types
+            dc_pcp_sum = chunk_dc_pcp_sum
+            dc_count_sum = chunk_dc_count_sum
+            
+            st_pcp_sum = chunk_st_pcp_sum
+            st_count_sum = chunk_st_count_sum
+            
+            nd_pcp_sum = chunk_nd_pcp_sum
+            nd_count_sum = chunk_nd_count_sum
+            
+            dz_pcp_sum = chunk_dz_pcp_sum
+            dz_count_sum = chunk_dz_count_sum
         else:
             # Add subsequent chunk results
             totprecip_sum += chunk_totprecip
@@ -444,6 +492,19 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
             mcs_ar_etc_count_sum += chunk_mcs_ar_etc_count_sum
             mcs_ar_etc_pcp_count_sum += chunk_mcs_ar_etc_pcp_count_sum
 
+            # Cloud types
+            dc_pcp_sum += chunk_dc_pcp_sum
+            dc_count_sum += chunk_dc_count_sum
+            
+            st_pcp_sum += chunk_st_pcp_sum
+            st_count_sum += chunk_st_count_sum
+            
+            nd_pcp_sum += chunk_nd_pcp_sum
+            nd_count_sum += chunk_nd_count_sum
+            
+            dz_pcp_sum += chunk_dz_pcp_sum
+            dz_count_sum += chunk_dz_count_sum
+
         # Explicitly delete chunk data to free memory
         del chunk_mcs_pcp_sum, chunk_mcs_count_sum, chunk_mcs_pcp_count_sum
         del chunk_ar_pcp_sum, chunk_ar_count_sum, chunk_ar_pcp_count_sum
@@ -459,6 +520,11 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         del chunk_ar_etc_pcp_sum, chunk_ar_etc_count_sum, chunk_ar_etc_pcp_count_sum
         del chunk_mcs_ar_etc_pcp_sum, chunk_mcs_ar_etc_count_sum, chunk_mcs_ar_etc_pcp_count_sum
         del mcs_ar_2way_mask, mcs_etc_2way_mask, ar_etc_2way_mask, mcs_ar_etc_3way_mask
+        del chunk_dc_pcp_sum, chunk_dc_count_sum
+        del chunk_st_pcp_sum, chunk_st_count_sum
+        del chunk_nd_pcp_sum, chunk_nd_count_sum
+        del chunk_dz_pcp_sum, chunk_dz_count_sum
+        del cloud_types
         gc.collect()
     
     # Return all statistics in a dictionary
@@ -518,6 +584,23 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         'mcs_ar_etc_precip': mcs_ar_etc_pcp_sum,
         'mcs_ar_etc_count': mcs_ar_etc_count_sum,
         'mcs_ar_etc_precip_count': mcs_ar_etc_pcp_count_sum,
+        
+        # Cloud types
+        # Deep convection
+        'dc_precip': dc_pcp_sum,
+        'dc_count': dc_count_sum,
+        
+        # Stratiform
+        'st_precip': st_pcp_sum,
+        'st_count': st_count_sum,
+        
+        # Non-deep convective
+        'nd_precip': nd_pcp_sum,
+        'nd_count': nd_count_sum,
+        
+        # Drizzle
+        'dz_precip': dz_pcp_sum,
+        'dz_count': dz_count_sum,
     }
 
 
@@ -586,6 +669,23 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     mcs_ar_etc_count_values = [r['mcs_ar_etc_count'] for r in results]
     mcs_ar_etc_precip_count_values = [r['mcs_ar_etc_precip_count'] for r in results]
 
+    # Extract values for cloud types
+    # Deep convection
+    dc_precip_values = [r['dc_precip'] for r in results]
+    dc_count_values = [r['dc_count'] for r in results]
+    
+    # Stratiform
+    st_precip_values = [r['st_precip'] for r in results]
+    st_count_values = [r['st_count'] for r in results]
+    
+    # Non-deep convective
+    nd_precip_values = [r['nd_precip'] for r in results]
+    nd_count_values = [r['nd_count'] for r in results]
+    
+    # Drizzle
+    dz_precip_values = [r['dz_precip'] for r in results]
+    dz_count_values = [r['dz_count'] for r in results]
+
     # Create output variables
     var_dict = {
         'precipitation': (['time', 'cell'], np.stack([r.values for r in totprecip_values])),
@@ -638,6 +738,23 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
         'mcs_ar_etc_precipitation': (['time', 'cell'], np.stack([r.values for r in mcs_ar_etc_precip_values])),
         'mcs_ar_etc_count': (['time', 'cell'], np.stack([r.values for r in mcs_ar_etc_count_values])),
         'mcs_ar_etc_precipitation_count': (['time', 'cell'], np.stack([r.values for r in mcs_ar_etc_precip_count_values])),
+        
+        # Cloud types
+        # Deep convection
+        'dc_precipitation': (['time', 'cell'], np.stack([r.values for r in dc_precip_values])),
+        'dc_count': (['time', 'cell'], np.stack([r.values for r in dc_count_values])),
+        
+        # Stratiform
+        'st_precipitation': (['time', 'cell'], np.stack([r.values for r in st_precip_values])),
+        'st_count': (['time', 'cell'], np.stack([r.values for r in st_count_values])),
+        
+        # Non-deep convective
+        'nd_precipitation': (['time', 'cell'], np.stack([r.values for r in nd_precip_values])),
+        'nd_count': (['time', 'cell'], np.stack([r.values for r in nd_count_values])),
+        
+        # Drizzle
+        'dz_precipitation': (['time', 'cell'], np.stack([r.values for r in dz_precip_values])),
+        'dz_count': (['time', 'cell'], np.stack([r.values for r in dz_count_values])),
     }
     
     # Create coordinates
@@ -766,6 +883,39 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['mcs_ar_etc_count'].attrs['units'] = 'hour'
     dsout['mcs_ar_etc_precipitation_count'].attrs['long_name'] = 'Number of hours MCS-AR-ETC co-occurrence precipitation exceeds threshold'
     dsout['mcs_ar_etc_precipitation_count'].attrs['units'] = 'hour'
+
+    # Cloud types
+    # Deep convection
+    dsout['dc_precipitation'].attrs['long_name'] = 'Deep convective cloud precipitation'
+    dsout['dc_precipitation'].attrs['units'] = 'mm'
+    dsout['dc_precipitation'].attrs['cloud_type_value'] = 1
+    dsout['dc_count'].attrs['long_name'] = 'Number of hours deep convective cloud is present'
+    dsout['dc_count'].attrs['units'] = 'hour'
+    dsout['dc_count'].attrs['cloud_type_value'] = 1
+    
+    # Stratiform
+    dsout['st_precipitation'].attrs['long_name'] = 'Stratiform cloud precipitation'
+    dsout['st_precipitation'].attrs['units'] = 'mm'
+    dsout['st_precipitation'].attrs['cloud_type_value'] = 2
+    dsout['st_count'].attrs['long_name'] = 'Number of hours stratiform cloud is present'
+    dsout['st_count'].attrs['units'] = 'hour'
+    dsout['st_count'].attrs['cloud_type_value'] = 2
+    
+    # Non-deep convective
+    dsout['nd_precipitation'].attrs['long_name'] = 'Non-deep convective cloud precipitation'
+    dsout['nd_precipitation'].attrs['units'] = 'mm'
+    dsout['nd_precipitation'].attrs['cloud_type_value'] = 3
+    dsout['nd_count'].attrs['long_name'] = 'Number of hours non-deep convective cloud is present'
+    dsout['nd_count'].attrs['units'] = 'hour'
+    dsout['nd_count'].attrs['cloud_type_value'] = 3
+    
+    # Drizzle
+    dsout['dz_precipitation'].attrs['long_name'] = 'Drizzle precipitation'
+    dsout['dz_precipitation'].attrs['units'] = 'mm'
+    dsout['dz_precipitation'].attrs['cloud_type_value'] = 4
+    dsout['dz_count'].attrs['long_name'] = 'Number of hours drizzle cloud is present'
+    dsout['dz_count'].attrs['units'] = 'hour'
+    dsout['dz_count'].attrs['cloud_type_value'] = 4
 
     # Save the output file
     fillvalue = np.nan
@@ -933,8 +1083,6 @@ def main():
     zoom = 8
     version = 'v1'
     parallel = True
-    # n_workers = 13
-    # threads_per_worker = 4
     
     # Load configuration for the specified source
     config = load_config(config_file, catalog_source)
@@ -970,164 +1118,204 @@ def main():
     # Setup Dask client
     client = setup_dask_client(parallel=parallel, n_workers=n_workers, threads_per_worker=threads_per_worker, logger=logger)
 
-    # Load the mask dataset
-    ds = xr.open_zarr(in_zarr, consolidated=True)
-    ds = ds.pipe(egh.attach_coords)
-    
-    if catalog_source == "IR_IMERG":
-        # Special case for IMERG data (not in catalog yet)
-        dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
-        in_basename = f"IMERG_V7_"
-        time_res = "6H"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
-        # Read IMERG dataset
-        print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-
-    elif catalog_source == "nicam_gl11":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
-        in_basename = f"NICAM_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        # Read NICAM dataset
-        print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-
-    elif catalog_source == "um_glm_n2560_RAL3p3":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
-        in_basename = f"um_glm_n2560_RAL3p3_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        # Read UM dataset
-        print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-
-    else:
-        # Load the HEALPix catalog
-        print(f"Loading HEALPix catalog: {catalog_file}")
-        in_catalog = intake.open_catalog(catalog_file)
-        if catalog_location:
-            in_catalog = in_catalog[catalog_location]
+    try:
+        # Load the mask dataset
+        ds = xr.open_zarr(in_zarr, consolidated=True)
+        ds = ds.pipe(egh.attach_coords)
         
-        # Get the DataSet from the catalog
-        ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
-        # Add lat/lon coordinates to the HEALPix DataSet
-        ds_p = ds_p.pipe(egh.attach_coords)
+        # Special treatment for certain datasets not in the catalog
+        if catalog_source == "IR_IMERG":
+            # Special case for IMERG data (not in catalog yet)
+            dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
+            in_basename = f"IMERG_V7_"
+            time_res = "6H"
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
+            # Read IMERG dataset
+            print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
+            ds_p = xr.open_zarr(in_zarr, consolidated=True)
+            ds_p = ds_p.pipe(egh.attach_coords)
 
-    # Check liquid precipitaiton variable
-    if varname_precip_liq in list(ds_p.keys()):
-        # Convert liquid precipitation to mm/h
-        pr = ds_p[varname_precip_liq] * pr_convert_factor
-    # Check if the ice precipitation variable exist in the dataset
-    if varname_precip_ice in list(ds_p.keys()):
-        # Convert ice precipitation to liquid equivalent
-        prs = ds_p[varname_precip_ice] * pr_convert_factor
-        # Add ice precipitation to get total precipitation
-        pr = pr + prs
+        elif catalog_source == "nicam_gl11":
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
+            in_basename = f"NICAM_pr"
+            time_res = "6h"
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            # Read NICAM dataset
+            print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
+            ds_p = xr.open_zarr(in_zarr, consolidated=True)
+            ds_p = ds_p.pipe(egh.attach_coords)
 
-    # Calendar conversion - check and convert calendars to match
-    logger.info("Checking time coordinate calendars...")
-    
-    # Determine calendar types
-    ds_p_calendar_type = type(ds_p.time.values[0]).__name__
-    ds_calendar_type = type(ds.time.values[0]).__name__
-    
-    logger.info(f"Dataset calendars: ds_p uses {ds_p_calendar_type}, ds uses {ds_calendar_type}")
-    
-    # Convert ds time to match ds_p if they differ
-    if ds_calendar_type != ds_p_calendar_type:
-        logger.info(f"Converting ds time from {ds_calendar_type} to {ds_p_calendar_type}")
-        
-        # Get the calendar details from ds_p
-        has_year_zero = True
-        if hasattr(ds_p.time.values[0], 'has_year_zero'):
-            has_year_zero = ds_p.time.values[0].has_year_zero
-        
-        # Convert datetime64 values to cftime DatetimeNoLeap objects
-        new_times = []
-        for t in ds.time.values:
-            # Convert numpy datetime64 to pandas Timestamp to get date components
-            pd_time = pd.Timestamp(t)
-            # Create a matching cftime object
-            dt_cftime = cftime.DatetimeNoLeap(
-                pd_time.year, pd_time.month, pd_time.day,
-                pd_time.hour, pd_time.minute, pd_time.second,
-                has_year_zero=has_year_zero
-            )
-            new_times.append(dt_cftime)
-        
-        # Create a new dataset with the converted time coordinate
-        ds = ds.assign_coords(time=new_times)
-        logger.info("Calendar conversion complete")
+        elif catalog_source == "um_glm_n2560_RAL3p3":
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
+            in_basename = f"um_glm_n2560_RAL3p3_pr"
+            time_res = "6h"
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            # Read UM dataset
+            print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
+            ds_p = xr.open_zarr(in_zarr, consolidated=True)
+            ds_p = ds_p.pipe(egh.attach_coords)
 
-    # Find common time range across all datasets
-    common_times = sorted(set(ds_p['time'].values)
-                         .intersection(set(ds['time'].values)))
-    if not common_times:
-        logger.warning("No common time values between all datasets!")
-        return None
-    else:
-        # Select only the common times in all datasets
-        pr = pr.sel(time=common_times)
-        ds = ds.sel(time=common_times)
-        # Add precipitation to the dataset
-        ds["pr"] = pr
-        logger.info(f"Successfully merged datasets with {len(common_times)} common time points")
+        elif catalog_source == "casesm2_10km_nocumulus":
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/"
+            in_basename = f"casesm2_10km_nocumulus_pr"
+            time_res = "6h"
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            # Read CASESM2 dataset
+            print(f"Loading CASESM2 dataset (NOT from catalog): {in_zarr}")
+            ds_p = xr.open_zarr(in_zarr, consolidated=True)
+            ds_p = ds_p.pipe(egh.attach_coords)
 
-    # Subset to the specified time range using robust method
-    if start_datetime and end_datetime:
-        logger.info("Subsetting datasets to specified time range")
-        ds = subset_time_range(ds, start_datetime, end_datetime, logger)
+        else:
+            # Load the HEALPix catalog
+            print(f"Loading HEALPix catalog: {catalog_file}")
+            in_catalog = intake.open_catalog(catalog_file)
+            if catalog_location:
+                in_catalog = in_catalog[catalog_location]
+            
+            # Get the DataSet from the catalog
+            ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
+            # Add lat/lon coordinates to the HEALPix DataSet
+            ds_p = ds_p.pipe(egh.attach_coords)
+
+        # Check liquid precipitaiton variable
+        if varname_precip_liq in list(ds_p.keys()):
+            # Convert liquid precipitation to mm/h
+            pr = ds_p[varname_precip_liq] * pr_convert_factor
+        # Check if the ice precipitation variable exist in the dataset
+        if varname_precip_ice in list(ds_p.keys()):
+            # Convert ice precipitation to liquid equivalent
+            prs = ds_p[varname_precip_ice] * pr_convert_factor
+            # Add ice precipitation to get total precipitation
+            pr = pr + prs
+
+        # Calendar conversion - check and convert calendars to match
+        logger.info("Checking time coordinate calendars...")
         
-        if len(ds.time) == 0:
-            logger.error("No data found in specified time range!")
+        # Determine calendar types
+        ds_p_calendar_type = type(ds_p.time.values[0]).__name__
+        ds_calendar_type = type(ds.time.values[0]).__name__
+        
+        logger.info(f"Dataset calendars: ds_p uses {ds_p_calendar_type}, ds uses {ds_calendar_type}")
+        
+        # Convert ds time to match ds_p if they differ
+        if ds_calendar_type != ds_p_calendar_type:
+            logger.info(f"Converting ds time from {ds_calendar_type} to {ds_p_calendar_type}")
+            
+            # Get the calendar details from ds_p
+            has_year_zero = True
+            if hasattr(ds_p.time.values[0], 'has_year_zero'):
+                has_year_zero = ds_p.time.values[0].has_year_zero
+            
+            # Convert datetime64 values to cftime DatetimeNoLeap objects
+            new_times = []
+            for t in ds.time.values:
+                # Convert numpy datetime64 to pandas Timestamp to get date components
+                pd_time = pd.Timestamp(t)
+                # Create a matching cftime object
+                dt_cftime = cftime.DatetimeNoLeap(
+                    pd_time.year, pd_time.month, pd_time.day,
+                    pd_time.hour, pd_time.minute, pd_time.second,
+                    has_year_zero=has_year_zero
+                )
+                new_times.append(dt_cftime)
+            
+            # Create a new dataset with the converted time coordinate
+            ds = ds.assign_coords(time=new_times)
+            logger.info("Calendar conversion complete")
+
+        # Find common time range across all datasets
+        common_times = sorted(set(ds_p['time'].values)
+                             .intersection(set(ds['time'].values)))
+        if not common_times:
+            logger.warning("No common time values between all datasets!")
             return None
-    else:
-        logger.info("No time range specified, using all available data")
+        else:
+            # Select only the common times in all datasets
+            pr = pr.sel(time=common_times)
+            ds = ds.sel(time=common_times)
+            # Add precipitation to the dataset
+            ds["pr"] = pr
+            logger.info(f"Successfully merged datasets with {len(common_times)} common time points")
 
-    # Group by month and apply the processing function
-    monthly_groups = ds.resample(time='1MS')
+        # Subset to the specified time range using robust method
+        if start_datetime and end_datetime:
+            logger.info("Subsetting datasets to specified time range")
+            ds = subset_time_range(ds, start_datetime, end_datetime, logger)
+            
+            if len(ds.time) == 0:
+                logger.error("No data found in specified time range!")
+                return None
+        else:
+            logger.info("No time range specified, using all available data")
 
-    # Check if client exists for parallel processing
-    if client is not None:
-        # Parallel processing with Dask
-        logger.info("Running in parallel mode with Dask")
-        delayed_results = []
-        for month_start, month_ds in monthly_groups:
-            print(f"Processing month: {month_start}")
-            # print(f"Processing month: {month_start.strftime('%Y-%m')}")
-            # Submit the processing job to the dask cluster
-            delayed_result = client.submit(process_month_chunked, month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
-            delayed_results.append(delayed_result)
+        # Group by month and apply the processing function
+        monthly_groups = ds.resample(time='1MS')
+
+        # Check if client exists for parallel processing
+        if client is not None:
+            # Parallel processing with Dask
+            logger.info("Running in parallel mode with Dask")
+            delayed_results = []
+            for month_start, month_ds in monthly_groups:
+                print(f"Processing month: {month_start}")
+                # print(f"Processing month: {month_start.strftime('%Y-%m')}")
+                # Submit the processing job to the dask cluster
+                delayed_result = client.submit(process_month_chunked, month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
+                delayed_results.append(delayed_result)
+            
+            # Clear line and show progress tracking
+            print("\nTracking progress of all months processing in parallel:")
+            from dask.distributed import progress
+            progress(delayed_results)
+            
+            # Gather results (will wait for completion)
+            results = client.gather(delayed_results)
+        else:
+            # Serial processing
+            logger.info("Running in serial mode")
+            results = []
+            for month_start, month_ds in monthly_groups:
+                print(f"Processing month: {month_start}")
+                # print(f"Processing month: {month_start.strftime('%Y-%m')}")
+                # Process directly without Dask
+                result = process_month_chunked(month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
+                results.append(result)
+
+        # Write output to NetCDF file
+        write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger)
+
+        # Calculate total processing time
+        end_time = time.time()
+        elapsed_time = end_time - start_time
         
-        # Clear line and show progress tracking
-        print("\nTracking progress of all months processing in parallel:")
-        from dask.distributed import progress
-        progress(delayed_results)
+        # Store success info to print after Dask cleanup
+        success_info = {
+            'elapsed_time': elapsed_time,
+            'output_filename': output_filename,
+            'n_months': len(results),
+        }
+
+    finally:
+        # Always cleanup client
+        if client and parallel:
+            # Suppress Dask shutdown messages by temporarily raising log level
+            logging.getLogger('distributed').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.worker').setLevel(logging.CRITICAL)
+            logging.getLogger('distributed.nanny').setLevel(logging.CRITICAL)
+            
+            logger.info("Shutting down Dask client")
+            client.close()
         
-        # Gather results (will wait for completion)
-        results = client.gather(delayed_results)
-    else:
-        # Serial processing
-        logger.info("Running in serial mode")
-        results = []
-        for month_start, month_ds in monthly_groups:
-            print(f"Processing month: {month_start}")
-            # print(f"Processing month: {month_start.strftime('%Y-%m')}")
-            # Process directly without Dask
-            result = process_month_chunked(month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
-            results.append(result)
-
-    # Write output to NetCDF file
-    write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger)
-
-    # Always cleanup client
-    if client and parallel:
-        logger.info("Shutting down Dask client")
-        client.close()
+        # Print success message after Dask cleanup (so it's always visible at the end)
+        if 'success_info' in locals():
+            elapsed = success_info['elapsed_time']
+            print(f"\n{'='*80}")
+            print(f"✅ PROCESSING COMPLETE!")
+            print(f"{'='*80}")
+            print(f"Output: {success_info['output_filename']}")
+            print(f"Months processed: {success_info['n_months']}")
+            print(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+            print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":

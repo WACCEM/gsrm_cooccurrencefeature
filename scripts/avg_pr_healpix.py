@@ -12,14 +12,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from zarr_tools import setup_dask_client, write_zarr, zoom_level_from_nside
 
 """
-NICAM Precipitation Temporal Resampling and Alignment Script
+HEALPix Temporal Resampling and Alignment Script
 
-This script performs temporal resampling of NICAM precipitation data to align with
+This script performs temporal resampling of HEALPix data to align with
 specific target hours (e.g., 00:00, 06:00, 12:00, 18:00 UTC).
 
 Workflow:
 1. Set up Dask distributed client for parallel processing
-2. Lazily load NICAM data from intake catalog (Dask-backed)
+2. Lazily load HEALPix data from intake catalog (Dask-backed)
 3. Perform temporal resampling to target frequency (lazy operation)
    - Uses xarray.resample() which works efficiently with Dask
    - Aligns time bins to specified target hours
@@ -69,11 +69,14 @@ def load_dataset(catalog_path, location, source, catalog_params, vars_to_include
     xarray.Dataset
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"Loading dataset: {source} from {location}")
+    logger.info(f"Loading dataset: {source}")
     logger.info(f"  Catalog parameters: {catalog_params}")
 
     # Load dataset from catalog
-    cat = intake.open_catalog(catalog_path)[location]
+    if location is not None:
+        cat = intake.open_catalog(catalog_path)[location]
+    else:
+        cat = intake.open_catalog(catalog_path)
     ds = cat[source](**catalog_params).to_dask()
     ds = ds.pipe(egh.attach_coords)
 
@@ -193,27 +196,33 @@ def main():
     logger = setup_logging()
     
     logger.info("="*80)
-    logger.info("NICAM Time Coordinate Alignment Script")
+    logger.info("HEALPix Temporal Resampling and Alignment Script")
     logger.info("="*80)
     
     # Configuration
-    # catalog_path = "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
-    catalog_path = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+    catalog_path = "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
+    # catalog_path = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
     # location = "NERSC"
     # source = "nicam_gl11"
     # zoom = 8
     # time = "PT3H"
 
-    location = "online"
-    source = "um_glm_n2560_RAL3p3"
+    # location = "online"
+    # source = "um_glm_n2560_RAL3p3"
+    # catalog_params = {
+    #     'zoom': 8,
+    #     'time': 'PT1H',
+    # }
+
+    location = None
+    source = "casesm2_10km_nocumulus"
     catalog_params = {
         'zoom': 8,
-        'time': 'PT1H',
     }
     
     # Variables to include in unified dataset
     vars_to_include = ['pr']
-    vars_to_include += ['prs']  # Add more variables if needed
+    # vars_to_include += ['prs']  # Add more variables if needed
 
     # Temporal aggregation settings
     output_freq = '6h'  # Target frequency: 6-hourly
@@ -222,7 +231,8 @@ def main():
     # Output configuration
     zoom = catalog_params['zoom']
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/NICAM_pr6h_z{zoom}.zarr"
-    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/um_glm_n2560_RAL3p3_pr6h_z{zoom}.zarr"
+    # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/um_glm_n2560_RAL3p3_pr6h_z{zoom}.zarr"
+    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_pr6h_z{zoom}.zarr"
     
     # Dask configuration
     use_parallel = True
@@ -287,7 +297,7 @@ def main():
             chunksize_time=chunksize_time,
             chunksize_cell=chunksize_cell
         )
-        logger.info("✓ Successfully wrote dataset to Zarr!")
+        logger.info("✅ Successfully wrote dataset to Zarr!")
         
     except Exception as e:
         logger.error(f"Error writing Zarr file: {e}")
