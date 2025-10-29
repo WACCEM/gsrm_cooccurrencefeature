@@ -233,7 +233,7 @@ def create_latitude_dependent_tb_threshold(lat_values):
     return tb_thresh
 
 #--------------------------------------------------------------------------------------------------
-def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
+def classify_cloud_types(tb, pr, tb_thresh, mcs_mask, pr_threshold=0.5):
     """
     Classify cloud types based on brightness temperature and precipitation.
     
@@ -245,8 +245,9 @@ def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
         Precipitation rate (mm/h)
     tb_thresh : numpy.ndarray
         Latitude-dependent brightness temperature threshold (K)
-    nonmcs_ccs_mask : numpy.ndarray
-        Non-MCS CCS mask (only classify where > 0)
+    mcs_mask : numpy.ndarray
+        MCS mask array (values > 0 indicate MCS pixels)
+        Classification only occurs where mcs_mask == 0 (non-MCS areas)
     pr_threshold : float, optional
         Precipitation threshold for classification (default: 0.5 mm/h)
     
@@ -254,7 +255,7 @@ def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
     --------
     cloud_type : numpy.ndarray
         Cloud type classification:
-        0 = No cloud (or outside nonmcs_ccs_mask)
+        0 = Unclassified (inside MCS regions)
         1 = Deep convective (tb < tb_thresh & pr >= pr_threshold)
         2 = Stratiform (tb < tb_thresh & pr < pr_threshold)
         3 = Non-deep convective (tb >= tb_thresh & pr >= pr_threshold)
@@ -263,8 +264,8 @@ def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
     # Initialize cloud type array with zeros
     cloud_type = np.zeros_like(tb, dtype=np.int8)
     
-    # Only classify where nonmcs_ccs_mask > 0
-    valid_mask = nonmcs_ccs_mask > 0
+    # Only classify where mcs_mask == 0 (non-MCS areas)
+    valid_mask = mcs_mask == 0
     
     # Classification conditions (only applied where valid_mask is True)
     # 1. Deep convective: tb < tb_thresh & pr >= pr_threshold
@@ -286,67 +287,109 @@ def classify_cloud_types(tb, pr, tb_thresh, nonmcs_ccs_mask, pr_threshold=0.5):
     return cloud_type
 
 #--------------------------------------------------------------------------------------------------
-def find_most_frequent_cloud_type(cloud_types_time_series):
+def find_priority_based_cloud_type(cloud_types_time_series):
     """
-    Find the most frequent cloud type over time for each cell (VECTORIZED).
+    Find cloud type based on priority ranking: 1 > 2 > 3 > 4 (VECTORIZED).
     
-    For ties, prioritize lower type numbers (e.g., 1 > 2 > 3 > 4).
-    Automatically determines the number of cloud types from the data.
-    
-    This vectorized version uses pure numpy operations to process all cells 
-    simultaneously, providing dramatic speedup (~135x faster) compared to 
-    loop-based approaches. Essential for processing millions of HEALPix cells.
+    If a cell has any occurrence of type 1, assign type 1.
+    If no type 1 but has type 2, assign type 2.
+    If no type 1 or 2 but has type 3, assign type 3.
+    If no type 1, 2, or 3 but has type 4, assign type 4.
+    Otherwise, assign 0 (unclassified).
     
     Parameters:
     -----------
     cloud_types_time_series : numpy.ndarray
         Array of shape (n_times, n_cells) with cloud type values starting from 0
-        Type 0 is assumed to be "no cloud" and is excluded from results
         
     Returns:
     --------
-    most_frequent : numpy.ndarray
-        Array of shape (n_cells,) with the most frequent cloud type
+    priority_based : numpy.ndarray
+        Array of shape (n_cells,) with priority-based cloud type
     """
     n_times, n_cells = cloud_types_time_series.shape
     
-    # Determine the number of unique cloud types from the data
-    max_type = int(cloud_types_time_series.max())
-    # max_type = 4
-    n_types = max_type + 1  # e.g., if max is 4, we have types 0-4 (5 types)
+    # Initialize result array with zeros
+    priority_based = np.zeros(n_cells, dtype=np.int8)
     
-    # Count occurrences of each type for all cells at once
-    # Initialize count array: shape (n_types, n_cells)
-    counts = np.zeros((n_types, n_cells), dtype=np.int16)
+    # Check for presence of each cloud type (any occurrence over time)
+    has_type_1 = np.any(cloud_types_time_series == 1, axis=0)
+    has_type_2 = np.any(cloud_types_time_series == 2, axis=0)
+    has_type_3 = np.any(cloud_types_time_series == 3, axis=0)
+    has_type_4 = np.any(cloud_types_time_series == 4, axis=0)
     
-    # Count occurrences for each type using vectorized operations
-    for type_val in range(n_types):
-        counts[type_val, :] = (cloud_types_time_series == type_val).sum(axis=0)
+    # Apply priority: 1 > 2 > 3 > 4
+    # Start from lowest priority and work up (so higher priorities overwrite)
+    priority_based[has_type_4] = 4
+    priority_based[has_type_3] = 3
+    priority_based[has_type_2] = 2
+    priority_based[has_type_1] = 1
     
-    # For each cell, find the type with maximum count (excluding type 0)
-    # counts[1:, :] excludes type 0
-    cloud_counts = counts[1:, :]
+    return priority_based
+
+#--------------------------------------------------------------------------------------------------
+def compute_mean_precip_by_cloud_type(cloud_types_timeseries, pr_timeseries):
+    """
+    Compute frequency-weighted mean precipitation for each cloud type over the aggregation window.
     
-    # Find the maximum count for each cell (across all cloud types except 0)
-    max_counts = cloud_counts.max(axis=0)  # shape: (n_cells,)
+    This computes: (conditional mean) × (frequency of that type)
+    When summed across all 4 types, this equals the simple mean of all precipitation.
+
+    Parameters
+    ----------
+    cloud_types_timeseries : np.ndarray
+        Array of shape (n_times, n_cells) with cloud type values (0-4).
+    pr_timeseries : np.ndarray
+        Array of shape (n_times, n_cells) with precipitation values (mm/h).
+
+    Returns
+    -------
+    dc_pr : np.ndarray
+        Frequency-weighted deep convective precipitation (cloud_type==1), shape (n_cells,)
+    st_pr : np.ndarray
+        Frequency-weighted stratiform precipitation (cloud_type==2), shape (n_cells,)
+    nd_pr : np.ndarray
+        Frequency-weighted non-deep convective precipitation (cloud_type==3), shape (n_cells,)
+    dz_pr : np.ndarray
+        Frequency-weighted drizzle precipitation (cloud_type==4), shape (n_cells,)
+        
+    Note
+    ----
+    dc_pr + st_pr + nd_pr + dz_pr = mean(pr_timeseries, axis=0)
+    """
+    import warnings
     
-    # Initialize result array
-    most_frequent = np.zeros(n_cells, dtype=np.int8)
+    n_times = cloud_types_timeseries.shape[0]
     
-    # For cells with clouds, find the type with max count
-    # In case of ties, select the smallest type number (highest priority)
-    cells_with_clouds = max_counts > 0
+    # Mask precipitation by cloud type for each time
+    dc_mask = cloud_types_timeseries == 1
+    st_mask = cloud_types_timeseries == 2
+    nd_mask = cloud_types_timeseries == 3
+    dz_mask = cloud_types_timeseries == 4
+
+    # Compute conditional means (average precipitation WHEN cell is this type)
+    # Suppress RuntimeWarnings for empty slices
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', r'Mean of empty slice')
+        dc_pr_cond = np.nanmean(np.where(dc_mask, pr_timeseries, np.nan), axis=0)
+        st_pr_cond = np.nanmean(np.where(st_mask, pr_timeseries, np.nan), axis=0)
+        nd_pr_cond = np.nanmean(np.where(nd_mask, pr_timeseries, np.nan), axis=0)
+        dz_pr_cond = np.nanmean(np.where(dz_mask, pr_timeseries, np.nan), axis=0)
     
-    if cells_with_clouds.any():
-        # For each cell with clouds, find which type has the max count
-        # Check in priority order (1, 2, 3, ...) to handle ties
-        for type_val in range(1, n_types):
-            # Cells where this type has the max count
-            is_max = (cloud_counts[type_val - 1, :] == max_counts) & cells_with_clouds
-            # Set these cells to this type (only if not already set)
-            most_frequent[is_max & (most_frequent == 0)] = type_val
+    # Compute frequency of each type (fraction of time steps)
+    dc_freq = dc_mask.sum(axis=0) / n_times
+    st_freq = st_mask.sum(axis=0) / n_times
+    nd_freq = nd_mask.sum(axis=0) / n_times
+    dz_freq = dz_mask.sum(axis=0) / n_times
     
-    return most_frequent
+    # Weight conditional means by frequency
+    # Set NaN conditional means to 0 before weighting (cells that never had this type)
+    dc_pr = np.nan_to_num(dc_pr_cond, nan=0.0) * dc_freq
+    st_pr = np.nan_to_num(st_pr_cond, nan=0.0) * st_freq
+    nd_pr = np.nan_to_num(nd_pr_cond, nan=0.0) * nd_freq
+    dz_pr = np.nan_to_num(dz_pr_cond, nan=0.0) * dz_freq
+
+    return dc_pr, st_pr, nd_pr, dz_pr
 
 #--------------------------------------------------------------------------------------------------
 def add_tb_pr_to_dataset(_ds, config):
@@ -514,24 +557,42 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         tb_t = _ds['tb'].isel(time=t).values
         pr_t = _ds['pr'].isel(time=t).values
         mcs_mask_t = _ds['mcs_mask'].isel(time=t).values
-        ccs_mask_t = _ds['ccs_mask'].isel(time=t).values
         
         # Replace NaN with 0 (when mask_and_scale=True, fill_value becomes NaN)
         mcs_mask_t = np.nan_to_num(mcs_mask_t, nan=0.0).astype(int)
-        ccs_mask_t = np.nan_to_num(ccs_mask_t, nan=0.0).astype(int)
         
-        # Compute non-MCS CCS mask for this time step
-        nmcs_ccs_mask_t = np.where(mcs_mask_t == 0, ccs_mask_t, 0)
-        
-        # Classify cloud types
-        cloud_type_t = classify_cloud_types(tb_t, pr_t, tb_thresh, nmcs_ccs_mask_t, pr_threshold=0.5)
+        # Classify cloud types (only in non-MCS areas)
+        cloud_type_t = classify_cloud_types(tb_t, pr_t, tb_thresh, mcs_mask_t, pr_threshold=0.5)
         cloud_types_timeseries.append(cloud_type_t)
     
     # Stack into array (time, cell)
     cloud_types_timeseries = np.stack(cloud_types_timeseries, axis=0)
     
-    # Find the most frequent cloud type over the time window
-    cloud_types_aggregated = find_most_frequent_cloud_type(cloud_types_timeseries)
+    # Extract precipitation time series for computing precipitation by cloud type
+    pr_timeseries = _ds['pr'].values  # shape (time, cell)
+    
+    # Compute frequency-weighted mean precipitation for each cloud type
+    dc_pr, st_pr, nd_pr, dz_pr = compute_mean_precip_by_cloud_type(cloud_types_timeseries, pr_timeseries)
+    
+    # Find cloud type based on priority ranking (1 > 2 > 3 > 4)
+    cloud_types_aggregated = find_priority_based_cloud_type(cloud_types_timeseries)
+    
+    if verbose:
+        n_classified_before = (cloud_types_aggregated > 0).sum()
+        print(f"  Cloud types before MCS filter: {n_classified_before:,} cells")
+    
+    # Apply MCS priority: Set cloud type to 0 where MCS swath exists
+    # Classification hierarchy: MCS > Cloud Types > Unclassified
+    # If a cell has an MCS at any time during the window, MCS takes priority
+    cloud_types_aggregated = np.where(combined_mcs_swath > 0, 0, cloud_types_aggregated)
+    
+    # Filter precipitation by cloud type: set to 0 where MCS swath exists
+    # This makes the 4 cloud types mutually exclusive with MCS precipitation
+    mcs_mask = combined_mcs_swath > 0
+    dc_pr = np.where(mcs_mask, 0, dc_pr)
+    st_pr = np.where(mcs_mask, 0, st_pr)
+    nd_pr = np.where(mcs_mask, 0, nd_pr)
+    dz_pr = np.where(mcs_mask, 0, dz_pr)
 
     # import matplotlib.pyplot as plt
     # cloud_types_da = xr.DataArray(cloud_types_aggregated, dims=['cell'], coords={'lat': ('cell', _ds['lat'].values), 'lon': ('cell', _ds['lon'].values), 'cell': _ds['cell'].values})
@@ -539,13 +600,18 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
     # import pdb; pdb.set_trace()
     if verbose:
         n_classified = (cloud_types_aggregated > 0).sum()
+        n_mcs_overlap = n_classified_before - n_classified
+        print(f"  Cloud types after MCS filter: {n_classified:,} cells")
+        print(f"  Removed {n_mcs_overlap:,} cells due to MCS overlap")
         print(f"  ✅ Completed processing for this time chunk")
-        print(f"     Classified {n_classified:,} cells with cloud types")
 
     return {
         'mcs_mask': combined_mcs_swath,
-        # 'ccs_mask': ccs_mask_sum,
         'cloud_types': cloud_types_aggregated,
+        'dc_pr': dc_pr,
+        'st_pr': st_pr,
+        'nd_pr': nd_pr,
+        'dz_pr': dz_pr,
     }
 
 def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbose=False):
@@ -863,7 +929,7 @@ def main():
     zarr_chunk_size_time = 28
     
     # Define output variables
-    mask_variables = ['mcs_mask', 'cloud_types']
+    mask_variables = ['mcs_mask', 'cloud_types', 'dc_pr', 'st_pr', 'nd_pr', 'dz_pr']
     
     # Define attributes for each variable
     var_attrs = {
@@ -876,12 +942,36 @@ def main():
         },
         'cloud_types': {
             'long_name': 'Cloud type classification',
-            'description': 'Most frequent cloud type within non-MCS cold cloud shield over time window',
+            'description': 'Priority-based cloud type within non-MCS cold cloud shield over time window',
             'units': '1',
             'valid_range': [0, 4],
             'flag_values': [0, 1, 2, 3, 4],
             'flag_meanings': 'no_cloud deep_convective stratiform non_deep_convective drizzle',
-            'comment': 'Classification based on brightness temperature and precipitation rate. Priority for ties: 1>2>3>4.'
+            'comment': 'Classification based on brightness temperature and precipitation rate. Priority ranking: 1>2>3>4. Mutually exclusive with MCS.'
+        },
+        'dc_pr': {
+            'long_name': 'Deep convective precipitation',
+            'description': 'Frequency-weighted mean precipitation for deep convective clouds',
+            'units': 'mm h-1',
+            'comment': 'Mean precipitation when cell is classified as deep convective (type 1), weighted by frequency. Mutually exclusive with MCS swath.'
+        },
+        'st_pr': {
+            'long_name': 'Stratiform precipitation',
+            'description': 'Frequency-weighted mean precipitation for stratiform clouds',
+            'units': 'mm h-1',
+            'comment': 'Mean precipitation when cell is classified as stratiform (type 2), weighted by frequency. Mutually exclusive with MCS swath.'
+        },
+        'nd_pr': {
+            'long_name': 'Non-deep convective precipitation',
+            'description': 'Frequency-weighted mean precipitation for non-deep convective clouds',
+            'units': 'mm h-1',
+            'comment': 'Mean precipitation when cell is classified as non-deep convective (type 3), weighted by frequency. Mutually exclusive with MCS swath.'
+        },
+        'dz_pr': {
+            'long_name': 'Drizzle precipitation',
+            'description': 'Frequency-weighted mean precipitation for drizzle',
+            'units': 'mm h-1',
+            'comment': 'Mean precipitation when cell is classified as drizzle (type 4), weighted by frequency. Mutually exclusive with MCS swath.'
         }
     }
     

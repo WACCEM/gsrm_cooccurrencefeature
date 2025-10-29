@@ -1,5 +1,5 @@
 """
-Make task list and slurm scripts for processing.
+Make task list and slurm scripts for processing a single source with multiple code functions.
 """
 __author__ = "Zhe.Feng@pnnl.gov"
 
@@ -33,7 +33,7 @@ def load_config(config_file, catalog_source):
 if __name__ == "__main__":
 
     # Submit slurm job
-    submit_job = True
+    submit_job = False
     
     # Create bash script for interactive node execution
     make_bash_script = True
@@ -48,73 +48,67 @@ if __name__ == "__main__":
     # Create log directory if it doesn't exist
     os.makedirs(log_dir, exist_ok=True)
 
-    slurm_basename = f'slurm_'
+    slurm_basename = f'slurm_alltasks_'
 
-    # Specify which code function to run
-    # code_func = "make_mcs_swath_masks"
-    # code_func = "combine_tracking_masks"
-    # code_func = "make_cooccurrence_masks"
-    code_func = "calc_monthly_rainmap_by_cof"
+    # Specify which run to process
+    # runname = "scream_ne120"
+    # runname = "casesm2_10km_nocumulus"
+    # runname = "icon_d3hp003"
+    # runname = "ifs_tco3999_rcbmf"
+    runname = "IR_IMERG"
+    # runname = "nicam_gl11"
+    # runname = "um_glm_n2560_RAL3p3"
 
-    # Define a list of run names to process
-    runnames = [
-        "casesm2_10km_nocumulus",
-        "icon_d3hp003",
-        # "ifs_tco3999_rcbmf",
-        "IR_IMERG",
-        "nicam_gl11",
-        "scream_ne120",
-        "um_glm_n2560_RAL3p3",
+    # Define a list of code functions to process
+    code_funcs = [
+        "make_mcs_swath_masks",
+        "combine_tracking_masks",
+        "make_cooccurrence_masks",
+        "calc_monthly_rainmap_by_cof",
     ]
 
-    # Build full code name
-    code_name = f"{code_dir}{code_func}.py"
+    # Dictionary of wallclock times for each code function
+    wallclock_times = {
+        "make_mcs_swath_masks": "00:30:00",
+        "combine_tracking_masks": "00:05:00",
+        "make_cooccurrence_masks": "00:15:00",
+        "calc_monthly_rainmap_by_cof": "00:10:00",
+    }
 
-    # Set wallclock_time based on which code is used
-    if "make_mcs_swath_masks" in code_name:
-        wallclock_time = "00:30:00"
-    elif "combine_tracking_masks" in code_name:
-        wallclock_time = "00:05:00"
-    elif "make_cooccurrence_masks" in code_name:
-        wallclock_time = "00:15:00"
-    elif "calc_monthly_rainmap_by_cof" in code_name:
-        wallclock_time = "00:10:00"
-    else:
-        wallclock_time = "00:30:00"
-    print(f"Wallclock time set to: {wallclock_time}")
+    # Load configuration for the specified source
+    config = load_config(config_sources_file, runname)
+    source = config.get("source_name")
 
     # Create the list of job tasks needed by SLURM...
-    task_filename = f"{slurm_dir}tasks_{code_func}.txt"
+    task_filename = f"{slurm_dir}tasks_all_{runname}.txt"
     task_file = open(task_filename, "w")
     ntasks = 0
 
-    # Loop over sources
-    for run in runnames:
+    # Loop over code functions
+    for code_func in code_funcs:
 
-        # Load configuration for the specified source
-        config = load_config(config_sources_file, run)
-        source = config.get("source_name")
-        # import pdb; pdb.set_trace()
+        # Build full code name
+        code_name = f"{code_dir}{code_func}.py"
 
-        if "make_mcs_swath_masks" in code_name:
+        if code_func == "make_mcs_swath_masks":
             config_file = f"{config_dir}config_mcs_tbpf_{source}.yml"
             cmd = f"python {code_name} -c {config_file}"
 
-        elif "combine_tracking_masks" in code_name:
+        elif code_func == "combine_tracking_masks":
             config_file = f"{config_sources_file}"
             # Special case for IMERGv7
             if source == "IMERGv7":                
                 cmd = f"python {code_dir}combine_era5_imerg_tracking_masks.py"
             else:
-                cmd = f"python {code_name} -c {config_file} --source {run}"
+                cmd = f"python {code_name} -c {config_file} --source {runname}"
 
-        elif "make_cooccurrence_masks" in code_name:
+        elif code_func == "make_cooccurrence_masks":
             config_file = f"{config_sources_file}"
-            cmd = f"python {code_name} -c {config_file} --source {run}"
+            cmd = f"python {code_name} -c {config_file} --source {runname}"
 
-        elif "calc_monthly_rainmap_by_cof" in code_name:
+        elif code_func == "calc_monthly_rainmap_by_cof":
             config_file = f"{config_sources_file}"
-            cmd = f"python {code_name} -c {config_file} --source {run}"
+            cmd = f"python {code_name} -c {config_file} --source {runname}"
 
         task_file.write(cmd + "\n")
         ntasks += 1
@@ -122,21 +116,23 @@ if __name__ == "__main__":
     task_file.close()
     print(task_filename)
 
+    # Use the longest wallclock time from all code functions
+    max_wallclock_time = max([wallclock_times.get(func, "00:30:00") for func in code_funcs])
 
     # Create a SLURM submission script for the above task list...
-    slurm_filename = f'{slurm_dir}{slurm_basename}{code_func}.sh'
+    slurm_filename = f'{slurm_dir}{slurm_basename}{runname}.sh'
     slurm_file = open(slurm_filename, "w")
     text = f"""\
         #!/bin/bash
         #SBATCH -A m1867
-        #SBATCH -J {code_func}
-        #SBATCH -t {wallclock_time}
+        #SBATCH -J {runname}
+        #SBATCH -t {max_wallclock_time}
         #SBATCH -q regular
         #SBATCH -C cpu
         #SBATCH --nodes=1
         #SBATCH --ntasks-per-node=128
         #SBATCH --exclusive
-        #SBATCH --output={log_dir}log_{code_func}_%A_%a.log
+        #SBATCH --output={log_dir}log_{runname}_%A_%a.log
         #SBATCH --mail-type=END
         #SBATCH --mail-user=zhe.feng@pnnl.gov
         #SBATCH --array=1-{ntasks}
@@ -161,7 +157,7 @@ if __name__ == "__main__":
 
     # Create bash script for interactive node execution
     if make_bash_script == True:
-        bash_filename = f'{slurm_dir}run_interactive_{code_func}.sh'
+        bash_filename = f'{slurm_dir}run_interactive_{runname}.sh'
         bash_file = open(bash_filename, "w")
         bash_text = f"""\
             #!/bin/bash
@@ -173,7 +169,7 @@ if __name__ == "__main__":
             #      bash {bash_filename}
             
             echo "=========================================="
-            echo "Starting sequential task execution for {code_func}"
+            echo "Starting sequential task execution for {runname}"
             echo "=========================================="
             echo ""
             

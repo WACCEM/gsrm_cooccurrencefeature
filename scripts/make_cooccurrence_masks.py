@@ -980,6 +980,12 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         'etc_mask': _ds.etc_mask,
         'tc_mask': _ds.tc_mask,
         
+        # Precipitation types (frequency-weighted, mutually exclusive with MCS)
+        'dc_pr': _ds.dc_pr,
+        'st_pr': _ds.st_pr,
+        'nd_pr': _ds.nd_pr,
+        'dz_pr': _ds.dz_pr,
+        
         # Isolated masks
         'mcs_isolated_mask': mcs_isolated_mask,
         'ar_isolated_mask': ar_isolated_mask,
@@ -1097,6 +1103,7 @@ def main():
         # Define all output variables
         mask_variables = [
             'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask', 'cloud_types',
+            'dc_pr', 'st_pr', 'nd_pr', 'dz_pr',
             'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
             'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
             'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 
@@ -1127,6 +1134,14 @@ def main():
         chunk_size_time = 48
         print(f"Using default chunk_size_time={chunk_size_time} for optimal processing and zarr I/O")
         
+        # Extract variable attributes from input dataset
+        var_attrs = {}
+        for var_name in mask_variables:
+            if var_name in ds.data_vars:
+                # Copy attributes from input dataset
+                var_attrs[var_name] = dict(ds[var_name].attrs)
+                print(f"  Copied attributes for '{var_name}' from input dataset")
+        
         try:
             # Initialize the zarr store structure (once only)
             logger.info("Initializing zarr store...")
@@ -1136,7 +1151,8 @@ def main():
                 mask_variables=mask_variables,
                 template_coords=ds.coords,
                 attrs=attrs,
-                chunk_size_time=chunk_size_time
+                chunk_size_time=chunk_size_time,
+                var_attrs=var_attrs
             )
             
             # Stream process with chunked zarr writing

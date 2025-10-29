@@ -354,22 +354,38 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         chunk_tc_count_sum = (tc_mask > 0).sum(dim='time')
         chunk_tc_pcp_count_sum = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
         
-        # Cloud types
-        # Deep convection (dc): cloud_types == 1
-        chunk_dc_pcp_sum = (precipitation.where(cloud_types == 1) * time_interval).sum(dim='time')
-        chunk_dc_count_sum = (cloud_types == 1).sum(dim='time')
+        # Cloud types (exclude all feature masks)
+        # Create combined feature mask (binary: 1 if any feature present, 0 otherwise)
+        all_feature_mask = (
+            (mcs_mask > 0) | (ar_mask > 0) | (etc_mask > 0) | (tc_mask > 0) |
+            (mcs_isolated_mask > 0) | (ar_isolated_mask > 0) | (etc_isolated_mask > 0) |
+            (mcs_ar_2way_mask > 0) | (mcs_etc_2way_mask > 0) | (ar_etc_2way_mask > 0) |
+            (mcs_ar_etc_3way_mask > 0)
+        )
         
-        # Stratiform (st): cloud_types == 2
-        chunk_st_pcp_sum = (precipitation.where(cloud_types == 2) * time_interval).sum(dim='time')
-        chunk_st_count_sum = (cloud_types == 2).sum(dim='time')
+        # Use pre-computed frequency-weighted precipitation variables
+        # These are already 6-hourly means (mm/h), so multiply by time_interval to get total mm
+        # Then sum over time and mask out feature areas
         
-        # Non-deep convective (nd): cloud_types == 3
-        chunk_nd_pcp_sum = (precipitation.where(cloud_types == 3) * time_interval).sum(dim='time')
-        chunk_nd_count_sum = (cloud_types == 3).sum(dim='time')
+        # Deep convection (dc): use dc_pr, excluding all features
+        dc_pr = chunk_ds['dc_pr']
+        chunk_dc_pcp_sum = (dc_pr.where(~all_feature_mask) * time_interval).sum(dim='time')
+        chunk_dc_count_sum = ((dc_pr > 0) & (~all_feature_mask)).sum(dim='time')
         
-        # Drizzle (dz): cloud_types == 4
-        chunk_dz_pcp_sum = (precipitation.where(cloud_types == 4) * time_interval).sum(dim='time')
-        chunk_dz_count_sum = (cloud_types == 4).sum(dim='time')
+        # Stratiform (st): use st_pr, excluding all features
+        st_pr = chunk_ds['st_pr']
+        chunk_st_pcp_sum = (st_pr.where(~all_feature_mask) * time_interval).sum(dim='time')
+        chunk_st_count_sum = ((st_pr > 0) & (~all_feature_mask)).sum(dim='time')
+        
+        # Non-deep convective (nd): use nd_pr, excluding all features
+        nd_pr = chunk_ds['nd_pr']
+        chunk_nd_pcp_sum = (nd_pr.where(~all_feature_mask) * time_interval).sum(dim='time')
+        chunk_nd_count_sum = ((nd_pr > 0) & (~all_feature_mask)).sum(dim='time')
+        
+        # Drizzle (dz): use dz_pr, excluding all features
+        dz_pr = chunk_ds['dz_pr']
+        chunk_dz_pcp_sum = (dz_pr.where(~all_feature_mask) * time_interval).sum(dim='time')
+        chunk_dz_count_sum = ((dz_pr > 0) & (~all_feature_mask)).sum(dim='time')
         
         # Accumulate results
         if totprecip_sum is None:
@@ -524,7 +540,7 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         del chunk_st_pcp_sum, chunk_st_count_sum
         del chunk_nd_pcp_sum, chunk_nd_count_sum
         del chunk_dz_pcp_sum, chunk_dz_count_sum
-        del cloud_types
+        del cloud_types, dc_pr, st_pr, nd_pr, dz_pr
         gc.collect()
     
     # Return all statistics in a dictionary
