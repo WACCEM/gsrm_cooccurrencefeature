@@ -8,8 +8,9 @@ import easygems.healpix as egh
 from pathlib import Path
 
 # Add src directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-from zarr_tools import setup_dask_client, write_zarr, zoom_level_from_nside
+sys.path.append(str(Path(__file__).parent.parent))
+from src.zarr_tools import setup_dask_client, write_zarr, zoom_level_from_nside
+from src.utilities import convert_cftime_to_standard_calendar
 
 """
 HEALPix Temporal Resampling and Alignment Script
@@ -82,6 +83,21 @@ def load_dataset(catalog_path, location, source, catalog_params, vars_to_include
 
     # Select only the variables of interest
     ds = ds[vars_to_include]
+
+    # Determine calendar types and convert if needed
+    # ds_calendar_type = type(ds.time.values[0]).__name__
+    calendar = ds['time'].dt.calendar
+
+    if calendar not in ['proleptic_gregorian', 'gregorian', 'standard']:
+        logger.info(f"Converting ds time from standard calendar to {calendar} calendar")
+        # converted_times = convert_to_matching_calendar(ds['time'].values, calendar)
+        converted_times = convert_cftime_to_standard_calendar(ds.time.values)
+
+        # Replace the time values in ds with the converted ones
+        ds = ds.assign_coords(time=converted_times)
+        logger.info(f"Successfully converted ds time to {calendar} calendar")
+    else:
+        logger.info(f"Dataset uses standard calendar: {calendar}, no conversion needed")
 
     logger.info(f"  Dataset loaded: {len(ds.time)} timesteps, {len(ds.data_vars)} variables")
     logger.info(f"  Variables: {list(ds.data_vars.keys())}")
@@ -214,14 +230,20 @@ def main():
     #     'time': 'PT1H',
     # }
 
+    # location = None
+    # source = "casesm2_10km_nocumulus"
+    # catalog_params = {
+    #     'zoom': 8,
+    # }
+
     location = None
-    source = "casesm2_10km_nocumulus"
+    source = "scream_ne120"
     catalog_params = {
         'zoom': 8,
     }
     
     # Variables to include in unified dataset
-    vars_to_include = ['pr']
+    vars_to_include = ['pr', 'rlut']
     # vars_to_include += ['prs']  # Add more variables if needed
 
     # Temporal aggregation settings
@@ -232,7 +254,8 @@ def main():
     zoom = catalog_params['zoom']
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/NICAM_pr6h_z{zoom}.zarr"
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/um_glm_n2560_RAL3p3_pr6h_z{zoom}.zarr"
-    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_pr6h_z{zoom}.zarr"
+    # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_pr6h_z{zoom}.zarr"
+    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/scream/scream_pr6h_z{zoom}.zarr"
     
     # Dask configuration
     use_parallel = True

@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import zoom_level_from_nside, write_zarr, setup_dask_client
+from src.utilities import convert_to_matching_calendar
 
 #-------------------------------------------------------------------
 def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logger=None):
@@ -112,70 +113,6 @@ def combine_masks(ds_mcs, ds_ar, ds_tc, ds_etc, client=None, out_zarr=None, logg
         write_zarr(ds, out_zarr, client=client, logger=logger)
     
     return ds
-
-#-------------------------------------------------------------------
-def convert_to_matching_calendar(std_times, target_calendar):
-    """
-    Convert standard calendar (proleptic_gregorian) timestamps to match a target calendar.
-    
-    Args:
-        std_times: array of numpy.datetime64, pandas.DatetimeIndex or pandas.Timestamp
-            Timestamps with standard (proleptic_gregorian) calendar
-        target_calendar: str
-            Target calendar to convert to ('365_day', '360_day', 'noleap', etc.)
-            
-    Returns:
-        cftime.datetime objects using the target calendar
-    """
-
-    
-    # Initialize the appropriate cftime date type based on target calendar
-    calendar_types = {
-        '365_day': cftime.DatetimeNoLeap,
-        'noleap': cftime.DatetimeNoLeap,
-        '360_day': cftime.Datetime360Day,
-        'all_leap': cftime.DatetimeAllLeap,
-        'julian': cftime.DatetimeJulian,
-        # Add other calendars as needed
-    }
-    
-    if target_calendar in ['proleptic_gregorian', 'gregorian', 'standard']:
-        # No conversion needed
-        return std_times
-    
-    if target_calendar not in calendar_types:
-        raise ValueError(f"Unsupported calendar: {target_calendar}")
-        
-    datetime_type = calendar_types[target_calendar]
-    
-    # Check if input is a single timestamp
-    is_single_object = not hasattr(std_times, '__iter__') or isinstance(std_times, pd.Timestamp)
-    
-    # Convert to list for uniform processing
-    times_list = [std_times] if is_single_object else std_times
-    
-    # Convert each timestamp to the target calendar
-    converted_times = []
-    for t in times_list:
-        # Convert numpy.datetime64 to pandas.Timestamp which has the necessary attributes
-        if isinstance(t, np.datetime64):
-            ts = pd.Timestamp(t)
-            converted_times.append(datetime_type(
-                ts.year, ts.month, ts.day, 
-                ts.hour, ts.minute, ts.second
-            ))
-        else:
-            # For pandas.Timestamp or datetime objects that already have year, month attributes
-            converted_times.append(datetime_type(
-                t.year, t.month, t.day, 
-                t.hour, t.minute, t.second
-            ))
-    
-    # Return a single object or a list based on input type
-    if is_single_object:
-        return converted_times[0]
-    else:
-        return converted_times
 
 def setup_logging():
     """

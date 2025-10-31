@@ -1151,6 +1151,16 @@ def main():
             ds_p = xr.open_zarr(in_zarr, consolidated=True)
             ds_p = ds_p.pipe(egh.attach_coords)
 
+        elif catalog_source == "scream_ne120":
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
+            in_basename = f"scream_pr"
+            time_res = "6h"
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            # Read SCREAM dataset
+            print(f"Loading SCREAM dataset (NOT from catalog): {in_zarr}")
+            ds_p = xr.open_zarr(in_zarr, consolidated=True)
+            ds_p = ds_p.pipe(egh.attach_coords)
+
         elif catalog_source == "nicam_gl11":
             dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
             in_basename = f"NICAM_pr"
