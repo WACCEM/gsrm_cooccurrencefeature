@@ -127,11 +127,10 @@ def parse_etc_track_file(file_path, unstructured_mesh=True):
     return df
 
 
-def extract_healpix_variable_to_latlon_safe(
-    hp_data,
+def extract_healpix_variable_to_latlon(
+    hp_data_at_time,
     storm_lon,
     storm_lat,
-    storm_time,
     hp_grid,
     nside,
     radius=10.0,
@@ -147,16 +146,17 @@ def extract_healpix_variable_to_latlon_safe(
     Extract HEALPix variable and remap to regular lat-lon grid centered at storm location.
     Pads output with NaN for grids with invalid latitudes beyond poles.
     
+    NOTE: This function now expects data already sliced to a single time step.
+    Use extract_etc_2d_variable() for batched time-slice processing.
+    
     Parameters
     ----------
-    hp_data : xarray.DataArray
-        HEALPix variable data with 'cell' and 'time' dimensions
+    hp_data_at_time : xarray.DataArray
+        HEALPix variable data at a single time (no 'time' dimension)
     storm_lon : float
         Storm center longitude
     storm_lat : float
         Storm center latitude
-    storm_time : np.datetime64
-        Storm time
     hp_grid : xarray.Dataset
         HEALPix grid with 'lat' and 'lon' coordinates
     nside : int
@@ -183,8 +183,8 @@ def extract_healpix_variable_to_latlon_safe(
     xarray.DataArray
         Variable remapped to regular lat-lon grid, padded with NaN if needed
     """
-    # Select data at storm time
-    data_at_time = hp_data.sel(time=storm_time, method="nearest").compute()
+    # Data already sliced to single time - no time selection needed
+    data_at_time = hp_data_at_time
     
     # Find the closest grid points to the storm center
     lon_center = round(storm_lon / lon_res) * lon_res
@@ -293,14 +293,21 @@ def extract_etc_2d_variable(
     variable_name='var'
 ):
     """
-    Extract 2D variable for all ETC storm positions.
+    Extract 2D variable for all ETC storm positions using batched time-slice loading.
+    
+    This function implements the efficient batched approach:
+    1. Group storms by unique timestamps
+    2. For each timestamp batch, load data once: variable_data.sel(time=t).compute()
+    3. Extract all storms at that timestamp from the loaded time slice
+    
+    This avoids redundant loading of the same time slice for multiple storms.
     
     Parameters:
     -----------
     storm_df : pd.DataFrame
         DataFrame with storm positions (storm_id, lon, lat, base_time)
     variable_data : xarray.DataArray
-        Variable to extract
+        Variable to extract (lazy dask array)
     hp_grid : xarray.Dataset
         HEALPix grid
     nside : int
@@ -331,12 +338,12 @@ def extract_etc_2d_variable(
     ntimes = len(storm_df)
     output_array = np.full((ntimes, ny, nx), np.nan, dtype=np.float32)
     
-    # Store metadata
-    time_array = []
-    storm_ids = []
-    grid_ids = []
-    storm_lats = []
-    storm_lons = []
+    # Store metadata arrays (pre-allocate for efficiency)
+    time_array = [None] * ntimes
+    storm_ids = [None] * ntimes
+    grid_ids = [None] * ntimes
+    storm_lats = [None] * ntimes
+    storm_lons = [None] * ntimes
     
     # Create relative coordinates once
     nx_half = nx // 2
@@ -344,55 +351,183 @@ def extract_etc_2d_variable(
     x_coords = np.arange(-nx_half, nx_half + 1)
     y_coords = np.arange(-ny_half, ny_half + 1)
     
-    # Extract data for each storm position
-    start_time = time.time()
+    # ================================================================
+    # STEP 1: Group storms by timestamp (KEY OPTIMIZATION!)
+    # ================================================================
+    print("Grouping storms by timestamp...")
+    sys.stdout.flush()
     
-    for idx, (row_idx, row) in enumerate(storm_df.iterrows()):
-        if idx % progress_freq == 0:
+    # Create mapping: timestamp -> list of (storm_index, storm_info)
+    time_to_storms = {}
+    for idx, row in storm_df.iterrows():
+        storm_time = pd.Timestamp(row['base_time'])
+        if storm_time not in time_to_storms:
+            time_to_storms[storm_time] = []
+        time_to_storms[storm_time].append((idx, row))
+    
+    unique_times = sorted(time_to_storms.keys())
+    print(f"Found {len(unique_times)} unique timestamps for {len(storm_df)} storm positions")
+    print(f"Average storms per timestamp: {len(storm_df) / len(unique_times):.1f}")
+    sys.stdout.flush()
+    
+    # ================================================================
+    # STEP 2: Process each timestamp batch
+    # ================================================================
+    start_time = time.time()
+    storms_processed = 0
+    
+    for time_idx, storm_time in enumerate(unique_times):
+        if time_idx % max(1, len(unique_times) // 20) == 0:  # Print ~20 progress updates
             elapsed = time.time() - start_time
-            rate = idx / elapsed if elapsed > 0 else 0
-            remaining = (ntimes - idx) / rate if rate > 0 else 0
-            print(f"  Progress: {idx}/{ntimes} ({100*idx/ntimes:.1f}%) - "
-                  f"{rate:.1f} storms/s - ETA: {remaining/60:.1f} min")
+            rate = storms_processed / elapsed if elapsed > 0 else 0
+            remaining_storms = ntimes - storms_processed
+            eta = remaining_storms / rate if rate > 0 else 0
+            print(f"  Time batch {time_idx + 1}/{len(unique_times)}: "
+                  f"{storms_processed}/{ntimes} storms ({100*storms_processed/ntimes:.1f}%) - "
+                  f"{rate:.1f} storms/s - ETA: {eta/60:.1f} min")
             sys.stdout.flush()
         
-        storm_id = row['storm_id']
-        storm_lon = row['lon']
-        storm_lat = row['lat']
-        storm_time = row['base_time']
-        grid_id = row['grid_id']
+        storms_at_this_time = time_to_storms[storm_time]
         
+        # ================================================================
+        # LOAD TIME SLICE ONCE (this is the key optimization!)
+        # ================================================================
         try:
-            # Extract 2D data
-            data_gridded = extract_healpix_variable_to_latlon_safe(
-                hp_data=variable_data,
-                storm_lon=storm_lon,
-                storm_lat=storm_lat,
-                storm_time=storm_time,
-                hp_grid=hp_grid,
-                nside=nside,
-                radius=radius,
-                lon_res=lon_res,
-                lat_res=lat_res,
-                pad_invalid_latitudes=True
-            )
+            # Select time but DON'T compute yet - keep as lazy dask array
+            data_at_time_lazy = variable_data.sel(time=storm_time, method='nearest')
             
-            # Store data
-            output_array[idx, :, :] = data_gridded.values
+            # For efficiency: collect all pixel indices needed for all storms at this time
+            # Then compute once with all pixels selected
+            all_pixel_sets = []
+            storm_infos = []
+            
+            for storm_idx, row in storms_at_this_time:
+                storm_lon = row['lon']
+                storm_lat = row['lat']
+                
+                # Calculate grid for this storm
+                lon_center = round(storm_lon / lon_res) * lon_res
+                lat_center = round(storm_lat / lat_res) * lat_res
+                lon_grid = np.arange(lon_center - radius, lon_center + radius + lon_res, lon_res)
+                lat_grid = np.arange(lat_center - radius, lat_center + radius + lat_res, lat_res)
+                
+                # Identify valid latitudes
+                valid_lat_mask = (lat_grid >= -90.0) & (lat_grid <= 90.0)
+                
+                if np.all(valid_lat_mask):
+                    # All latitudes valid
+                    pix = hp.ang2pix(nside, *np.meshgrid(lon_grid, lat_grid), 
+                                    nest=True, lonlat=True)
+                    storm_infos.append({
+                        'storm_idx': storm_idx,
+                        'row': row,
+                        'pix': pix,
+                        'lon_grid': lon_grid,
+                        'lat_grid': lat_grid,
+                        'valid_lat_mask': valid_lat_mask,
+                        'needs_padding': False
+                    })
+                else:
+                    # Some latitudes invalid - need padding
+                    lat_grid_valid = lat_grid[valid_lat_mask]
+                    pix = hp.ang2pix(nside, *np.meshgrid(lon_grid, lat_grid_valid), 
+                                    nest=True, lonlat=True)
+                    storm_infos.append({
+                        'storm_idx': storm_idx,
+                        'row': row,
+                        'pix': pix,
+                        'lon_grid': lon_grid,
+                        'lat_grid': lat_grid,
+                        'lat_grid_valid': lat_grid_valid,
+                        'valid_lat_mask': valid_lat_mask,
+                        'needs_padding': True
+                    })
+                
+                # Collect unique pixels
+                all_pixel_sets.append(set(pix.flatten()))
+            
+            # Get union of all pixels needed at this time
+            all_pixels_needed = set()
+            for pixel_set in all_pixel_sets:
+                all_pixels_needed.update(pixel_set)
+            all_pixels_needed = list(all_pixels_needed)
+            
+            # COMPUTE ONCE with all needed pixels (CRITICAL OPTIMIZATION!)
+            data_at_time_subset = data_at_time_lazy.isel(cell=all_pixels_needed).compute()
+            
+            # Create reverse mapping: cell_id -> index in subset
+            cell_to_subset_idx = {cell_id: i for i, cell_id in enumerate(all_pixels_needed)}
             
         except Exception as e:
-            print(f"  Warning: Failed to extract data for storm {storm_id} at time {storm_time}: {e}")
+            print(f"  ERROR: Failed to load time slice at {storm_time}: {e}")
+            storms_processed += len(storms_at_this_time)
+            continue
         
-        # Store metadata
-        time_array.append(storm_time)
-        storm_ids.append(storm_id)
-        grid_ids.append(grid_id)
-        storm_lats.append(storm_lat)
-        storm_lons.append(storm_lon)
+        # ================================================================
+        # EXTRACT all storms at this timestamp from the loaded time slice
+        # ================================================================
+        for storm_info in storm_infos:
+            storm_idx = storm_info['storm_idx']
+            row = storm_info['row']
+            pix = storm_info['pix']
+            
+            try:
+                if not storm_info['needs_padding']:
+                    # No padding needed - simple case
+                    # Map pixel indices to subset indices
+                    subset_indices = [[cell_to_subset_idx[cell] for cell in row] 
+                                     for row in pix]
+                    
+                    # Extract from loaded subset using numpy indexing (FAST!)
+                    data_gridded = data_at_time_subset.values[subset_indices]
+                    
+                else:
+                    # Padding needed for invalid latitudes
+                    lat_grid = storm_info['lat_grid']
+                    lon_grid = storm_info['lon_grid']
+                    valid_lat_mask = storm_info['valid_lat_mask']
+                    
+                    # Extract valid data
+                    subset_indices = [[cell_to_subset_idx[cell] for cell in row] 
+                                     for row in pix]
+                    data_valid = data_at_time_subset.values[subset_indices]
+                    
+                    # Create full array with NaN padding
+                    ny_full = len(lat_grid)
+                    nx_full = len(lon_grid)
+                    data_gridded = np.full((ny_full, nx_full), np.nan, dtype=data_valid.dtype)
+                    
+                    # Fill valid rows
+                    valid_lat_indices = np.where(valid_lat_mask)[0]
+                    for i, lat_idx in enumerate(valid_lat_indices):
+                        data_gridded[lat_idx, :] = data_valid[i, :]
+                
+                # Store in output array
+                output_array[storm_idx, :, :] = data_gridded
+                
+                # Store metadata
+                time_array[storm_idx] = storm_time
+                storm_ids[storm_idx] = row['storm_id']
+                grid_ids[storm_idx] = row['grid_id']
+                storm_lats[storm_idx] = row['lat']
+                storm_lons[storm_idx] = row['lon']
+                
+            except Exception as e:
+                print(f"  Warning: Failed to extract storm {row['storm_id']} at {storm_time}: {e}")
+                # Metadata already initialized to None, will be filled with defaults
+                time_array[storm_idx] = storm_time
+                storm_ids[storm_idx] = row['storm_id']
+                grid_ids[storm_idx] = row['grid_id']
+                storm_lats[storm_idx] = row['lat']
+                storm_lons[storm_idx] = row['lon']
+        
+        storms_processed += len(storms_at_this_time)
     
     elapsed = time.time() - start_time
     print(f"Extraction complete in {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
     print(f"Processing rate: {ntimes/elapsed:.1f} storms/second")
+    print(f"Time slices loaded: {len(unique_times)} (vs {ntimes} in old approach)")
+    print(f"Speedup from batching: {ntimes/len(unique_times):.1f}x fewer data loads")
     sys.stdout.flush()
     
     return (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, 
@@ -714,12 +849,12 @@ def main():
         print(f"Variable dimensions: {variable_data.dims}")
         sys.stdout.flush()
         
-        # Extract 2D data for all storm positions
+        # Extract 2D data for all storm positions using batched approach
         (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
          x_coords, y_coords) = extract_etc_2d_variable(
             storm_df=storm_df,
             variable_data=variable_data,
-            hp_grid=hp_grid,
+            hp_grid=hp_grid,  # Still needed for coordinate info
             nside=nside,
             radius=args.radius,
             lon_res=args.lon_res,
