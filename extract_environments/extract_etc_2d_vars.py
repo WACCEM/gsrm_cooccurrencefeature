@@ -662,6 +662,8 @@ def main():
                         help='Model name in the catalog')
     parser.add_argument('--catalog_params', default='{"zoom": 8}', 
                         help='JSON string of catalog parameters')
+    parser.add_argument('--cof_mask', action='store_true', default=False,
+                       help='Extract COF mask (default: False)')
     parser.add_argument('--trackfile', required=True, 
                         help='Path to ETC track file (.txt)')
     parser.add_argument('--output_dir', required=True, 
@@ -728,16 +730,30 @@ def main():
         sys.stdout.flush()
     
     # Open catalog and get dataset
-    print(f"Opening catalog from {args.catalog_url}")
-    sys.stdout.flush()
-    cat = intake.open_catalog(args.catalog_url)[args.current_location]
-    
-    print(f"Loading dataset {args.catalog_model}...")
-    sys.stdout.flush()
-    ds = cat[args.catalog_model](**catalog_params).to_dask().pipe(
-        egh.attach_coords, signed_lon=True
-    )
-    ds = ds.assign_coords(time=convert_time(ds.time.values))
+    if not args.cof_mask:
+        print(f"Opening catalog from {args.catalog_url}")
+        sys.stdout.flush()
+        cat = intake.open_catalog(args.catalog_url)[args.current_location]
+        
+        print(f"Loading dataset {args.catalog_model}...")
+        sys.stdout.flush()
+        ds = cat[args.catalog_model](**catalog_params).to_dask().pipe(
+            egh.attach_coords, signed_lon=True
+        )
+        ds = ds.assign_coords(time=convert_time(ds.time.values))
+    else:
+        # Read Co-occurrence Feature Mask
+        cof_root_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
+        if "scream" in args.catalog_model:
+            source = "scream"
+        else:
+            source = args.catalog_model
+        cof_dir = f"{cof_root_dir}{source}_cofmasks_hp8_v1.zarr"
+        ds = xr.open_zarr(cof_dir, consolidated=True).pipe(
+            egh.attach_coords, signed_lon=True
+        )
+        ds = ds.assign_coords(time=convert_time(ds.time.values))
+    # import pdb; pdb.set_trace()
     
     # Get HEALPix grid
     print("Computing HEALPix grid...")
@@ -759,7 +775,7 @@ def main():
     if storm_ids_filter:
         storm_df = storm_df[storm_df['storm_id'].isin(storm_ids_filter)]
         print(f"Filtered to {len(storm_df)} storm points from {storm_df['storm_id'].nunique()} storms")
-    
+
     # Apply date filtering
     if args.start_date and args.end_date:
         start_date = pd.Timestamp(args.start_date)
@@ -854,7 +870,7 @@ def main():
          x_coords, y_coords) = extract_etc_2d_variable(
             storm_df=storm_df,
             variable_data=variable_data,
-            hp_grid=hp_grid,  # Still needed for coordinate info
+            hp_grid=hp_grid,
             nside=nside,
             radius=args.radius,
             lon_res=args.lon_res,
@@ -866,10 +882,17 @@ def main():
         # Save to zarr
         start_str = args.start_date.replace('-', '') if args.start_date else "all"
         end_str = args.end_date.replace('-', '') if args.end_date else "all"
-        output_path = os.path.join(
-            args.output_dir,
-            f"etc_2d_{variable_name}_{start_str}_{end_str}"
-        )
+        # If filter by storm IDs is provided, take the first ID as output filename
+        if storm_ids_filter:
+            output_path = os.path.join(
+                args.output_dir,
+                f"etc_2d_{variable_name}_track{storm_ids_filter[0]}"
+            )
+        else:
+            output_path = os.path.join(
+                args.output_dir,
+                f"etc_2d_{variable_name}_{start_str}_{end_str}"
+            )
         
         zarr_path = save_to_zarr(
             output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
