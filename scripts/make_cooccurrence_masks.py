@@ -733,7 +733,7 @@ def promote_dual_etc_overlaps_to_3way(mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_
     }
 
 
-def save_etc_tracking_to_files(all_etc_records, output_path, logger=None):
+def save_etc_tracking_to_files(all_etc_records, etc_tracking_csv, etc_tracking_parquet, logger=None):
     """
     Save ETC overlap tracking records to CSV and Parquet files.
     
@@ -741,8 +741,10 @@ def save_etc_tracking_to_files(all_etc_records, output_path, logger=None):
     -----------
     all_etc_records : list
         List of dictionaries containing ETC overlap records
-    output_path : str
-        Base output path (zarr file path) used to generate output filenames
+    etc_tracking_csv : str
+        Output CSV file path for ETC tracking data
+    etc_tracking_parquet : str
+        Output Parquet file path for ETC tracking data
     logger : logging.Logger, optional
         Logger for status messages
         
@@ -769,10 +771,6 @@ def save_etc_tracking_to_files(all_etc_records, output_path, logger=None):
     etc_df['mcs_tracks_str'] = etc_df['mcs_tracks'].apply(
         lambda x: ','.join(map(str, [int(t) for t in x])) if x else ''
     )
-    
-    # Create output filenames
-    etc_tracking_csv = output_path.replace('_cofmasks_', '_etc_coftracks_').replace('.zarr', '.csv')
-    etc_tracking_parquet = output_path.replace('_cofmasks_', '_etc_coftracks_').replace('.zarr', '.parquet')
     
     # Save to CSV with selected columns
     etc_df_csv = etc_df[['etc_track', 'time', 'overlap_flag', 'ar_tracks_str', 'mcs_tracks_str']].copy()
@@ -1383,7 +1381,7 @@ def main():
             
             # Save ETC overlap tracking information to CSV and Parquet files
             logger.info(f"\nProcessing ETC overlap tracking information...")
-            save_etc_tracking_to_files(all_etc_records, etc_tracking_csv, logger=logger)
+            save_etc_tracking_to_files(all_etc_records, etc_tracking_csv, etc_tracking_parquet, logger=logger)
             
         except Exception as e:
             logger.error(f"Error writing chunked zarr: {e}")
