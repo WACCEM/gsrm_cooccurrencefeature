@@ -390,7 +390,7 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         
     Returns:
     --------
-    int : Number of successfully processed time steps
+    tuple : (int, list) - Number of successfully processed time steps and list of ETC overlap records
     """
     
     if logger is None:
@@ -399,6 +399,7 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     # Process and write time steps in chunks
     total_processed = 0
     total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
+    all_etc_records = []  # Collect ETC overlap records from all timesteps
     
     logger.info(f"Processing {len(time_coords)} time steps in {total_chunks} chunks of {chunk_size_time}")
     
@@ -455,6 +456,9 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                             time_str, timestep_results = future.result()
                             if timestep_results is not None:
                                 chunk_results[time_str] = timestep_results
+                                # Extract ETC overlap records if present
+                                if 'etc_overlap_records' in timestep_results:
+                                    all_etc_records.extend(timestep_results['etc_overlap_records'])
                             else:
                                 logger.warning(f"Failed to process time step: {time_str}")
                         except Exception as e:
@@ -480,6 +484,9 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                         _ds = ds.sel(time=time_val)
                         timestep_results = process_single_timestep_overlaps(_ds, verbose=False)
                         chunk_results[str(time_val)] = timestep_results
+                        # Extract ETC overlap records if present
+                        if 'etc_overlap_records' in timestep_results:
+                            all_etc_records.extend(timestep_results['etc_overlap_records'])
                     except Exception as e:
                         logger.error(f"Error processing time step {time_val}: {e}")
         
@@ -524,7 +531,8 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         logger.warning(f"Could not consolidate zarr metadata: {e}")
     
     logger.info(f"Streaming processing complete: {total_processed}/{len(time_coords)} time steps successful")
-    return total_processed
+    logger.info(f"Collected {len(all_etc_records)} ETC overlap records")
+    return total_processed, all_etc_records
 
 
 def process_timestep_wrapper_zarr(time_val, zarr_path, verbose=False):

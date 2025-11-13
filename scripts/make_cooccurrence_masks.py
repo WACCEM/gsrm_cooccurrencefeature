@@ -23,6 +23,7 @@ from pathlib import Path
 import warnings
 import argparse
 import logging
+import pandas as pd
 # import easygems.healpix as egh  # Commented out for testing
 import yaml
 import sys
@@ -732,6 +733,190 @@ def promote_dual_etc_overlaps_to_3way(mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_
     }
 
 
+def save_etc_tracking_to_files(all_etc_records, output_path, logger=None):
+    """
+    Save ETC overlap tracking records to CSV and Parquet files.
+    
+    Parameters:
+    -----------
+    all_etc_records : list
+        List of dictionaries containing ETC overlap records
+    output_path : str
+        Base output path (zarr file path) used to generate output filenames
+    logger : logging.Logger, optional
+        Logger for status messages
+        
+    Returns:
+    --------
+    dict : Summary statistics about saved data
+    """
+    if not all_etc_records:
+        print(f"  ⚠️  No ETC overlap records to save")
+        if logger:
+            logger.warning("No ETC overlap records were collected")
+        return None
+    
+    # Create DataFrame
+    etc_df = pd.DataFrame(all_etc_records)
+    
+    # Convert track IDs to integers (not floats)
+    etc_df['etc_track'] = etc_df['etc_track'].astype(int)
+    
+    # Convert list columns to string representation with integers for CSV
+    etc_df['ar_tracks_str'] = etc_df['ar_tracks'].apply(
+        lambda x: ','.join(map(str, [int(t) for t in x])) if x else ''
+    )
+    etc_df['mcs_tracks_str'] = etc_df['mcs_tracks'].apply(
+        lambda x: ','.join(map(str, [int(t) for t in x])) if x else ''
+    )
+    
+    # Create output filenames
+    etc_tracking_csv = output_path.replace('_cofmasks_', '_etc_coftracks_').replace('.zarr', '.csv')
+    etc_tracking_parquet = output_path.replace('_cofmasks_', '_etc_coftracks_').replace('.zarr', '.parquet')
+    
+    # Save to CSV with selected columns
+    etc_df_csv = etc_df[['etc_track', 'time', 'overlap_flag', 'ar_tracks_str', 'mcs_tracks_str']].copy()
+    etc_df_csv.columns = ['etc_track', 'time', 'overlap_flag', 'ar_tracks', 'mcs_tracks']
+    etc_df_csv.to_csv(etc_tracking_csv, index=True)
+    
+    # Save to Parquet (preserves list types, more efficient)
+    etc_df_parquet = etc_df[['etc_track', 'time', 'overlap_flag', 'ar_tracks', 'mcs_tracks']].copy()
+    etc_df_parquet.to_parquet(etc_tracking_parquet, index=True, engine='pyarrow')
+    
+    # Calculate summary statistics
+    overlap_counts = {
+        'isolated': (etc_df['overlap_flag'] == 0).sum(),
+        'mcs_only': (etc_df['overlap_flag'] == 1).sum(),
+        'ar_only': (etc_df['overlap_flag'] == 2).sum(),
+        'mcs_and_ar': (etc_df['overlap_flag'] == 3).sum()
+    }
+    
+    summary = {
+        'csv_file': etc_tracking_csv,
+        'parquet_file': etc_tracking_parquet,
+        'total_records': len(etc_df),
+        'unique_etc_tracks': etc_df['etc_track'].nunique(),
+        'overlap_counts': overlap_counts
+    }
+    
+    # Print summary
+    print(f"  ✅ ETC overlap tracking saved to:")
+    print(f"     CSV: {etc_tracking_csv}")
+    print(f"     Parquet: {etc_tracking_parquet}")
+    print(f"  Total ETC track-time records: {summary['total_records']}")
+    print(f"  Unique ETC tracks: {summary['unique_etc_tracks']}")
+    print(f"  Overlap distribution:")
+    print(f"    Isolated (0): {overlap_counts['isolated']}")
+    print(f"    MCS only (1): {overlap_counts['mcs_only']}")
+    print(f"    AR only (2): {overlap_counts['ar_only']}")
+    print(f"    MCS+AR (3): {overlap_counts['mcs_and_ar']}")
+    
+    if logger:
+        logger.info(f"ETC tracking saved: CSV={etc_tracking_csv}, Parquet={etc_tracking_parquet}")
+    
+    return summary
+
+
+def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_pairs_2way,
+                            mcs_tracks_3way, ar_tracks_3way, etc_tracks_3way):
+    """
+    Extract overlap information for all ETC tracks at this timestep.
+    
+    Parameters:
+    -----------
+    _ds : xarray.Dataset
+        Single time step dataset containing time coordinate
+    mcs_ar_pairs_2way : list
+        List of (mcs_track, ar_track) tuples for 2-way overlaps
+    ar_etc_pairs_2way : list
+        List of (ar_track, etc_track) tuples for 2-way overlaps
+    mcs_etc_pairs_2way : list
+        List of (mcs_track, etc_track) tuples for 2-way overlaps
+    mcs_tracks_3way : np.ndarray
+        Array of MCS track IDs in 3-way overlaps
+    ar_tracks_3way : np.ndarray
+        Array of AR track IDs in 3-way overlaps
+    etc_tracks_3way : np.ndarray
+        Array of ETC track IDs in 3-way overlaps
+        
+    Returns:
+    --------
+    list : List of dictionaries, one per ETC track at this timestep
+    """
+    # Get time value
+    time_val = pd.Timestamp(_ds.time.values)
+    
+    # Get all ETC tracks present at this timestep
+    etc_mask = _ds.etc_mask.values
+    etc_tracks_present = np.unique(etc_mask[etc_mask > 0]).astype(int)
+    
+    # Build dictionaries for quick lookup
+    # For each ETC, find which ARs it overlaps with
+    etc_to_ar = {}  # {etc_id: [ar_ids]}
+    for ar_id, etc_id in ar_etc_pairs_2way:
+        if etc_id not in etc_to_ar:
+            etc_to_ar[etc_id] = []
+        etc_to_ar[etc_id].append(ar_id)
+    
+    # For each ETC, find which MCS it overlaps with
+    etc_to_mcs = {}  # {etc_id: [mcs_ids]}
+    for mcs_id, etc_id in mcs_etc_pairs_2way:
+        if etc_id not in etc_to_mcs:
+            etc_to_mcs[etc_id] = []
+        etc_to_mcs[etc_id].append(mcs_id)
+    
+    # For 3-way overlaps, need to find which ARs and MCS overlap with each ETC
+    etc_to_ar_3way = {}  # {etc_id: [ar_ids]}
+    etc_to_mcs_3way = {}  # {etc_id: [mcs_ids]}
+    
+    for etc_id in etc_tracks_3way:
+        # Get all ARs in 3-way that overlap with this ETC
+        etc_to_ar_3way[etc_id] = list(ar_tracks_3way)
+        # Get all MCS in 3-way that overlap with this ETC
+        etc_to_mcs_3way[etc_id] = list(mcs_tracks_3way)
+    
+    # Create records for each ETC track
+    etc_records = []
+    
+    for etc_id in etc_tracks_present:
+        # Determine overlap flag and get overlap track lists
+        ar_overlaps_2way = etc_to_ar.get(etc_id, [])
+        mcs_overlaps_2way = etc_to_mcs.get(etc_id, [])
+        ar_overlaps_3way = etc_to_ar_3way.get(etc_id, [])
+        mcs_overlaps_3way = etc_to_mcs_3way.get(etc_id, [])
+        
+        # Combine 2-way and 3-way overlaps
+        all_ar_overlaps = sorted(set(ar_overlaps_2way + ar_overlaps_3way))
+        all_mcs_overlaps = sorted(set(mcs_overlaps_2way + mcs_overlaps_3way))
+        
+        # Determine overlap flag
+        # 0: isolated (no overlaps)
+        # 1: overlaps with MCS only
+        # 2: overlaps with AR only
+        # 3: overlaps with both MCS and AR
+        has_mcs = len(all_mcs_overlaps) > 0
+        has_ar = len(all_ar_overlaps) > 0
+        
+        if has_mcs and has_ar:
+            overlap_flag = 3
+        elif has_ar:
+            overlap_flag = 2
+        elif has_mcs:
+            overlap_flag = 1
+        else:
+            overlap_flag = 0
+        
+        etc_records.append({
+            'etc_track': int(etc_id),
+            'time': time_val,
+            'overlap_flag': overlap_flag,
+            'ar_tracks': all_ar_overlaps if all_ar_overlaps else [],
+            'mcs_tracks': all_mcs_overlaps if all_mcs_overlaps else []
+        })
+    
+    return etc_records
+
+
 def process_single_timestep_overlaps(_ds, verbose=True):
     """
     Process co-occurrence feature overlaps for a single time step.
@@ -745,7 +930,8 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         
     Returns:
     --------
-    dict : Dictionary containing all isolated and overlap masks for this time step
+    dict : Dictionary containing all isolated and overlap masks for this time step,
+           plus ETC overlap tracking information
     """
     
     if verbose:
@@ -971,6 +1157,17 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         print(f"    2-way pairs: MCS-AR={len(mcs_ar_pairs_2way_only)}, AR-ETC={len(ar_etc_pairs_2way_only)}, MCS-ETC={len(mcs_etc_pairs_2way_only)}")
         print(f"    3-way tracks: MCS={len(mcs_tracks_with_ar_etc_overlap)}, AR={len(ar_tracks_with_mcs_etc_overlap)}, ETC={len(etc_tracks_with_mcs_ar_overlap)}")
 
+    # Extract ETC overlap information for this timestep
+    etc_overlap_records = extract_etc_overlap_info(
+        _ds, 
+        mcs_ar_pairs_2way_only, 
+        ar_etc_pairs_2way_only, 
+        mcs_etc_pairs_2way_only,
+        mcs_tracks_with_ar_etc_overlap,
+        ar_tracks_with_mcs_etc_overlap,
+        etc_tracks_with_mcs_ar_overlap
+    )
+
     # Return all masks and metadata
     return {
         # Original masks
@@ -1014,7 +1211,10 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         # Track lists for reference
         'mcs_tracks_3way': mcs_tracks_with_ar_etc_overlap,
         'ar_tracks_3way': ar_tracks_with_mcs_etc_overlap,
-        'etc_tracks_3way': etc_tracks_with_mcs_ar_overlap
+        'etc_tracks_3way': etc_tracks_with_mcs_ar_overlap,
+        
+        # ETC overlap tracking information
+        'etc_overlap_records': etc_overlap_records
     }
 
 
@@ -1054,8 +1254,13 @@ def main():
 
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
+    # Output co-occurrence feature masks path
     output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
     output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
+    # Output ETC statistics output path
+    output_stats_path = f"{output_dir}/stats/"
+    etc_tracking_csv = f"{output_stats_path}/{source_name}_etc_overlap_tracking.csv"
+    etc_tracking_parquet = f"{output_stats_path}/{source_name}_etc_overlap_tracking.parquet"
     
     # Parallel processing configuration
     parallel = args.parallel
@@ -1063,6 +1268,7 @@ def main():
     threads_per_worker = args.threads_per_worker
     
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_stats_path, exist_ok=True)
     
     print("="*80)
     print("CO-OCCURRENCE FEATURE OVERLAP PROCESSING")
@@ -1156,7 +1362,9 @@ def main():
             )
             
             # Stream process with chunked zarr writing
-            successful_times = stream_process_to_zarr(
+            # This will also collect ETC overlap records during processing
+            logger.info("Starting streaming processing to zarr...")
+            successful_times, all_etc_records = stream_process_to_zarr(
                 ds=ds,
                 time_coords=time_coords,
                 mask_variables=mask_variables,
@@ -1171,6 +1379,11 @@ def main():
             )
             
             logger.info(f"✅ Processing complete: {successful_times} time steps written to {output_path}")
+            logger.info(f"✅ Collected {len(all_etc_records)} ETC overlap records during processing")
+            
+            # Save ETC overlap tracking information to CSV and Parquet files
+            logger.info(f"\nProcessing ETC overlap tracking information...")
+            save_etc_tracking_to_files(all_etc_records, etc_tracking_csv, logger=logger)
             
         except Exception as e:
             logger.error(f"Error writing chunked zarr: {e}")
