@@ -1,30 +1,50 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -C cpu
-#SBATCH -q debug
-#SBATCH -t 00:10:00
+#SBATCH -q regular
+##SBATCH -q shared
+##SBATCH --mem=8G
+#SBATCH -t 00:15:00
 #SBATCH -J extract_scream
 #SBATCH -A m1867
+#SBATCH --array=0-9%3
+#SBATCH --output=logs/extract_etc_2d_var_%A_%a.log
 #SBATCH --mail-user=zhe.feng@pnnl.gov
 #SBATCH --mail-type=FAIL,END
 
-# ===== JOB STRUCTURE =====
-# This script submits 1 SLURM job that runs 1 Python process
-# All variables are processed sequentially in that single process
+# ===== JOB ARRAY STRUCTURE (SHARED QUEUE) =====
+# This script uses SLURM job arrays on the SHARED queue
+# --array=0-9%3 means:
+#   - 10 tasks total (one per variable, indices 0-9)
+#   - %3 limits to 3 simultaneous tasks (prevents overwhelming remote server)
+# --mem=8G:
+#   - Requests 8 GB memory per task (actual usage ~4-6 GB)
+#   - Shared queue charges only for resources used
+#   - More cost-efficient than full node (512 GB)
 # Benefits:
-#   - Track data loaded only once (saves time and memory)
-#   - Efficient batched extraction (groups storms by timestamp)
-#   - 32 cores available for internal parallelization (Dask operations)
-# ===========================
+#   - Cost: ~8 GB × 3 tasks = 24 GB vs 512 GB full node (~20x cheaper!)
+#   - Parallel processing: 3x faster than sequential
+#   - Fault tolerance: If one variable fails, others continue
+#   - Resource isolation: Each variable gets dedicated resources
+#   - Easy restart: Can resubmit only failed array indices
+# 
+# The concurrent setting can be overwriten at job submission:
+#   sbatch --array=0-9%5 slurm_extract_etc_2d_vars.sh
+# To restart failed tasks: 
+#   sbatch --array=2,5 slurm_extract_etc_2d_vars.sh
+# ================================
 
 # module load python
 # module list
 source activate /global/common/software/m1867/python/hackathon
 
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
 # Set up paths and parameters
 ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
 TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/scream_ne120_inst/single_vars/"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/scream_ne120_inst/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -37,7 +57,7 @@ CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for instantaneous var
 CATALOG_PARAMS='{"zoom": 8}'
 
 # Extraction parameters
-RADIUS="10.0"  # Extraction radius in degrees
+RADIUS="20.0"  # Extraction radius in degrees
 LON_RES="0.25"  # Longitude resolution in degrees
 LAT_RES="0.25"  # Latitude resolution in degrees
 
@@ -46,24 +66,17 @@ CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
 PROGRESS_FREQ="1000"  # How often to print progress
 
 # Set variables to extract (2D variables only, no pressure dimension)
-# Common atmospheric variables:
+# Add more as needed
 VARIABLES=(
-  "pr"      # precipitation
-  "psl"     # sea level pressure
-  "tas"     # surface air temperature
-  "huss"    # surface specific humidity
-  "clt"     # total cloud fraction
+  "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
+#   "mcs_ar_etc_overlap_mask"
+#   "etc_mcs_ar_overlap_mask"
+#   "ar_mcs_etc_overlap_mask"
 )
-
-# Additional variables you might want:
-# "ua850" "va850"  # 850 hPa winds (if available as 2D in catalog)
-# "ua500" "va500"  # 500 hPa winds
-# "zg500"          # 500 hPa geopotential height
-# "rh850"          # 850 hPa relative humidity
-# "uivt" "vivt"    # integrated vapor transport
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
 
 # Date filtering options (leave empty to process all tracks in the track file)
 START_DATE=""  # e.g., "2019-08-01" or leave empty for no filtering
@@ -81,10 +94,17 @@ MAX_LON=""   # e.g., "180" or leave empty for no filtering
 # STORM_IDS="1014"  # Comma-separated storm IDs for testing
 STORM_IDS=""  # Process all storms
 
-echo "Starting ETC 2D variable extraction..."
-echo "Processing ${#VARIABLES[@]} variable(s)"
+# ===== SELECT VARIABLE FOR THIS ARRAY TASK =====
+# Each array task processes one variable
+CURRENT_VAR="${VARIABLES[$SLURM_ARRAY_TASK_ID]}"
+
+echo "================================================"
+echo "SLURM Array Job: $SLURM_ARRAY_JOB_ID"
+echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
+echo "Processing variable: $CURRENT_VAR"
 echo "Track file: $TRACK_FILE"
 echo "Output directory: $OUTPUT_DIR"
+echo "================================================"
 
 # ===== BUILD COMMAND LINE ARGUMENTS =====
 OPTIONAL_PARAMS=""
@@ -131,21 +151,19 @@ echo "  Model: $CATALOG_MODEL"
 echo "  Spatial bounds: [$MIN_LON, $MAX_LON] × [$MIN_LAT, $MAX_LAT]"
 echo "  Extraction radius: ${RADIUS}°"
 echo "  Grid resolution: ${LON_RES}° × ${LAT_RES}°"
-echo "  Variables: ${VARIABLES[@]}"
+echo "  Variable: $CURRENT_VAR"
+echo "  Total variables in array: ${#VARIABLES[@]}"
+echo "  Concurrent tasks limit: 3"
 echo "================================================"
 
-# ===== RUN EXTRACTION =====
-# Process all variables in a SINGLE Python call (track data loaded once for all)
+# ===== RUN EXTRACTION FOR SINGLE VARIABLE =====
+# Process ONE variable per array task
 # srun parameters:
-#   -n 1: Run 1 task (single Python process for all variables)
+#   -n 1: Run 1 task (single Python process for this variable)
 #   -c 32: Allocate 32 CPU cores to the task (for Dask parallel operations)
 #   --cpu_bind=cores: Bind threads to specific cores for better performance
 # 
-# All variables in VARIABLES array are passed to Python at once.
-# Python will:
-#   1. Load track data once
-#   2. Process each variable sequentially 
-#   3. Each variable extraction can use the 32 cores internally for parallel operations
+# Only the current variable (selected by SLURM_ARRAY_TASK_ID) is processed
 srun -n 1 -c 32 --cpu_bind=cores python extract_etc_2d_vars.py \
   --catalog_url "$CATALOG_URL" \
   --current_location "$CURRENT_LOCATION" \
@@ -153,19 +171,17 @@ srun -n 1 -c 32 --cpu_bind=cores python extract_etc_2d_vars.py \
   --catalog_params "$CATALOG_PARAMS" \
   --trackfile "$TRACK_FILE" \
   --output_dir "$OUTPUT_DIR" \
-  --variables "${VARIABLES[@]}" \
+  --variables "$CURRENT_VAR" \
   $OPTIONAL_PARAMS
 
+EXIT_CODE=$?
+
 echo "================================================"
-echo "Extraction completed at $(date)"
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "SUCCESS: Variable $CURRENT_VAR completed at $(date)"
+else
+    echo "FAILED: Variable $CURRENT_VAR failed with exit code $EXIT_CODE at $(date)"
+fi
 echo "================================================"
 
-# ===== OPTIONAL: COMBINE VARIABLES INTO SINGLE FILE =====
-# Uncomment the following lines to automatically combine the extracted variables
-# echo "Combining extracted variables into single zarr file..."
-# python combine_etc_2d_vars.py \
-#   --input_dir "$OUTPUT_DIR" \
-#   --output_dir "$OUTPUT_DIR" \
-#   --output_prefix "etc_2d_combined"
-
-echo "All processing complete at $(date)"
+exit $EXIT_CODE

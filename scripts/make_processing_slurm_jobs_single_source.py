@@ -51,11 +51,11 @@ if __name__ == "__main__":
     slurm_basename = f'slurm_alltasks_'
 
     # Specify which run to process
-    # runname = "scream_ne120"
+    runname = "scream_ne120"
     # runname = "casesm2_10km_nocumulus"
     # runname = "icon_d3hp003"
     # runname = "ifs_tco3999_rcbmf"
-    runname = "IR_IMERG"
+    # runname = "IR_IMERG"
     # runname = "nicam_gl11"
     # runname = "um_glm_n2560_RAL3p3"
 

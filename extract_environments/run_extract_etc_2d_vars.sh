@@ -42,19 +42,13 @@ CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
 PROGRESS_FREQ="1000"  # How often to print progress
 
 # Set variables to extract (2D variables only, no pressure dimension)
+# Add more as needed
 VARIABLES=(
   "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
 #   "mcs_ar_etc_overlap_mask"
 #   "etc_mcs_ar_overlap_mask"
 #   "ar_mcs_etc_overlap_mask"
 )
-
-# Additional variables you might want:
-# "ua850" "va850"  # 850 hPa winds (if available as 2D in catalog)
-# "ua500" "va500"  # 500 hPa winds
-# "zg500"          # 500 hPa geopotential height
-# "rh850"          # 850 hPa relative humidity
-# "uivt" "vivt"    # integrated vapor transport
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""
