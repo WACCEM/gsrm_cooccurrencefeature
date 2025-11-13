@@ -55,7 +55,7 @@ def parse_args():
                        help="Run in parallel (0: serial, 1: parallel)")
     parser.add_argument("--figdir", default="/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks/",
                        help="Output directory for figures")
-    parser.add_argument("--figsize", nargs=2, type=float, default=[12, 6.75],
+    parser.add_argument("--figsize", nargs=2, type=float, default=[12, 6],
                        help="Figure size (width height) in inches")
     parser.add_argument("--dpi", type=int, default=200,
                        help="DPI for output figures")

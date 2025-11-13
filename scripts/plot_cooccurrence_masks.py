@@ -41,6 +41,330 @@ from src.zarr_tools import setup_dask_client
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+def plot_features_with_cooccurrence(ds, title="", figsize=(12, 6), 
+                                   base_colors=None, base_alphas=None,
+                                   cooccur_colors=None, cooccur_alphas=None,
+                                   figname=None, dpi=200, 
+                                   title_fontsize=14, legend_fontsize=12, 
+                                   show_track_labels=True, track_fontsize=8):
+    """
+    Plot all 4 individual feature masks with co-occurring feature masks overlaid.
+    Thread-safe version matching plot_all_feature_masks() styling.
+    
+    Co-occurring masks are created by combining overlap masks:
+    - MCS-AR: union of mcs_ar_overlap_mask + ar_mcs_overlap_mask
+    - MCS-ETC: union of mcs_etc_overlap_mask + etc_mcs_overlap_mask
+    - AR-ETC: union of ar_etc_overlap_mask + etc_ar_overlap_mask
+    - MCS-AR-ETC: union of mcs_ar_etc_overlap_mask + ar_mcs_etc_overlap_mask + etc_mcs_ar_overlap_mask
+    
+    Parameters:
+    - ds: xarray Dataset containing the mask variables (assumes single time step)
+    - title: optional title for the plot
+    - figsize: figure size tuple
+    - base_colors: dict with colors for individual features {'mcs', 'ar', 'etc', 'tc'}
+    - base_alphas: dict with alpha values for individual features
+    - cooccur_colors: dict with colors for co-occurring features {'mcs_ar', 'mcs_etc', 'ar_etc', 'mcs_ar_etc'}
+    - cooccur_alphas: dict with alpha values for co-occurring features
+    - figname: if provided, save figure as PNG with this filename
+    - dpi: DPI for figure display and saving (default 200)
+    - title_fontsize: font size for the plot title (default 14)
+    - legend_fontsize: font size for the legend (default 12)
+    - show_track_labels: whether to show track ID labels for co-occurring MCS, ETC and AR features (default True)
+    - track_fontsize: font size for track labels (default 8)
+    
+    Returns:
+    - figname: filename of the saved figure (or None if not saved)
+    """
+    # Set default colors for individual features (match plot_all_feature_masks)
+    if base_colors is None:
+        base_colors = {
+            'mcs': 'lightskyblue',
+            'ar': 'darkorange', 
+            'etc': 'limegreen',
+            'tc': 'crimson'
+        }
+    
+    # Set default alphas for individual features (match plot_all_feature_masks)
+    if base_alphas is None:
+        # base_alphas = {
+        #     'mcs': 0.8,
+        #     'ar': 0.5,
+        #     'etc': 0.3,
+        #     'tc': 0.6
+        # }
+        # Reduced by half to make co-occurring features stand out more
+        base_alphas = {
+            'mcs': 0.4,
+            'ar': 0.25,
+            'etc': 0.15,
+            'tc': 0.3
+        }
+    
+    # Set default colors for co-occurring features (blend individual colors)
+    if cooccur_colors is None:
+        cooccur_colors = {
+            'mcs_ar': '#FF7F50',        # Coral (blend of blue + orange)
+            'mcs_etc': '#40E0D0',       # Turquoise (blend of blue + green)
+            'ar_etc': '#9ACD32',        # Yellow-green (blend of orange + green)
+            'mcs_ar_etc': '#C532C0'     # Dark purple (blend of all three)
+        }
+    
+    # Set default alphas for co-occurring features
+    if cooccur_alphas is None:
+        cooccur_alphas = {
+            'mcs_ar': 0.4,
+            'mcs_etc': 0.4,
+            'ar_etc': 0.4,
+            'mcs_ar_etc': 0.4
+        }
+    
+    # Create base map (match plot_all_feature_masks exactly)
+    projection = ccrs.Robinson(central_longitude=-135)
+    fig = plt.figure(figsize=figsize, dpi=dpi, facecolor='w')
+    ax = plt.subplot(111, projection=projection)
+    ax.set_global()
+    ax.add_feature(cf.COASTLINE, linewidth=0.8)
+    ax.add_feature(cf.BORDERS, linewidth=0.4)
+
+    # Gridlines
+    gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.xlabel_style = {"size": 10}
+    gl.ylabel_style = {"size": 10}
+
+    # Set title
+    plot_title = title if title else "Feature Masks with Co-occurrence"
+    ax.set_title(plot_title, fontsize=title_fontsize)
+    
+    # Extract individual masks (assuming single time step)
+    mcs_mask = ds['mcs_mask'].squeeze()
+    ar_mask = ds['ar_mask'].squeeze()
+    etc_mask = ds['etc_mask'].squeeze()
+    tc_mask = ds['tc_mask'].squeeze()
+    
+    # Convert individual masks to binary
+    mcs_binary = xr.where(mcs_mask > 0, 1, 0)
+    ar_binary = xr.where(ar_mask > 0, 1, 0)
+    etc_binary = xr.where(etc_mask > 0, 1, 0)
+    tc_binary = xr.where(tc_mask > 0, 1, 0)
+    
+    # ===== PLOT INDIVIDUAL FEATURES (BASE LAYER) =====
+    if np.any(mcs_binary > 0):
+        egh.healpix_show(
+            mcs_binary.where(mcs_binary > 0), 
+            ax=ax, 
+            cmap=mpl.colors.ListedColormap([base_colors['mcs']]), 
+            alpha=base_alphas['mcs'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    if np.any(ar_binary > 0):
+        egh.healpix_show(
+            ar_binary.where(ar_binary > 0), 
+            ax=ax, 
+            cmap=mpl.colors.ListedColormap([base_colors['ar']]), 
+            alpha=base_alphas['ar'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    if np.any(etc_binary > 0):
+        egh.healpix_show(
+            etc_binary.where(etc_binary > 0), 
+            ax=ax, 
+            cmap=mpl.colors.ListedColormap([base_colors['etc']]), 
+            alpha=base_alphas['etc'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    if np.any(tc_binary > 0):
+        egh.healpix_show(
+            tc_binary.where(tc_binary > 0), 
+            ax=ax, 
+            cmap=mpl.colors.ListedColormap([base_colors['tc']]), 
+            alpha=base_alphas['tc'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    # ===== CREATE AND PLOT CO-OCCURRING FEATURE MASKS =====
+    
+    # 1. MCS-AR 2-way
+    mcs_ar_union = xr.where(
+        (ds['mcs_ar_overlap_mask'].squeeze() > 0) | (ds['ar_mcs_overlap_mask'].squeeze() > 0),
+        1, 0
+    )
+    if np.any(mcs_ar_union > 0):
+        egh.healpix_show(
+            mcs_ar_union.where(mcs_ar_union > 0),
+            ax=ax,
+            cmap=mpl.colors.ListedColormap([cooccur_colors['mcs_ar']]),
+            alpha=cooccur_alphas['mcs_ar'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    # 2. MCS-ETC 2-way
+    mcs_etc_union = xr.where(
+        (ds['mcs_etc_overlap_mask'].squeeze() > 0) | (ds['etc_mcs_overlap_mask'].squeeze() > 0),
+        1, 0
+    )
+    if np.any(mcs_etc_union > 0):
+        egh.healpix_show(
+            mcs_etc_union.where(mcs_etc_union > 0),
+            ax=ax,
+            cmap=mpl.colors.ListedColormap([cooccur_colors['mcs_etc']]),
+            alpha=cooccur_alphas['mcs_etc'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    # 3. AR-ETC 2-way
+    ar_etc_union = xr.where(
+        (ds['ar_etc_overlap_mask'].squeeze() > 0) | (ds['etc_ar_overlap_mask'].squeeze() > 0),
+        1, 0
+    )
+    if np.any(ar_etc_union > 0):
+        egh.healpix_show(
+            ar_etc_union.where(ar_etc_union > 0),
+            ax=ax,
+            cmap=mpl.colors.ListedColormap([cooccur_colors['ar_etc']]),
+            alpha=cooccur_alphas['ar_etc'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    # 4. MCS-AR-ETC 3-way
+    mcs_ar_etc_union = xr.where(
+        (ds['mcs_ar_etc_overlap_mask'].squeeze() > 0) | 
+        (ds['ar_mcs_etc_overlap_mask'].squeeze() > 0) | 
+        (ds['etc_mcs_ar_overlap_mask'].squeeze() > 0),
+        1, 0
+    )
+    if np.any(mcs_ar_etc_union > 0):
+        egh.healpix_show(
+            mcs_ar_etc_union.where(mcs_ar_etc_union > 0),
+            ax=ax,
+            cmap=mpl.colors.ListedColormap([cooccur_colors['mcs_ar_etc']]),
+            alpha=cooccur_alphas['mcs_ar_etc'],
+            vmin=0.5, vmax=1.5
+        )
+    
+    # ===== ADD TRACK LABELS (only for co-occurring features) =====
+    if show_track_labels:
+        # Helper function for circular longitude averaging
+        def circular_lon_mean(lon_values):
+            """Calculate circular mean for longitude values to handle dateline crossing."""
+            lon_rad = np.deg2rad(lon_values)
+            mean_complex = np.mean(np.exp(1j * lon_rad))
+            mean_lon = np.rad2deg(np.angle(mean_complex))
+            if mean_lon < 0:
+                mean_lon += 360
+            return mean_lon
+        
+        # Create a combined co-occurring mask (any co-occurrence)
+        any_cooccur = xr.where(
+            (mcs_ar_union > 0) | (mcs_etc_union > 0) | (ar_etc_union > 0) | (mcs_ar_etc_union > 0),
+            1, 0
+        )
+        
+        # Add MCS track labels (blue) - smaller font
+        mcs_tracks = np.unique(mcs_mask.values[mcs_mask.values > 0])
+        mcs_fontsize = max(6, track_fontsize - 3)
+        for track_id in mcs_tracks:
+            track_pixels = (mcs_mask == track_id)
+            cooccur_pixels = track_pixels & (any_cooccur > 0)
+            if cooccur_pixels.any():
+                lon_values = ds.lon.where(cooccur_pixels).values
+                lat_values = ds.lat.where(cooccur_pixels).values
+                valid_mask = ~np.isnan(lon_values) & ~np.isnan(lat_values)
+                if np.any(valid_mask):
+                    lon_clean = lon_values[valid_mask]
+                    lat_clean = lat_values[valid_mask]
+                    avg_lon = circular_lon_mean(lon_clean)
+                    avg_lat = np.mean(lat_clean)
+                    ax.text(avg_lon, avg_lat, str(int(track_id)), 
+                           transform=ccrs.PlateCarree(),
+                           fontsize=mcs_fontsize, fontweight='regular', 
+                           color='darkblue', ha='center', va='center')
+        
+        # Add ETC track labels (green)
+        etc_tracks = np.unique(etc_mask.values[etc_mask.values > 0])
+        for track_id in etc_tracks:
+            track_pixels = (etc_mask == track_id)
+            cooccur_pixels = track_pixels & (any_cooccur > 0)
+            if cooccur_pixels.any():
+                lon_values = ds.lon.where(cooccur_pixels).values
+                lat_values = ds.lat.where(cooccur_pixels).values
+                valid_mask = ~np.isnan(lon_values) & ~np.isnan(lat_values)
+                if np.any(valid_mask):
+                    lon_clean = lon_values[valid_mask]
+                    lat_clean = lat_values[valid_mask]
+                    avg_lon = circular_lon_mean(lon_clean)
+                    avg_lat = np.mean(lat_clean)
+                    ax.text(avg_lon, avg_lat, str(int(track_id)), 
+                           transform=ccrs.PlateCarree(),
+                           fontsize=track_fontsize, fontweight='bold', 
+                           color='green', ha='center', va='center')
+        
+        # Add AR track labels (darkorange)
+        ar_tracks = np.unique(ar_mask.values[ar_mask.values > 0])
+        for track_id in ar_tracks:
+            track_pixels = (ar_mask == track_id)
+            cooccur_pixels = track_pixels & (any_cooccur > 0)
+            if cooccur_pixels.any():
+                lon_values = ds.lon.where(cooccur_pixels).values
+                lat_values = ds.lat.where(cooccur_pixels).values
+                valid_mask = ~np.isnan(lon_values) & ~np.isnan(lat_values)
+                if np.any(valid_mask):
+                    lon_clean = lon_values[valid_mask]
+                    lat_clean = lat_values[valid_mask]
+                    avg_lon = circular_lon_mean(lon_clean)
+                    avg_lat = np.mean(lat_clean)
+                    ax.text(avg_lon, avg_lat, str(int(track_id)), 
+                           transform=ccrs.PlateCarree(),
+                           fontsize=track_fontsize, fontweight='bold', 
+                           color='darkorange', ha='center', va='center')
+    
+    # ===== ADD LEGENDS =====
+    # Individual features legend (upper right)
+    legend_base = [
+        Patch(facecolor=base_colors['mcs'], alpha=base_alphas['mcs'], label='MCS'),
+        Patch(facecolor=base_colors['ar'], alpha=base_alphas['ar'], label='AR'),
+        Patch(facecolor=base_colors['etc'], alpha=base_alphas['etc'], label='ETC'),
+        Patch(facecolor=base_colors['tc'], alpha=base_alphas['tc'], label='TC')
+    ]
+    
+    # Co-occurring features legend (upper left)
+    legend_cooccur = [
+        Patch(facecolor=cooccur_colors['mcs_ar'], alpha=cooccur_alphas['mcs_ar'], label='MCS-AR'),
+        Patch(facecolor=cooccur_colors['mcs_etc'], alpha=cooccur_alphas['mcs_etc'], label='MCS-ETC'),
+        Patch(facecolor=cooccur_colors['ar_etc'], alpha=cooccur_alphas['ar_etc'], label='AR-ETC'),
+        Patch(facecolor=cooccur_colors['mcs_ar_etc'], alpha=cooccur_alphas['mcs_ar_etc'], label='MCS-AR-ETC')
+    ]
+    
+    # Position legends in white space from Robinson projection
+    leg1 = fig.legend(handles=legend_base, 
+                      bbox_to_anchor=(0.9, 0.93), 
+                      loc='upper right',
+                      bbox_transform=fig.transFigure,
+                      fontsize=legend_fontsize, 
+                      framealpha=0.9, fancybox=True, shadow=True)
+    
+    fig.add_artist(leg1)
+    fig.legend(handles=legend_cooccur, 
+               bbox_to_anchor=(0.1, 0.93), 
+               loc='upper left',
+               bbox_transform=fig.transFigure,
+               fontsize=legend_fontsize, 
+               framealpha=0.9, fancybox=True, shadow=True)
+    
+    # Thread-safe figure output
+    if figname is not None:
+        canvas = FigureCanvas(fig)
+        canvas.print_png(figname)
+        fig.savefig(figname, dpi=dpi, bbox_inches='tight')
+        print(f"Figure saved as {figname}")
+    
+    plt.close(fig)
+    return figname
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -64,6 +388,8 @@ def parse_args():
                        help="Number of Dask workers for parallel processing")
     parser.add_argument("--plot-freq", type=str, default=None,
                        help="Override time frequency for plotting (e.g., '1H', '3H', '6H')")
+    parser.add_argument("--plot-type", type=str, default="6panel", choices=["1panel", "6panel"],
+                       help="Plot type: '1panel' (single panel with co-occurrence) or '6panel' (6-panel horizontal)")
     
     return parser.parse_args()
 
@@ -449,7 +775,7 @@ def plot_6panel_horizontal(ds, figsize=(20, 8), figname=None, dpi=200, suptitle=
     return figname
 
 
-def process_single_time(data_path, time_step_str, source_name, figdir, figsize, dpi):
+def process_single_time(data_path, time_step_str, source_name, figdir, figsize, dpi, plot_type="6panel"):
     """
     Process a single time step and create the plot.
     This function is designed to work with Dask delayed execution.
@@ -462,6 +788,7 @@ def process_single_time(data_path, time_step_str, source_name, figdir, figsize, 
     - figdir: output directory for figures
     - figsize: figure size tuple
     - dpi: output DPI
+    - plot_type: '1panel' or '6panel' (default: '6panel')
     
     Returns:
     - success: int (1 for success, 0 for failure)
@@ -482,39 +809,29 @@ def process_single_time(data_path, time_step_str, source_name, figdir, figsize, 
         # Format time for title and filename
         time_label = _time.dt.strftime('%Y-%m-%d %H:%M UTC').item()
         time_str = _time.dt.strftime('%Y%m%d_%H%M').item()
-        # title_with_time = f"{source_name.upper()} {time_label}"
         title_with_time = f"Co-occurring Features {time_label} ({source_name.upper()})"
-        figname = f'{figdir}{source_name}_cofmasks_{time_str}.png'
         
-        # # Set up consistent styling
-        # custom_colors = {
-        #     'mcs': 'lightskyblue',
-        #     'ar': 'darkorange', 
-        #     'etc': 'limegreen',
-        #     'tc': 'crimson'
-        # }
-
-        # custom_alphas = {
-        #     'mcs': 0.8,    
-        #     'ar': 0.5,     
-        #     'etc': 0.3,    
-        #     'tc': 0.6      
-        # }
-        
-        # Create plot
-        _figname = plot_6panel_horizontal(
-            _ds, 
-            suptitle=title_with_time, 
-            figsize=figsize,
-            # colors=custom_colors,
-            # alphas=custom_alphas,
-            # title_fontsize=18,
-            # legend_fontsize=12,
-            figname=figname,
-            dpi=dpi,
-            # show_track_labels=True,
-            # track_fontsize=8,
-        )
+        # Choose plotting function and filename based on plot_type
+        if plot_type == "1panel":
+            figname = f'{figdir}{source_name}_cofmasks_1panel_{time_str}.png'
+            _figname = plot_features_with_cooccurrence(
+                _ds, 
+                title=title_with_time, 
+                figsize=figsize,
+                figname=figname,
+                dpi=dpi,
+                show_track_labels=True,
+                track_fontsize=8,
+            )
+        else:  # 6panel
+            figname = f'{figdir}{source_name}_cofmasks_6panel_{time_str}.png'
+            _figname = plot_6panel_horizontal(
+                _ds, 
+                suptitle=title_with_time, 
+                figsize=figsize,
+                figname=figname,
+                dpi=dpi,
+            )
         
         return 1
         
@@ -541,6 +858,7 @@ def main():
     figsize = tuple(args.figsize)
     dpi = args.dpi
     n_workers = args.workers
+    plot_type = args.plot_type
     
     # Create output directory
     os.makedirs(figdir, exist_ok=True)
@@ -550,6 +868,7 @@ def main():
     in_dir = f"{root_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     
     print(f"Loading data from: {in_dir}")
+    print(f"Plot type: {plot_type}")
     
     # Load dataset only to get time information and validate
     try:
@@ -606,7 +925,7 @@ def main():
         success_count = 0
         for i, time_step in enumerate(time_range):
             tm_str = time_step.strftime('%Y-%m-%dT%H')
-            result = process_single_time(in_dir, tm_str, source_name, figdir, figsize, dpi)
+            result = process_single_time(in_dir, tm_str, source_name, figdir, figsize, dpi, plot_type)
             success_count += result
             
             # Progress update
@@ -645,7 +964,7 @@ def main():
                     tm_str = time_step.strftime('%Y-%m-%dT%H')
                     future = client.submit(
                         process_single_time, 
-                        in_dir, tm_str, source_name, figdir, figsize, dpi
+                        in_dir, tm_str, source_name, figdir, figsize, dpi, plot_type
                     )
                     futures.append(future)
                 

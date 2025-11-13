@@ -17,16 +17,19 @@ import tempfile
 # Choose feature type: "all" or "cof"
 feature_type = "cof"  # Change this to "all" or "cof"
 
+# For "cof" type, choose plot style: "1panel" or "6panel"
+cof_plot_type = "1panel"  # Only used when feature_type="cof"
+
 # Script parameters
 source_name = "scream"
 # source_name = "IMERGv7"
 
-# start_date = "2019-11-24T00"
-# end_date = "2019-11-30T23"
-# start_date = "2020-05-01T00"
-# end_date = "2020-05-31T23"
-start_date = "2019-08-03T00"
-end_date = "2019-08-31T23"
+# start_date = "2020-02-25T00"
+# end_date = "2020-03-01T23"
+start_date = "2020-05-01T00"
+end_date = "2020-05-31T23"
+# start_date = "2019-08-03T00"
+# end_date = "2019-08-31T23"
 
 parallel_mode = 1
 n_workers = 32
@@ -55,11 +58,16 @@ if feature_type == "all":
     fig_height = 8
 elif feature_type == "cof":
     # Co-occurrence masks configuration
-    fig_basename = "cofmasks"
+    if cof_plot_type == "1panel":
+        fig_basename = "cofmasks_1panel"
+        fig_width = 12
+        fig_height = 6
+    else:  # 6panel
+        fig_basename = "cofmasks_6panel"
+        fig_width = 20
+        fig_height = 8
     figdir = f"/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks_cof/{source_name}/"
     plotting_code = "plot_cooccurrence_masks.py"
-    fig_width = 20
-    fig_height = 8
 
 # Animation parameters
 animation_dir = "/global/cfs/cdirs/m1867/zfeng/hk25/animations/"
@@ -104,6 +112,11 @@ if run_plotting:
         print(f"Using custom plot frequency: {plot_freq}")
     else:
         print("Using auto-calculated plot frequency from dataset")
+    
+    # Add plot type for co-occurrence plots
+    if feature_type == "cof":
+        cmd.extend(['--plot-type', cof_plot_type])
+        print(f"Co-occurrence plot type: {cof_plot_type}")
 
     print(f"Command: {' '.join(cmd)}")
     result = subprocess.run(cmd)
