@@ -9,7 +9,7 @@
 #   2. Activate Python environment:
 #      source activate /global/common/software/m1867/python/hackathon
 #   3. Run this script:
-#      bash run_extract_etc_2d_vars.sh
+#      bash run_extract_etc_vars_SCREAM.sh
 #
 # Benefits of interactive mode:
 #   - Real-time output monitoring
@@ -29,7 +29,8 @@ mkdir -p $OUTPUT_DIR
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 CURRENT_LOCATION="NERSC"
-CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for instantaneous variables
+# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
+CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
 CATALOG_PARAMS='{"zoom": 8}'
 
 # Extraction parameters
@@ -41,14 +42,32 @@ LAT_RES="0.25"  # Latitude resolution in degrees
 CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
 PROGRESS_FREQ="1000"  # How often to print progress
 
-# Set variables to extract (2D variables only, no pressure dimension)
-# Add more as needed
+# ===== VARIABLE CONFIGURATION =====
+# 
+# 2D VARIABLES (no pressure dimension):
+#   pr, psl, ua850, va850, ua500, va500, rh850, uivt, vivt, zg500
+#   mcs_ar_etc_overlap_mask, etc_mcs_ar_overlap_mask, ar_mcs_etc_overlap_mask
+#
+# 3D VARIABLES (require --pressure_levels):
+#   ua, va, omega, hus (specific humidity)
+#   Note: For 3D variables, specify pressure levels below
+#
+# Set variables to extract
 VARIABLES=(
-  "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
-#   "mcs_ar_etc_overlap_mask"
-#   "etc_mcs_ar_overlap_mask"
-#   "ar_mcs_etc_overlap_mask"
+    "ua" "va" "omega"
+    "hus"  # Example 3D variable - requires PRESSURE_LEVELS
+#   "pr"  # Example 2D variable
+#   "psl" "uivt" "vivt" "zg500"  # More 2D variables
+#   "va" "omega" "hus"  # More 3D variables (need PRESSURE_LEVELS)
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
+
+# 3D variable options (for pressure level data)
+# Leave empty for 2D variables
+# For single level: PRESSURE_LEVELS="850"
+# For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
+PRESSURE_LEVELS="850"  # Pressure levels in hPa
+# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""
@@ -102,6 +121,12 @@ fi
 OPTIONAL_PARAMS="$OPTIONAL_PARAMS --radius $RADIUS --lon_res $LON_RES --lat_res $LAT_RES"
 OPTIONAL_PARAMS="$OPTIONAL_PARAMS --chunk_size $CHUNK_SIZE --progress_freq $PROGRESS_FREQ"
 
+# Add pressure levels if specified (for 3D variables)
+if [ -n "$PRESSURE_LEVELS" ]; then
+    OPTIONAL_PARAMS="$OPTIONAL_PARAMS --pressure_levels $PRESSURE_LEVELS"
+    echo "Pressure levels: $PRESSURE_LEVELS hPa"
+fi
+
 # Add storm ID filtering if specified (for testing)
 if [ -n "$STORM_IDS" ]; then
     OPTIONAL_PARAMS="$OPTIONAL_PARAMS --storm_ids $STORM_IDS"
@@ -121,6 +146,9 @@ echo "  Spatial bounds: [$MIN_LON, $MAX_LON] × [$MIN_LAT, $MAX_LAT]"
 echo "  Extraction radius: ${RADIUS}°"
 echo "  Grid resolution: ${LON_RES}° × ${LAT_RES}°"
 echo "  Variables: ${VARIABLES[@]}"
+if [ -n "$PRESSURE_LEVELS" ]; then
+    echo "  Pressure levels: $PRESSURE_LEVELS hPa (for 3D variables)"
+fi
 echo "================================================"
 
 # ===== RUN EXTRACTION =====

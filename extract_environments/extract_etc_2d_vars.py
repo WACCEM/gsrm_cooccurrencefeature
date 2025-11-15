@@ -63,6 +63,144 @@ def parse_pressure_levels(pressure_str):
         return [850, 500, 300]  # Default pressure levels
 
 
+def detect_pressure_units(pressure_coord):
+    """
+    Detect whether pressure coordinates are in Pascals or hectopascals.
+    
+    Parameters:
+    -----------
+    pressure_coord : xarray.DataArray
+        Pressure coordinate from dataset
+    
+    Returns:
+    --------
+    str : 'Pa' or 'hPa'
+    
+    Notes:
+    ------
+    Heuristic: If the median pressure value is > 2000, assume Pascals (typical range: 100000-10000 Pa)
+               If the median pressure value is < 2000, assume hectopascals (typical range: 1000-100 hPa)
+    """
+    median_pressure = float(np.median(pressure_coord.values))
+    
+    if median_pressure > 2000:
+        units = 'Pa'
+        print(f"  Detected pressure units: Pascals (median value: {median_pressure:.1f} Pa)")
+    else:
+        units = 'hPa'
+        print(f"  Detected pressure units: hectopascals (median value: {median_pressure:.1f} hPa)")
+    
+    sys.stdout.flush()
+    return units
+
+
+def normalize_pressure_levels(pressure_levels_hPa, dataset_pressure_coord):
+    """
+    Convert user-specified pressure levels (always in hPa) to match dataset units.
+    
+    Parameters:
+    -----------
+    pressure_levels_hPa : list
+        Pressure levels specified by user in hPa (e.g., [850, 500, 300])
+    dataset_pressure_coord : xarray.DataArray
+        Pressure coordinate from the dataset
+    
+    Returns:
+    --------
+    tuple : (pressure_levels_dataset, units)
+        pressure_levels_dataset : list - Pressure levels in dataset units
+        units : str - Units detected ('Pa' or 'hPa')
+    """
+    units = detect_pressure_units(dataset_pressure_coord)
+    
+    if units == 'Pa':
+        pressure_levels_dataset = [p * 100 for p in pressure_levels_hPa]
+        print(f"  Converting pressure levels from hPa to Pa: {pressure_levels_hPa} hPa → {pressure_levels_dataset} Pa")
+    else:
+        pressure_levels_dataset = pressure_levels_hPa
+        print(f"  Pressure levels: {pressure_levels_hPa} hPa (no conversion needed)")
+    
+    sys.stdout.flush()
+    return pressure_levels_dataset, units
+
+
+def apply_model_fixes(ds, model_name):
+    """
+    Apply model-specific fixes for dimension and variable names.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Input dataset
+    model_name : str
+        Model name (e.g., 'ifs', 'scream', 'nicam', 'icon', 'um')
+    
+    Returns:
+    --------
+    xarray.Dataset
+        Fixed dataset with standardized names
+    """
+    print(f"\nApplying model-specific fixes for: {model_name}")
+    sys.stdout.flush()
+    
+    # ===== FIX FOR IFS MODEL =====
+    # IFS uses 'value' and 'cell' dimensions instead of standard names
+    if 'value' in ds.dims and 'cell' in ds.dims:
+        print("  Detected IFS model format (value/cell dimensions)")
+        sys.stdout.flush()
+        
+        # Rename dimensions
+        ds = ds.rename({'value': 'time', 'cell': 'ncells'})
+        print("  Renamed: 'value' → 'time', 'cell' → 'ncells'")
+        
+        # IFS may have different variable names
+        # var_rename_map = {}
+
+        var_name_mapping = {
+            't': 'ta',      # temperature
+            'tcwv': 'prw',      # total column water vapor
+            'w': 'omega',      # vertical velocity
+            'q': 'hus',    # specific humidity
+            'r': 'hur',     # relative humidity
+            '2t': 'tas'  ,   # 2m temperature
+            'sp': 'ps',     # surface pressure
+            '10u': 'uas',   # 10m eastward wind
+            '10v': 'vas',   # 10m northward wind
+            '2d': 'tdas'    # 2m dew point temperature
+        }
+        
+        vars_to_rename = {}
+        for old_name, new_name in var_name_mapping.items():
+            if old_name in ds.data_vars or old_name in ds.coords:
+                vars_to_rename[old_name] = new_name
+        
+        if vars_to_rename:
+            ds = ds.rename(vars_to_rename)
+            print(f"  Renamed variables: {vars_to_rename}")
+        
+        sys.stdout.flush()
+    
+    # ===== FIX FOR PRESSURE DIMENSION NAMES =====
+    # Standardize pressure dimension to 'pressure'
+    if 'lev' in ds.dims:
+        ds = ds.rename({'lev': 'pressure'})
+        print("  Renamed dimension: 'lev' → 'pressure'")
+        sys.stdout.flush()
+    
+    # Some models use 'level' instead of 'pressure'
+    if 'level' in ds.dims:
+        ds = ds.rename({'level': 'pressure'})
+        print("  Renamed dimension: 'level' → 'pressure'")
+        ds = ds.assign_coords(pressure=('pressure', ds.lev.values))
+        ds = ds.drop_vars('lev')
+        # Check if pressure coordinate needs to be created from level indices
+        # if 'pressure' not in ds.coords or not hasattr(ds['pressure'], 'units'):
+        #     print("  WARNING: 'level' dimension found but no proper pressure coordinate")
+        
+        sys.stdout.flush()
+    
+    return ds
+
 def parse_etc_track_file(file_path, unstructured_mesh=True):
     """
     Parse ETC track data from text file.
@@ -698,6 +836,14 @@ def main():
     parser.add_argument('--progress_freq', type=int, default=1000,
                         help='How often to print progress (default: 1000)')
     
+    # 3D variable options
+    parser.add_argument('--pressure_levels', default=None, 
+                        help='Comma-separated list of pressure levels in hPa (e.g., "850,500,300")')
+    
+    # Pre-computed variable options
+    parser.add_argument('--precomputed_dir', default=None,
+                        help='Directory containing pre-computed variables')
+    
     args = parser.parse_args()
     
     # Start timing
@@ -729,6 +875,13 @@ def main():
         print(f"Testing mode: Processing only storm IDs: {storm_ids_filter}")
         sys.stdout.flush()
     
+    # Parse pressure levels if provided
+    pressure_levels = None
+    if args.pressure_levels:
+        pressure_levels = parse_pressure_levels(args.pressure_levels)
+        print(f"Using pressure levels: {pressure_levels} hPa")
+        sys.stdout.flush()
+    
     # Open catalog and get dataset
     if not args.cof_mask:
         print(f"Opening catalog from {args.catalog_url}")
@@ -741,6 +894,9 @@ def main():
             egh.attach_coords, signed_lon=True
         )
         ds = ds.assign_coords(time=convert_time(ds.time.values))
+
+        # Apply model-specific fixes
+        ds = apply_model_fixes(ds, args.catalog_model)
     else:
         # Read Co-occurrence Feature Mask
         cof_root_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
@@ -854,12 +1010,38 @@ def main():
         sys.stdout.flush()
         variable_data = ds[variable_name]
         
+        # Track pressure level info for output filename
+        pressure_suffix = ''
+        
         # Check if 3D variable (has pressure dimension)
         if 'pressure' in variable_data.dims:
-            print(f"WARNING: Variable '{variable_name}' has pressure dimension")
-            print(f"This script extracts 2D variables. Use appropriate pressure level selection.")
-            print(f"Skipping {variable_name}")
-            continue
+            if pressure_levels is None:
+                print(f"WARNING: Variable '{variable_name}' has pressure dimension but no pressure levels specified")
+                print(f"Use --pressure_levels to specify pressure levels (e.g., --pressure_levels 850,500,300)")
+                print(f"Skipping {variable_name}")
+                continue
+            
+            print(f"3D variable detected with pressure dimension")
+            print(f"Requested pressure levels: {pressure_levels} hPa")
+            
+            # Normalize pressure levels to match dataset units
+            pressure_levels_dataset, pressure_units = normalize_pressure_levels(
+                pressure_levels, variable_data.pressure
+            )
+
+            # Select and average specified pressure levels (using dataset units)
+            variable_data = variable_data.sel(
+                pressure=pressure_levels_dataset, method='nearest'
+            ).mean(dim='pressure')
+            
+            # Set pressure suffix for averaged data (always use hPa for filename)
+            if len(pressure_levels) == 1:
+                pressure_suffix = f"_{int(pressure_levels[0])}hPa"
+            else:
+                levels_str = '-'.join([str(int(p)) for p in pressure_levels])
+                pressure_suffix = f"_avg{levels_str}hPa"
+            
+            print(f"Averaged pressure levels, new shape: {variable_data.shape}")
         
         print(f"Variable shape: {variable_data.shape}")
         print(f"Variable dimensions: {variable_data.dims}")
@@ -886,12 +1068,12 @@ def main():
         if storm_ids_filter:
             output_path = os.path.join(
                 args.output_dir,
-                f"etc_2d_{variable_name}_track{storm_ids_filter[0]}"
+                f"etc_2d_{variable_name}{pressure_suffix}_track{storm_ids_filter[0]}"
             )
         else:
             output_path = os.path.join(
                 args.output_dir,
-                f"etc_2d_{variable_name}_{start_str}_{end_str}"
+                f"etc_2d_{variable_name}{pressure_suffix}_{start_str}_{end_str}"
             )
         
         zarr_path = save_to_zarr(

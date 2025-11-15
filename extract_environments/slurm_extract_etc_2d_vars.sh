@@ -65,14 +65,29 @@ LAT_RES="0.25"  # Latitude resolution in degrees
 CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
 PROGRESS_FREQ="1000"  # How often to print progress
 
-# Set variables to extract (2D variables only, no pressure dimension)
-# Add more as needed
+# ===== VARIABLE CONFIGURATION =====
+# 
+# 2D VARIABLES (no pressure dimension):
+#   pr, psl, ua850, va850, ua500, va500, rh850, uivt, vivt, zg500
+#   mcs_ar_etc_overlap_mask, etc_mcs_ar_overlap_mask, ar_mcs_etc_overlap_mask
+#
+# 3D VARIABLES (require --pressure_levels):
+#   ua, va, omega, hus (specific humidity)
+#   Note: For 3D variables, specify pressure levels below
+#
+# Set variables to extract
 VARIABLES=(
   "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
-#   "mcs_ar_etc_overlap_mask"
-#   "etc_mcs_ar_overlap_mask"
-#   "ar_mcs_etc_overlap_mask"
+#   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
+
+# 3D variable options (for pressure level data)
+# Leave empty for 2D variables
+# For single level: PRESSURE_LEVELS="850"
+# For multiple levels (will be averaged): PRESSURE_LEVELS="850,500,300"
+PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
+# PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
@@ -133,6 +148,12 @@ fi
 OPTIONAL_PARAMS="$OPTIONAL_PARAMS --radius $RADIUS --lon_res $LON_RES --lat_res $LAT_RES"
 OPTIONAL_PARAMS="$OPTIONAL_PARAMS --chunk_size $CHUNK_SIZE --progress_freq $PROGRESS_FREQ"
 
+# Add pressure levels if specified (for 3D variables)
+if [ -n "$PRESSURE_LEVELS" ]; then
+    OPTIONAL_PARAMS="$OPTIONAL_PARAMS --pressure_levels $PRESSURE_LEVELS"
+    echo "Pressure levels: $PRESSURE_LEVELS hPa"
+fi
+
 # Add storm ID filtering if specified (for testing)
 if [ -n "$STORM_IDS" ]; then
     OPTIONAL_PARAMS="$OPTIONAL_PARAMS --storm_ids $STORM_IDS"
@@ -152,6 +173,9 @@ echo "  Spatial bounds: [$MIN_LON, $MAX_LON] × [$MIN_LAT, $MAX_LAT]"
 echo "  Extraction radius: ${RADIUS}°"
 echo "  Grid resolution: ${LON_RES}° × ${LAT_RES}°"
 echo "  Variable: $CURRENT_VAR"
+if [ -n "$PRESSURE_LEVELS" ]; then
+    echo "  Pressure levels: $PRESSURE_LEVELS hPa (for 3D variables)"
+fi
 echo "  Total variables in array: ${#VARIABLES[@]}"
 echo "  Concurrent tasks limit: 3"
 echo "================================================"
