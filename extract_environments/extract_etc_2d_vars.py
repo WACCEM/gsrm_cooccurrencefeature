@@ -212,7 +212,8 @@ def extract_etc_2d_variable(
     lon_res=0.25,
     lat_res=0.25,
     progress_freq=1000,
-    variable_name='var'
+    variable_name='var',
+    unstructured_mesh=True
 ):
     """
     Extract 2D variable for all ETC storm positions using batched time-slice loading.
@@ -327,9 +328,22 @@ def extract_etc_2d_variable(
                 storm_lon = row['lon']
                 storm_lat = row['lat']
                 
+                # For structured mesh (ERA5), snap storm center to nearest HEALPix cell
+                # This ensures we use actual HEALPix grid points rather than interpolating
+                if not unstructured_mesh:
+                    # Find nearest HEALPix cell to storm center
+                    center_pix = hp.ang2pix(nside, storm_lon, storm_lat, nest=True, lonlat=True)                    
+                    # Get the actual lat/lon of this HEALPix cell center
+                    storm_lon_hp, storm_lat_hp = hp.pix2ang(nside, center_pix, nest=True, lonlat=True)
+                    # Use HEALPix cell center for grid calculation
+                    lon_center = round(storm_lon_hp / lon_res) * lon_res
+                    lat_center = round(storm_lat_hp / lat_res) * lat_res
+                else:
+                    # For unstructured mesh, use storm position directly
+                    lon_center = round(storm_lon / lon_res) * lon_res
+                    lat_center = round(storm_lat / lat_res) * lat_res
+                
                 # Calculate grid for this storm
-                lon_center = round(storm_lon / lon_res) * lon_res
-                lat_center = round(storm_lat / lat_res) * lat_res
                 lon_grid = np.arange(lon_center - radius, lon_center + radius + lon_res, lon_res)
                 lat_grid = np.arange(lat_center - radius, lat_center + radius + lat_res, lat_res)
                 
@@ -430,7 +444,11 @@ def extract_etc_2d_variable(
                 # Store metadata
                 time_array[storm_idx] = storm_time
                 storm_ids[storm_idx] = row['storm_id']
-                grid_ids[storm_idx] = row['grid_id']
+                if unstructured_mesh:
+                    grid_ids[storm_idx] = row['grid_id']
+                else:
+                    # For structured mesh, store as tuple (lon_id, lat_id)
+                    grid_ids[storm_idx] = (row['lon_id'], row['lat_id'])
                 storm_lats[storm_idx] = row['lat']
                 storm_lons[storm_idx] = row['lon']
                 
@@ -439,7 +457,10 @@ def extract_etc_2d_variable(
                 # Metadata already initialized to None, will be filled with defaults
                 time_array[storm_idx] = storm_time
                 storm_ids[storm_idx] = row['storm_id']
-                grid_ids[storm_idx] = row['grid_id']
+                if unstructured_mesh:
+                    grid_ids[storm_idx] = row['grid_id']
+                else:
+                    grid_ids[storm_idx] = (row['lon_id'], row['lat_id'])
                 storm_lats[storm_idx] = row['lat']
                 storm_lons[storm_idx] = row['lon']
         
@@ -458,7 +479,7 @@ def extract_etc_2d_variable(
 
 def save_to_zarr(output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
                  x_coords, y_coords, variable_name, output_path, 
-                 radius, lon_res, lat_res, chunk_size=1000):
+                 radius, lon_res, lat_res, chunk_size=1000, unstructured_mesh=True):
     """
     Save extracted data to zarr format with proper chunking.
     
@@ -489,29 +510,46 @@ def save_to_zarr(output_array, time_array, storm_ids, grid_ids, storm_lats, stor
     sys.stdout.flush()
     
     # Create xarray Dataset
+    data_vars = {
+        variable_name: (['time', 'y', 'x'], output_array, {
+            'long_name': f'{variable_name}',
+            'description': 'Extracted around ETC storm center'
+        }),
+        'storm_id': (['time'], np.array(storm_ids), {
+            'long_name': 'Storm ID',
+            'description': 'ETC storm identifier'
+        }),
+        'storm_lat': (['time'], np.array(storm_lats), {
+            'long_name': 'Storm Center Latitude',
+            'units': 'degrees_north'
+        }),
+        'storm_lon': (['time'], np.array(storm_lons), {
+            'long_name': 'Storm Center Longitude',
+            'units': 'degrees_east'
+        })
+    }
+    
+    # Add grid identifiers based on mesh type
+    if unstructured_mesh:
+        data_vars['grid_id'] = (['time'], np.array(grid_ids), {
+            'long_name': 'HEALPix Grid ID',
+            'description': 'HEALPix cell index at storm center'
+        })
+    else:
+        # For structured mesh, extract lon_id and lat_id from tuples
+        lon_ids = [gid[0] for gid in grid_ids]
+        lat_ids = [gid[1] for gid in grid_ids]
+        data_vars['lon_id'] = (['time'], np.array(lon_ids), {
+            'long_name': 'Longitude Grid Index',
+            'description': 'Longitude grid index at storm center'
+        })
+        data_vars['lat_id'] = (['time'], np.array(lat_ids), {
+            'long_name': 'Latitude Grid Index',
+            'description': 'Latitude grid index at storm center'
+        })
+    
     ds = xr.Dataset(
-        {
-            variable_name: (['time', 'y', 'x'], output_array, {
-                'long_name': f'{variable_name}',
-                'description': 'Extracted around ETC storm center'
-            }),
-            'storm_id': (['time'], np.array(storm_ids), {
-                'long_name': 'Storm ID',
-                'description': 'ETC storm identifier'
-            }),
-            'grid_id': (['time'], np.array(grid_ids), {
-                'long_name': 'HEALPix Grid ID',
-                'description': 'HEALPix cell index at storm center'
-            }),
-            'storm_lat': (['time'], np.array(storm_lats), {
-                'long_name': 'Storm Center Latitude',
-                'units': 'degrees_north'
-            }),
-            'storm_lon': (['time'], np.array(storm_lons), {
-                'long_name': 'Storm Center Longitude',
-                'units': 'degrees_east'
-            })
-        },
+        data_vars,
         coords={
             'time': np.array(time_array),
             'y': (['y'], y_coords, {
@@ -578,8 +616,8 @@ def main():
     parser.add_argument('--catalog_url', 
                         default="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
                         help='URL of the intake catalog')
-    parser.add_argument('--current_location', default="NERSC", 
-                        help='Current location in catalog')
+    parser.add_argument('--current_location', default=None, 
+                        help='Current location in catalog (default: None, opens catalog directly)')
     parser.add_argument('--catalog_model', required=True,  
                         help='Model name in the catalog')
     parser.add_argument('--catalog_params', default='{"zoom": 8}', 
@@ -628,6 +666,12 @@ def main():
     parser.add_argument('--precomputed_dir', default=None,
                         help='Directory containing pre-computed variables')
     
+    # Track file format options
+    parser.add_argument('--unstructured_mesh', action='store_true', default=True,
+                        help='Track file is on unstructured mesh (default: True for most models). Set to False for ERA5 lat/lon grid.')
+    parser.add_argument('--structured_mesh', dest='unstructured_mesh', action='store_false',
+                        help='Track file is on structured lat/lon grid (ERA5)')
+    
     args = parser.parse_args()
     
     # Start timing
@@ -670,22 +714,56 @@ def main():
     if not args.cof_mask:
         print(f"Opening catalog from {args.catalog_url}")
         sys.stdout.flush()
-        cat = intake.open_catalog(args.catalog_url)[args.current_location]
         
-        print(f"Loading dataset {args.catalog_model}...")
-        sys.stdout.flush()
-        ds = cat[args.catalog_model](**catalog_params).to_dask().pipe(
-            egh.attach_coords, signed_lon=True
-        )
-        ds = ds.assign_coords(time=convert_time(ds.time.values))
+        # Special case for ERA5 precipitation - use IMERG instead
+        if 'era5' in args.catalog_model.lower() and 'pr' in args.variables:
+            print(f"Special case detected: ERA5 model with 'pr' variable")
+            print(f"Loading IMERG V7 precipitation (NOT from catalog)")
+            
+            # Load IMERG data for precipitation
+            dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
+            in_basename = "IMERG_V7_"
+            time_res = "1H"
+            zoom = catalog_params.get('zoom', 8)
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
+            
+            print(f"  Reading: {in_zarr}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(in_zarr, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            # Rename precipitation variable to 'pr' for consistency
+            ds = ds.rename({'precipitation': 'pr'})
+            
+            print(f"  IMERG dataset loaded successfully")
+            print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+        else:
+            # Standard catalog loading for all other cases
+            if args.current_location is not None:
+                # Online catalog with current location
+                cat = intake.open_catalog(args.catalog_url)[args.current_location]
+            else:
+                # Local catalog
+                cat = intake.open_catalog(args.catalog_url)
+            
+            print(f"Loading dataset {args.catalog_model}...")
+            sys.stdout.flush()
+            ds = cat[args.catalog_model](**catalog_params).to_dask().pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
 
-        # Apply model-specific fixes
-        ds = apply_model_fixes(ds, args.catalog_model)
+            # Apply model-specific fixes
+            ds = apply_model_fixes(ds, args.catalog_model)
     else:
         # Read Co-occurrence Feature Mask
         cof_root_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
         if "scream" in args.catalog_model:
             source = "scream"
+        elif "era5" in args.catalog_model.lower():
+            source = "IMERGv7"
         else:
             source = args.catalog_model
         cof_dir = f"{cof_root_dir}{source}_cofmasks_hp8_v1.zarr"
@@ -707,9 +785,10 @@ def main():
     # LOAD ETC TRACK DATA ONCE (for all variables!)
     # =================================================================
     print(f"Loading ETC track data from {args.trackfile}")
+    print(f"Track file format: {'unstructured mesh' if args.unstructured_mesh else 'structured lat/lon grid'}")
     sys.stdout.flush()
-    
-    storm_df = parse_etc_track_file(args.trackfile, unstructured_mesh=True)
+
+    storm_df = parse_etc_track_file(args.trackfile, unstructured_mesh=args.unstructured_mesh)
     
     # Filter by storm IDs if provided (for testing)
     if storm_ids_filter:
@@ -813,20 +892,24 @@ def main():
                 pressure_levels, variable_data.pressure
             )
 
-            # Select and average specified pressure levels (using dataset units)
+            # Select specified pressure levels (using dataset units)
             variable_data = variable_data.sel(
                 pressure=pressure_levels_dataset, method='nearest'
-            ).mean(dim='pressure')
+            )
             
-            # Set pressure suffix for averaged data (always use hPa for filename)
+            # Average if multiple levels, otherwise just select single level
             if len(pressure_levels) == 1:
+                # Single level - just squeeze out the pressure dimension
+                variable_data = variable_data.squeeze('pressure', drop=True)
                 pressure_suffix = f"_{int(pressure_levels[0])}hPa"
+                print(f"Selected single pressure level, new shape: {variable_data.shape}")
             else:
+                # Multiple levels - average them
+                variable_data = variable_data.mean(dim='pressure', keep_attrs=True)
                 levels_str = '-'.join([str(int(p)) for p in pressure_levels])
                 pressure_suffix = f"_avg{levels_str}hPa"
-            
-            print(f"Averaged pressure levels, new shape: {variable_data.shape}")
-        
+                print(f"Averaged {len(pressure_levels)} pressure levels, new shape: {variable_data.shape}")
+
         print(f"Variable shape: {variable_data.shape}")
         print(f"Variable dimensions: {variable_data.dims}")
         sys.stdout.flush()
@@ -842,7 +925,8 @@ def main():
             lon_res=args.lon_res,
             lat_res=args.lat_res,
             progress_freq=args.progress_freq,
-            variable_name=variable_name
+            variable_name=variable_name,
+            unstructured_mesh=args.unstructured_mesh
         )
         
         # Save to zarr
@@ -863,7 +947,8 @@ def main():
         zarr_path = save_to_zarr(
             output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
             x_coords, y_coords, variable_name, output_path,
-            args.radius, args.lon_res, args.lat_res, args.chunk_size
+            args.radius, args.lon_res, args.lat_res, args.chunk_size,
+            unstructured_mesh=args.unstructured_mesh
         )
         
         # Print summary for this variable

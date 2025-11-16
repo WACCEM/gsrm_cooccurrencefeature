@@ -11,6 +11,7 @@ Key Features:
 - Vectorized overlap detection for efficiency
 - Processing of full time series datasets using streaming to minimize memory usage
 - Output in zarr format with proper coordinates and attributes
+- Output ETC statistics with overlap AR and MCS track IDs in CSV and Parquet formats
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """

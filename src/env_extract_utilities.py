@@ -162,17 +162,45 @@ def apply_model_fixes(ds, model_name):
     
     # ===== FIX FOR PRESSURE DIMENSION NAMES =====
     # Standardize pressure dimension to 'pressure'
-    if 'lev' in ds.dims:
-        ds = ds.rename({'lev': 'pressure'})
-        print("  Renamed dimension: 'lev' → 'pressure'")
-        sys.stdout.flush()
+    # Handle various naming conventions: lev, level, levels, plev, etc.
     
-    # Some models use 'level' instead of 'pressure'
-    if 'level' in ds.dims:
-        ds = ds.rename({'level': 'pressure'})
-        print("  Renamed dimension: 'level' → 'pressure'")
-        ds = ds.assign_coords(pressure=('pressure', ds.lev.values))
-        ds = ds.drop_vars('lev')
+    pressure_dim_candidates = ['lev', 'level', 'levels', 'plev', 'plevs', 'p_levs']
+    pressure_coord_candidates = ['lev', 'level', 'levels', 'plev', 'plevs', 'p_levs']
+    
+    # Find which dimension name is used
+    pressure_dim = None
+    for dim in pressure_dim_candidates:
+        if dim in ds.dims:
+            pressure_dim = dim
+            break
+    
+    if pressure_dim and pressure_dim != 'pressure':
+        # Find corresponding coordinate variable (may have different name than dimension)
+        pressure_coord = None
+        for coord in pressure_coord_candidates:
+            if coord in ds.coords or coord in ds.data_vars:
+                pressure_coord = coord
+                break
+        
+        # If no explicit coordinate found, the dimension itself is the coordinate
+        if pressure_coord is None:
+            pressure_coord = pressure_dim
+        
+        # Rename dimension
+        ds = ds.rename({pressure_dim: 'pressure'})
+        print(f"  Renamed dimension: '{pressure_dim}' → 'pressure'")
+        
+        # Handle coordinate variable if different from dimension
+        if pressure_coord != pressure_dim and pressure_coord in ds.coords:
+            # Coordinate exists with different name - assign it to 'pressure' dimension
+            ds = ds.assign_coords(pressure=('pressure', ds[pressure_coord].values))
+            ds = ds.drop_vars(pressure_coord)
+            print(f"  Assigned coordinate '{pressure_coord}' to 'pressure' dimension and dropped '{pressure_coord}'")
+        elif pressure_coord != 'pressure' and pressure_coord in ds.coords:
+            # Coordinate has same name as old dimension, just drop it if it still exists
+            if pressure_coord in ds.coords and pressure_coord != 'pressure':
+                ds = ds.drop_vars(pressure_coord)
+                print(f"  Dropped redundant coordinate '{pressure_coord}'")
         
         sys.stdout.flush()
     

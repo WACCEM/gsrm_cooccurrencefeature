@@ -5,18 +5,18 @@
 ##SBATCH -q shared
 ##SBATCH --mem=8G
 #SBATCH -t 00:15:00
-#SBATCH -J extract_scream
+#SBATCH -J scream
 #SBATCH -A m1867
-#SBATCH --array=0-9%3
+#SBATCH --array=0-9%10
 #SBATCH --output=logs/extract_etc_2d_var_%A_%a.log
 #SBATCH --mail-user=zhe.feng@pnnl.gov
 #SBATCH --mail-type=FAIL,END
 
 # ===== JOB ARRAY STRUCTURE (SHARED QUEUE) =====
 # This script uses SLURM job arrays on the SHARED queue
-# --array=0-9%3 means:
+# --array=0-9%10 means:
 #   - 10 tasks total (one per variable, indices 0-9)
-#   - %3 limits to 3 simultaneous tasks (prevents overwhelming remote server)
+#   - %10 limits to 10 simultaneous tasks (prevents overwhelming remote server)
 # --mem=8G:
 #   - Requests 8 GB memory per task (actual usage ~4-6 GB)
 #   - Shared queue charges only for resources used
@@ -53,17 +53,10 @@ mkdir -p $OUTPUT_DIR
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 CURRENT_LOCATION="NERSC"
-CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for instantaneous variables
+# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
+# CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
+CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for 2D hourly variables
 CATALOG_PARAMS='{"zoom": 8}'
-
-# Extraction parameters
-RADIUS="20.0"  # Extraction radius in degrees
-LON_RES="0.25"  # Longitude resolution in degrees
-LAT_RES="0.25"  # Latitude resolution in degrees
-
-# Processing options
-CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
-PROGRESS_FREQ="1000"  # How often to print progress
 
 # ===== VARIABLE CONFIGURATION =====
 # 
@@ -75,11 +68,15 @@ PROGRESS_FREQ="1000"  # How often to print progress
 #   ua, va, omega, hus (specific humidity)
 #   Note: For 3D variables, specify pressure levels below
 #
-# Set variables to extract
+# Set variables to extract (this corresponds to SLURM array indices)
+# E.g., for 4 variables, do: --array=0-3
 VARIABLES=(
-  "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
+    "pr"
+#   "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
 #   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
@@ -87,11 +84,20 @@ VARIABLES=(
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged): PRESSURE_LEVELS="850,500,300"
 PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
-# PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
+# PRESSURE_LEVELS="500"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
 # COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+
+# Extraction parameters
+RADIUS="20.0"  # Extraction radius in degrees
+LON_RES="0.25"  # Longitude resolution in degrees
+LAT_RES="0.25"  # Latitude resolution in degrees
+
+# Processing options
+CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
+PROGRESS_FREQ="1000"  # How often to print progress
 
 # Date filtering options (leave empty to process all tracks in the track file)
 START_DATE=""  # e.g., "2019-08-01" or leave empty for no filtering
