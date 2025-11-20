@@ -824,7 +824,7 @@ def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_
     Parameters:
     -----------
     _ds : xarray.Dataset
-        Single time step dataset containing time coordinate
+        Single time step dataset containing time coordinate and masks
     mcs_ar_pairs_2way : list
         List of (mcs_track, ar_track) tuples for 2-way overlaps
     ar_etc_pairs_2way : list
@@ -850,29 +850,52 @@ def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_
     etc_tracks_present = np.unique(etc_mask[etc_mask > 0]).astype(int)
     
     # Build dictionaries for quick lookup
-    # For each ETC, find which ARs it overlaps with
+    # For each ETC, find which ARs it overlaps with (2-way)
     etc_to_ar = {}  # {etc_id: [ar_ids]}
     for ar_id, etc_id in ar_etc_pairs_2way:
         if etc_id not in etc_to_ar:
             etc_to_ar[etc_id] = []
         etc_to_ar[etc_id].append(ar_id)
     
-    # For each ETC, find which MCS it overlaps with
+    # For each ETC, find which MCS it overlaps with (2-way)
     etc_to_mcs = {}  # {etc_id: [mcs_ids]}
     for mcs_id, etc_id in mcs_etc_pairs_2way:
         if etc_id not in etc_to_mcs:
             etc_to_mcs[etc_id] = []
         etc_to_mcs[etc_id].append(mcs_id)
     
-    # For 3-way overlaps, need to find which ARs and MCS overlap with each ETC
+    # For 3-way overlaps, find ACTUAL overlapping tracks by checking masks
     etc_to_ar_3way = {}  # {etc_id: [ar_ids]}
     etc_to_mcs_3way = {}  # {etc_id: [mcs_ids]}
     
-    for etc_id in etc_tracks_3way:
-        # Get all ARs in 3-way that overlap with this ETC
-        etc_to_ar_3way[etc_id] = list(ar_tracks_3way)
-        # Get all MCS in 3-way that overlap with this ETC
-        etc_to_mcs_3way[etc_id] = list(mcs_tracks_3way)
+    # Only process 3-way overlaps if there are any
+    if len(etc_tracks_3way) > 0:
+        mcs_mask = _ds.mcs_mask.values
+        ar_mask = _ds.ar_mask.values
+        
+        # For each ETC in 3-way, find which specific ARs and MCSs actually overlap with it
+        for etc_id in etc_tracks_3way:
+            # Get pixels where this ETC exists
+            etc_pixels = (etc_mask == etc_id)
+            
+            # Find which ARs overlap with this specific ETC
+            ar_overlaps_3way = []
+            for ar_id in ar_tracks_3way:
+                ar_pixels = (ar_mask == ar_id)
+                # Check if there's any spatial overlap
+                if np.any(etc_pixels & ar_pixels):
+                    ar_overlaps_3way.append(ar_id)
+            
+            # Find which MCS overlap with this specific ETC
+            mcs_overlaps_3way = []
+            for mcs_id in mcs_tracks_3way:
+                mcs_pixels = (mcs_mask == mcs_id)
+                # Check if there's any spatial overlap
+                if np.any(etc_pixels & mcs_pixels):
+                    mcs_overlaps_3way.append(mcs_id)
+            
+            etc_to_ar_3way[etc_id] = ar_overlaps_3way
+            etc_to_mcs_3way[etc_id] = mcs_overlaps_3way
     
     # Create records for each ETC track
     etc_records = []
@@ -912,7 +935,7 @@ def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_
             'ar_tracks': all_ar_overlaps if all_ar_overlaps else [],
             'mcs_tracks': all_mcs_overlaps if all_mcs_overlaps else []
         })
-    
+
     return etc_records
 
 
@@ -1254,7 +1277,7 @@ def main():
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     # Output co-occurrence feature masks path
-    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
+    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/test/"
     output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     # Output ETC statistics output path
     output_stats_path = f"{output_dir}/stats/"
