@@ -817,26 +817,37 @@ def save_etc_tracking_to_files(all_etc_records, etc_tracking_csv, etc_tracking_p
 
 
 def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_pairs_2way,
-                            mcs_tracks_3way, ar_tracks_3way, etc_tracks_3way):
+                            mcs_tracks_3way, ar_tracks_3way, etc_tracks_3way, 
+                            mcs_ar_pairs_all=None, ar_etc_pairs_all=None, mcs_etc_pairs_all=None):
     """
     Extract overlap information for all ETC tracks at this timestep.
+    
+    For 3-way overlaps, this correctly includes:
+    - MCS/AR that directly overlap with ETC
+    - MCS that overlap with AR that overlaps with ETC (transitive relationship)
     
     Parameters:
     -----------
     _ds : xarray.Dataset
         Single time step dataset containing time coordinate and masks
     mcs_ar_pairs_2way : list
-        List of (mcs_track, ar_track) tuples for 2-way overlaps
+        List of (mcs_track, ar_track) tuples for 2-way-only overlaps
     ar_etc_pairs_2way : list
-        List of (ar_track, etc_track) tuples for 2-way overlaps
+        List of (ar_track, etc_track) tuples for 2-way-only overlaps
     mcs_etc_pairs_2way : list
-        List of (mcs_track, etc_track) tuples for 2-way overlaps
+        List of (mcs_track, etc_track) tuples for 2-way-only overlaps
     mcs_tracks_3way : np.ndarray
         Array of MCS track IDs in 3-way overlaps
     ar_tracks_3way : np.ndarray
         Array of AR track IDs in 3-way overlaps
     etc_tracks_3way : np.ndarray
         Array of ETC track IDs in 3-way overlaps
+    mcs_ar_pairs_all : list, optional
+        ALL MCS-AR pairs (before filtering for 2-way vs 3-way)
+    ar_etc_pairs_all : list, optional
+        ALL AR-ETC pairs (before filtering for 2-way vs 3-way)
+    mcs_etc_pairs_all : list, optional
+        ALL MCS-ETC pairs (before filtering for 2-way vs 3-way)
         
     Returns:
     --------
@@ -849,61 +860,88 @@ def extract_etc_overlap_info(_ds, mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_
     etc_mask = _ds.etc_mask.values
     etc_tracks_present = np.unique(etc_mask[etc_mask > 0]).astype(int)
     
-    # Build dictionaries for quick lookup
+    # Build dictionaries for quick lookup - 2-way only
     # For each ETC, find which ARs it overlaps with (2-way)
-    etc_to_ar = {}  # {etc_id: [ar_ids]}
+    etc_to_ar_2way = {}  # {etc_id: [ar_ids]}
     for ar_id, etc_id in ar_etc_pairs_2way:
-        if etc_id not in etc_to_ar:
-            etc_to_ar[etc_id] = []
-        etc_to_ar[etc_id].append(ar_id)
+        if etc_id not in etc_to_ar_2way:
+            etc_to_ar_2way[etc_id] = []
+        etc_to_ar_2way[etc_id].append(ar_id)
     
     # For each ETC, find which MCS it overlaps with (2-way)
-    etc_to_mcs = {}  # {etc_id: [mcs_ids]}
+    etc_to_mcs_2way = {}  # {etc_id: [mcs_ids]}
     for mcs_id, etc_id in mcs_etc_pairs_2way:
-        if etc_id not in etc_to_mcs:
-            etc_to_mcs[etc_id] = []
-        etc_to_mcs[etc_id].append(mcs_id)
+        if etc_id not in etc_to_mcs_2way:
+            etc_to_mcs_2way[etc_id] = []
+        etc_to_mcs_2way[etc_id].append(mcs_id)
     
-    # For 3-way overlaps, find ACTUAL overlapping tracks by checking masks
+    # For 3-way overlaps, use the comprehensive track lists to find all connections
     etc_to_ar_3way = {}  # {etc_id: [ar_ids]}
     etc_to_mcs_3way = {}  # {etc_id: [mcs_ids]}
     
     # Only process 3-way overlaps if there are any
     if len(etc_tracks_3way) > 0:
-        mcs_mask = _ds.mcs_mask.values
-        ar_mask = _ds.ar_mask.values
+        # Build lookup dictionaries from ALL pairs
+        ar_to_mcs_all = {}  # {ar_id: [mcs_ids]} - from ALL pairs
+        mcs_to_ar_all = {}  # {mcs_id: [ar_ids]} - from ALL pairs
         
-        # For each ETC in 3-way, find which specific ARs and MCSs actually overlap with it
+        if mcs_ar_pairs_all:
+            for mcs_id, ar_id in mcs_ar_pairs_all:
+                if ar_id not in ar_to_mcs_all:
+                    ar_to_mcs_all[ar_id] = []
+                ar_to_mcs_all[ar_id].append(mcs_id)
+                
+                if mcs_id not in mcs_to_ar_all:
+                    mcs_to_ar_all[mcs_id] = []
+                mcs_to_ar_all[mcs_id].append(ar_id)
+        
+        etc_to_ar_all = {}  # {etc_id: [ar_ids]} - from ALL pairs
+        ar_to_etc_all = {}  # {ar_id: [etc_ids]} - from ALL pairs
+        
+        if ar_etc_pairs_all:
+            for ar_id, etc_id in ar_etc_pairs_all:
+                if etc_id not in etc_to_ar_all:
+                    etc_to_ar_all[etc_id] = []
+                etc_to_ar_all[etc_id].append(ar_id)
+                
+                if ar_id not in ar_to_etc_all:
+                    ar_to_etc_all[ar_id] = []
+                ar_to_etc_all[ar_id].append(etc_id)
+        
+        etc_to_mcs_all = {}  # {etc_id: [mcs_ids]} - from ALL pairs
+        if mcs_etc_pairs_all:
+            for mcs_id, etc_id in mcs_etc_pairs_all:
+                if etc_id not in etc_to_mcs_all:
+                    etc_to_mcs_all[etc_id] = []
+                etc_to_mcs_all[etc_id].append(mcs_id)
+        
+        # For each ETC in 3-way, find ALL ARs and MCSs that are part of this 3-way system
         for etc_id in etc_tracks_3way:
-            # Get pixels where this ETC exists
-            etc_pixels = (etc_mask == etc_id)
+            # Start with ARs that directly overlap with this ETC
+            ars_for_this_etc = set(etc_to_ar_all.get(etc_id, []))
             
-            # Find which ARs overlap with this specific ETC
-            ar_overlaps_3way = []
-            for ar_id in ar_tracks_3way:
-                ar_pixels = (ar_mask == ar_id)
-                # Check if there's any spatial overlap
-                if np.any(etc_pixels & ar_pixels):
-                    ar_overlaps_3way.append(ar_id)
+            # Start with MCS that directly overlap with this ETC
+            mcs_for_this_etc = set(etc_to_mcs_all.get(etc_id, []))
             
-            # Find which MCS overlap with this specific ETC
-            mcs_overlaps_3way = []
-            for mcs_id in mcs_tracks_3way:
-                mcs_pixels = (mcs_mask == mcs_id)
-                # Check if there's any spatial overlap
-                if np.any(etc_pixels & mcs_pixels):
-                    mcs_overlaps_3way.append(mcs_id)
+            # Add MCS that overlap with any AR that overlaps with this ETC
+            for ar_id in ars_for_this_etc:
+                mcs_connected_to_ar = ar_to_mcs_all.get(ar_id, [])
+                mcs_for_this_etc.update(mcs_connected_to_ar)
             
-            etc_to_ar_3way[etc_id] = ar_overlaps_3way
-            etc_to_mcs_3way[etc_id] = mcs_overlaps_3way
+            # Only keep tracks that are in the 3-way track lists
+            ars_for_this_etc = ars_for_this_etc.intersection(set(ar_tracks_3way))
+            mcs_for_this_etc = mcs_for_this_etc.intersection(set(mcs_tracks_3way))
+            
+            etc_to_ar_3way[etc_id] = sorted(list(ars_for_this_etc))
+            etc_to_mcs_3way[etc_id] = sorted(list(mcs_for_this_etc))
     
     # Create records for each ETC track
     etc_records = []
     
     for etc_id in etc_tracks_present:
         # Determine overlap flag and get overlap track lists
-        ar_overlaps_2way = etc_to_ar.get(etc_id, [])
-        mcs_overlaps_2way = etc_to_mcs.get(etc_id, [])
+        ar_overlaps_2way = etc_to_ar_2way.get(etc_id, [])
+        mcs_overlaps_2way = etc_to_mcs_2way.get(etc_id, [])
         ar_overlaps_3way = etc_to_ar_3way.get(etc_id, [])
         mcs_overlaps_3way = etc_to_mcs_3way.get(etc_id, [])
         
@@ -1187,7 +1225,10 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         mcs_etc_pairs_2way_only,
         mcs_tracks_with_ar_etc_overlap,
         ar_tracks_with_mcs_etc_overlap,
-        etc_tracks_with_mcs_ar_overlap
+        etc_tracks_with_mcs_ar_overlap,
+        mcs_ar_pairs_all=mcs_ar_pairs_all['valid_pairs'],
+        ar_etc_pairs_all=ar_etc_pairs_all['valid_pairs'],
+        mcs_etc_pairs_all=mcs_etc_pairs_all['valid_pairs']
     )
 
     # Return all masks and metadata
@@ -1277,7 +1318,7 @@ def main():
     root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     # Output co-occurrence feature masks path
-    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/test/"
+    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
     output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     # Output ETC statistics output path
     output_stats_path = f"{output_dir}/stats/"
