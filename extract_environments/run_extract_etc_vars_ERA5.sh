@@ -45,8 +45,9 @@ CATALOG_PARAMS='{"zoom": 8}'
 #
 # Set variables to extract
 VARIABLES=(
+    "pr"
     # "ua" "va" "omega" "hus"
-    "pr"  # Example 2D variable
+    # "pr"  # Example 2D variable
 #   "psl" "uivt" "vivt" "zg500"  # More 2D variables
 #   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
@@ -59,7 +60,7 @@ VARIABLES=(
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
 PRESSURE_LEVELS=""  # Uncomment for 2D variables only
-# PRESSURE_LEVELS="500"  # Uncomment and set for 3D variables
+# PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
@@ -87,8 +88,8 @@ MIN_LON=""   # e.g., "-180" or leave empty for no filtering
 MAX_LON=""   # e.g., "180" or leave empty for no filtering
 
 # Storm filtering (for testing - leave empty for production runs)
-STORM_IDS="11"  # Comma-separated storm IDs for testing (start with storm 1)
-# STORM_IDS=""  # Uncomment to process all storms
+# STORM_IDS="11"  # Comma-separated storm IDs for testing (start with storm 1)
+STORM_IDS=""  # Uncomment to process all storms
 
 echo "Starting ERA5 ETC 2D variable extraction (Interactive Mode)..."
 echo "Processing ${#VARIABLES[@]} variable(s)"

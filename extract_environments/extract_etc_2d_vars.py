@@ -873,8 +873,9 @@ def main():
         sys.stdout.flush()
         variable_data = ds[variable_name]
         
-        # Track pressure level info for output filename
+        # Track pressure level info for output filename and variable name
         pressure_suffix = ''
+        output_variable_name = variable_name  # Default: use original variable name
         
         # Check if 3D variable (has pressure dimension)
         if 'pressure' in variable_data.dims:
@@ -902,13 +903,19 @@ def main():
                 # Single level - just squeeze out the pressure dimension
                 variable_data = variable_data.squeeze('pressure', drop=True)
                 pressure_suffix = f"_{int(pressure_levels[0])}hPa"
+                # Append pressure level to variable name (e.g., hus -> hus850)
+                output_variable_name = f"{variable_name}{int(pressure_levels[0])}"
                 print(f"Selected single pressure level, new shape: {variable_data.shape}")
+                print(f"Output variable name: {output_variable_name}")
             else:
                 # Multiple levels - average them
                 variable_data = variable_data.mean(dim='pressure', keep_attrs=True)
                 levels_str = '-'.join([str(int(p)) for p in pressure_levels])
                 pressure_suffix = f"_avg{levels_str}hPa"
+                # Append averaged pressure levels to variable name (e.g., hus -> hus850-500)
+                output_variable_name = f"{variable_name}{levels_str}"
                 print(f"Averaged {len(pressure_levels)} pressure levels, new shape: {variable_data.shape}")
+                print(f"Output variable name: {output_variable_name}")
 
         print(f"Variable shape: {variable_data.shape}")
         print(f"Variable dimensions: {variable_data.dims}")
@@ -946,7 +953,7 @@ def main():
         
         zarr_path = save_to_zarr(
             output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
-            x_coords, y_coords, variable_name, output_path,
+            x_coords, y_coords, output_variable_name, output_path,
             args.radius, args.lon_res, args.lat_res, args.chunk_size,
             unstructured_mesh=args.unstructured_mesh
         )
@@ -955,6 +962,8 @@ def main():
         var_elapsed_time = time.time() - var_start_time
         print("\n" + "="*60)
         print(f"VARIABLE {variable_name} COMPLETED")
+        if output_variable_name != variable_name:
+            print(f"Saved as: {output_variable_name}")
         print("="*60)
         print(f"Output file: {zarr_path}")
         print(f"Storm points processed: {len(storm_df)}")

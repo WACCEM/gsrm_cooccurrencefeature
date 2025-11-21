@@ -20,7 +20,7 @@
 # Set up paths and parameters
 ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
 TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/scream_ne120_inst/single_vars/"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/scream/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -32,15 +32,6 @@ CURRENT_LOCATION="NERSC"
 # CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
 CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
 CATALOG_PARAMS='{"zoom": 8}'
-
-# Extraction parameters
-RADIUS="20.0"  # Extraction radius in degrees
-LON_RES="0.25"  # Longitude resolution in degrees
-LAT_RES="0.25"  # Latitude resolution in degrees
-
-# Processing options
-CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
-PROGRESS_FREQ="1000"  # How often to print progress
 
 # ===== VARIABLE CONFIGURATION =====
 # 
@@ -54,24 +45,32 @@ PROGRESS_FREQ="1000"  # How often to print progress
 #
 # Set variables to extract
 VARIABLES=(
-    "ua" "va" "omega"
-    "hus"  # Example 3D variable - requires PRESSURE_LEVELS
+    # "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
 #   "pr"  # Example 2D variable
 #   "psl" "uivt" "vivt" "zg500"  # More 2D variables
 #   "va" "omega" "hus"  # More 3D variables (need PRESSURE_LEVELS)
-#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
-PRESSURE_LEVELS="850"  # Pressure levels in hPa
-# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+# PRESSURE_LEVELS="850"  # Pressure levels in hPa
+PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # COF (Co-occurrence Feature) mask option
-COF_MASK=""
-# COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK=""
+COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+
+# Extraction parameters
+RADIUS="20.0"  # Extraction radius in degrees
+LON_RES="0.25"  # Longitude resolution in degrees
+LAT_RES="0.25"  # Latitude resolution in degrees
+
+# Processing options
+CHUNK_SIZE="1000"  # Chunk size for time dimension in zarr output
+PROGRESS_FREQ="1000"  # How often to print progress
 
 # Date filtering options (leave empty to process all tracks in the track file)
 START_DATE=""  # e.g., "2019-08-01" or leave empty for no filtering

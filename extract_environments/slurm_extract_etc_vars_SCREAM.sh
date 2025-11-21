@@ -8,7 +8,7 @@
 #SBATCH -J scream
 #SBATCH -A m1867
 #SBATCH --array=0-9%10
-#SBATCH --output=logs/extract_etc_2d_var_%A_%a.log
+#SBATCH --output=logs/extract_etc_SCREAM_%A_%a.log
 #SBATCH --mail-user=zhe.feng@pnnl.gov
 #SBATCH --mail-type=FAIL,END
 
@@ -44,7 +44,7 @@ mkdir -p logs
 # Set up paths and parameters
 ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
 TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/scream_ne120_inst/single_vars/"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/scream/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -53,9 +53,9 @@ mkdir -p $OUTPUT_DIR
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 CURRENT_LOCATION="NERSC"
-# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
+CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
 # CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
-CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for 2D hourly variables
+# CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for 2D hourly variables
 CATALOG_PARAMS='{"zoom": 8}'
 
 # ===== VARIABLE CONFIGURATION =====
@@ -71,8 +71,8 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 4 variables, do: --array=0-3
 VARIABLES=(
-    "pr"
-#   "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"
+    "huss" "tas" "uas" "vas"
+#   "pr" "psl" "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"  # 2D variables
 #   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)

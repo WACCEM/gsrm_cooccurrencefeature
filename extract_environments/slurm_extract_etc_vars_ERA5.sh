@@ -67,12 +67,11 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 3 variables, do: --array=0-2
 VARIABLES=(
-    # "ua" "va" "omega" "hur" "zg"
-#   "pr" "ps" "psl" "tas" "d2m" "u10" "v10" "sstk" "prw"
-#   "ua" "va" "omega" "hus" "zg"  # 3D variables (need PRESSURE_LEVELS)
-  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+  "pr" "ps" "psl" "tas" "d2m" "u10" "v10" "sstk" "prw"  # 2D variables
+#   "ua" "va" "omega" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
@@ -83,8 +82,8 @@ PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
 # PRESSURE_LEVELS="500"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
-# COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
-COF_MASK="--cof_mask"  # Uncomment to extract COF masks
+COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK="--cof_mask"  # Uncomment to extract COF masks
 
 # Extraction parameters
 RADIUS="20.0"  # Extraction radius in degrees

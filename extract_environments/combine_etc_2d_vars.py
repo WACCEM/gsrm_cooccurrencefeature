@@ -5,7 +5,8 @@ This script:
 1. Scans a directory for etc_2d_*.zarr files
 2. Groups files by their suffix pattern (e.g., track1014, all_all)
 3. Combines variables from the same group into a single zarr file
-4. Preserves all metadata and coordinates
+4. Applies variable unit standardization based on source model/dataset
+5. Preserves all metadata and coordinates
 
 Author: Zhe Feng
 Last updated: November 2025
@@ -19,6 +20,102 @@ from pathlib import Path
 import re
 import sys
 from collections import defaultdict
+
+# Import variable scaling configuration
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+    from variable_scaling_config import VARIABLE_SCALING, get_scaling_info, rename_variables
+except ImportError:
+    # If import fails, define minimal config inline
+    print("WARNING: Could not import variable_scaling_config, using minimal inline config")
+    VARIABLE_SCALING = {
+        'scream': {'pr': (3600000.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h'), 'zg*': (1.0/9.81, 'm', 'Convert geopotential')},
+        'era5': {'pr': (1.0, 'mm h-1', 'Already in mm/h'), 'zg*': (1.0, 'm', 'Already in geopotential height')},
+        'nicam': {'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h'), 'zg*': (1.0/9.81, 'm', 'Convert geopotential')},
+        'icon': {'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h'), 'zg*': (1.0/9.81, 'm', 'Convert geopotential')},
+        'cesm2': {'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h'), 'zg*': (1.0, 'm', 'Already in geopotential height')},
+        'um': {'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h'), 'zg*': (1.0, 'm', 'Already in geopotential height')},
+    }
+    
+    def get_scaling_info(source, variable):
+        """Fallback pattern matching implementation."""
+        if source not in VARIABLE_SCALING:
+            return None
+        config = VARIABLE_SCALING[source]
+        # Try exact match first
+        if variable in config:
+            return config[variable]
+        # Try pattern matching
+        for pattern, scaling_info in config.items():
+            if pattern.endswith('*') and variable.startswith(pattern[:-1]):
+                return scaling_info
+        return None
+
+
+def standardize_variable_units(ds, source):
+    """
+    Standardize variable units according to source-specific scaling configuration.
+    
+    This function applies scaling factors to variables to convert them to 
+    standardized units across different model sources. For example:
+    - Precipitation: converted to mm/h
+    - Geopotential: converted to geopotential height in meters
+    
+    Supports wildcard patterns (e.g., "zg*" matches all variables starting with "zg").
+    Exact matches take precedence over pattern matches.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Dataset containing variables to scale
+    source : str
+        Source identifier (e.g., 'scream', 'era5', 'nicam')
+    
+    Returns:
+    --------
+    ds : xarray.Dataset
+        Dataset with scaled variables and updated attributes
+    """
+    if source not in VARIABLE_SCALING:
+        print(f"  No scaling configuration for source '{source}' - skipping unit standardization")
+        return ds
+    
+    scaled_vars = []
+    
+    print(f"\n  Standardizing variable units for source: {source}")
+    
+    # Iterate through all data variables in the dataset
+    for var_name in ds.data_vars:
+        # Use get_scaling_info which handles both exact and pattern matching
+        scaling_info = get_scaling_info(source, var_name)
+        
+        if scaling_info:
+            scale_factor, target_units, description = scaling_info
+            
+            # Get original units
+            original_units = ds[var_name].attrs.get('units', 'unknown')
+            
+            # Apply scaling
+            if scale_factor != 1.0:
+                ds[var_name] = ds[var_name] * scale_factor
+                print(f"    {var_name}: {original_units} → {target_units} (×{scale_factor:.6g})")
+            else:
+                print(f"    {var_name}: {target_units} (no scaling needed)")
+            
+            # Update attributes
+            ds[var_name].attrs['units'] = target_units
+            ds[var_name].attrs['scaling_applied'] = description
+            ds[var_name].attrs['original_units'] = original_units
+            ds[var_name].attrs['scale_factor_applied'] = scale_factor
+            
+            scaled_vars.append(var_name)
+    
+    if scaled_vars:
+        print(f"  Standardized {len(scaled_vars)} variable(s): {', '.join(scaled_vars)}")
+    else:
+        print(f"  No variables required scaling")
+    
+    return ds
 
 
 def parse_filename(filename):
@@ -82,7 +179,7 @@ def group_zarr_files(directory):
     return groups
 
 
-def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
+def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1000):
     """
     Combine multiple zarr files into a single multi-variable zarr file.
     
@@ -94,6 +191,8 @@ def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
         Output zarr file path
     suffix : str
         Suffix identifier (for logging)
+    source : str, optional
+        Source identifier for variable scaling (e.g., 'scream', 'era5')
     chunk_size : int
         Chunk size for time dimension
     """
@@ -122,8 +221,9 @@ def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
                 print(f"    WARNING: Storm IDs differ for {var_name}")
             
             # Extract the data variable (should be the only one besides metadata)
+            # Handle both unstructured mesh (grid_id) and structured mesh (lon_id, lat_id)
             data_vars = [v for v in ds.data_vars if v not in 
-                        ['storm_id', 'grid_id', 'storm_lat', 'storm_lon']]
+                        ['storm_id', 'grid_id', 'lon_id', 'lat_id', 'storm_lat', 'storm_lon']]
             
             if len(data_vars) == 1:
                 actual_var_name = data_vars[0]
@@ -145,15 +245,33 @@ def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
     print(f"Creating combined dataset...")
     sys.stdout.flush()
     
+    # Determine if this is unstructured mesh (grid_id) or structured mesh (lon_id, lat_id)
+    has_grid_id = 'grid_id' in reference_ds
+    has_lon_lat_id = 'lon_id' in reference_ds and 'lat_id' in reference_ds
+    
+    # Create metadata dictionary based on grid type
+    metadata_vars = {
+        'storm_id': reference_ds['storm_id'],
+        'storm_lat': reference_ds['storm_lat'],
+        'storm_lon': reference_ds['storm_lon']
+    }
+    
+    if has_grid_id:
+        metadata_vars['grid_id'] = reference_ds['grid_id']
+        print(f"Grid type: Unstructured mesh (HEALPix)")
+    elif has_lon_lat_id:
+        metadata_vars['lon_id'] = reference_ds['lon_id']
+        metadata_vars['lat_id'] = reference_ds['lat_id']
+        print(f"Grid type: Structured lat/lon grid")
+    else:
+        print(f"WARNING: No grid identifiers found (grid_id or lon_id/lat_id)")
+    
     # Create combined dataset
     combined_ds = xr.Dataset(
         data_vars={
             **{var_name: (['time', 'y', 'x'], data.values, data.attrs) 
                for var_name, data in datasets.items()},
-            'storm_id': reference_ds['storm_id'],
-            'grid_id': reference_ds['grid_id'],
-            'storm_lat': reference_ds['storm_lat'],
-            'storm_lon': reference_ds['storm_lon']
+            **metadata_vars
         },
         coords={
             'time': reference_ds['time'],
@@ -172,12 +290,28 @@ def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
     print(f"Variables: {list(datasets.keys())}")
     sys.stdout.flush()
     
+    # Apply variable renaming if source is specified
+    if source:
+        try:
+            combined_ds, renamed_vars = rename_variables(combined_ds, source)
+            if renamed_vars:
+                print(f"  Renamed {len(renamed_vars)} variable(s)")
+        except NameError:
+            # rename_variables not available in fallback mode
+            print("\n  Variable renaming not available (using fallback config)")
+    
+    # Apply variable unit standardization if source is specified
+    if source:
+        combined_ds = standardize_variable_units(combined_ds, source)
+    else:
+        print("\n  No source specified - skipping variable renaming and unit standardization")
+    
     # Set up chunking - same as individual files
     ny = len(combined_ds['y'])
     nx = len(combined_ds['x'])
     
     encoding = {}
-    for var_name in datasets.keys():
+    for var_name in combined_ds.keys():
         encoding[var_name] = {
             'chunks': (chunk_size, ny, nx),
             'compressor': zarr.Blosc(cname='zstd', clevel=3, shuffle=2)
@@ -188,7 +322,7 @@ def combine_zarr_files(file_list, output_path, suffix, chunk_size=1000):
         print(f"Removing existing output: {output_path}")
         import shutil
         shutil.rmtree(output_path)
-    
+
     # Write to zarr
     print(f"Writing combined dataset to: {output_path}")
     sys.stdout.flush()
@@ -224,8 +358,18 @@ def verify_combined_file(filepath):
         print(f"  Dimensions: {dict(ds.dims)}")
         print(f"  Coordinates: {list(ds.coords)}")
         
-        data_vars = [v for v in ds.data_vars if v not in 
-                    ['storm_id', 'grid_id', 'storm_lat', 'storm_lon']]
+        # Determine grid type
+        if 'grid_id' in ds:
+            print(f"  Grid type: Unstructured mesh (HEALPix)")
+            metadata_vars = ['storm_id', 'grid_id', 'storm_lat', 'storm_lon']
+        elif 'lon_id' in ds and 'lat_id' in ds:
+            print(f"  Grid type: Structured lat/lon grid")
+            metadata_vars = ['storm_id', 'lon_id', 'lat_id', 'storm_lat', 'storm_lon']
+        else:
+            print(f"  Grid type: Unknown")
+            metadata_vars = ['storm_id', 'storm_lat', 'storm_lon']
+        
+        data_vars = [v for v in ds.data_vars if v not in metadata_vars]
         print(f"  Data variables ({len(data_vars)}): {data_vars}")
         
         print(f"  Time range: {ds['time'].values[0]} to {ds['time'].values[-1]}")
@@ -257,21 +401,27 @@ Examples:
   # Combine all zarr files in a directory, grouping by suffix
   python combine_etc_2d_vars.py --input_dir /path/to/zarr/files
   
-  # Specify output directory
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_dir /path/to/output
+  # Apply unit standardization for SCREAM data
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --source scream
   
-  # Process only specific suffix pattern
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --suffix track1014
+  # Specify output directory and source
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_dir /path/to/output --source era5
+  
+  # Process only specific suffix pattern with source
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --suffix track1014 --source nicam
   
   # Custom output filename prefix
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_prefix etc_combined
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_prefix etc_combined --source icon
         """
     )
     
     parser.add_argument('--input_dir', required=True,
                         help='Directory containing individual zarr files')
     parser.add_argument('--output_dir', default=None,
-                        help='Output directory (default: same as input_dir)')
+                        help='Output directory (default: parent directory of input_dir)')
+    parser.add_argument('--source', default=None,
+                        choices=['scream', 'era5', 'nicam', 'icon', 'cesm2', 'um'],
+                        help='Source model/dataset name for variable unit standardization')
     parser.add_argument('--output_prefix', default='etc_2d_combined',
                         help='Prefix for output filenames (default: etc_2d_combined)')
     parser.add_argument('--suffix', default=None,
@@ -285,16 +435,21 @@ Examples:
     
     args = parser.parse_args()
     
-    # Set output directory
-    output_dir = args.output_dir if args.output_dir else args.input_dir
+    # Set output directory - default is parent directory of input_dir
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = os.path.dirname(os.path.abspath(args.input_dir))
     os.makedirs(output_dir, exist_ok=True)
     
     print("="*70)
     print("ETC 2D Variable Combiner")
     print("="*70)
-    print(f"Input directory: {args.input_dir}")
+    print("Input directory: {args.input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Output prefix: {args.output_prefix}")
+    if args.source:
+        print(f"Source (for unit standardization): {args.source}")
     if args.suffix:
         print(f"Processing suffix: {args.suffix}")
     print("="*70)
@@ -336,7 +491,8 @@ Examples:
         output_path = os.path.join(output_dir, output_filename)
         
         # Combine files
-        result = combine_zarr_files(file_list, output_path, suffix, args.chunk_size)
+        result = combine_zarr_files(file_list, output_path, suffix, 
+                                   source=args.source, chunk_size=args.chunk_size)
         
         if result:
             combined_files.append(result)
