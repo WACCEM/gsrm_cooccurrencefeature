@@ -31,7 +31,7 @@ def parse_args():
         '--source', 
         type=str, 
         required=True,
-        choices=['scream', 'era5', 'nicam', 'icon', 'cesm2', 'um'],
+        choices=['scream', 'era5', 'nicam_gl11', 'icon_d3hp003', 'casesm2_10km_nocumulus', 'um_glm_n2560_RAL3p3'],
         help='Source model/dataset name'
     )
     parser.add_argument(
@@ -64,6 +64,13 @@ def parse_args():
         default=-20.0,
         help='Latitude threshold for Southern Hemisphere (default: -20)'
     )
+    parser.add_argument(
+        '--overlap-category',
+        type=str,
+        default='etc_ar_mcs',
+        choices=['etc_ar_mcs', 'etc_mcs', 'etc_ar'],
+        help='Type of overlap analysis (default: etc_ar_mcs for 3-way overlap)'
+    )
     
     return parser.parse_args()
 
@@ -88,7 +95,7 @@ def load_etc_zarr_data(zarr_file):
         raise FileNotFoundError(f"ETC Zarr directory not found: {zarr_file}")
     
     ds = xr.open_zarr(zarr_file, consolidated=True)
-    print(f"  Dataset dimensions: {dict(ds.dims)}")
+    print(f"  Dataset dimensions: {dict(ds.sizes)}")
     print(f"  Number of variables: {len(ds.data_vars)}")
     
     return ds
@@ -187,36 +194,46 @@ def combine_datasets(ds, etc_df):
     return ds
 
 
-def create_composites(ds, nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
-    """Create composites by hemisphere and overlap category."""
-    print("\nCreating composites by hemisphere...")
+def convert_masks_and_create_exclusive_precip(ds, overlap_category='etc_ar_mcs'):
+    """
+    Convert overlap masks to binary frequency variables and create exclusive precipitation variables.
     
-    composites_nh = {}  # Northern Hemisphere
-    composites_sh = {}  # Southern Hemisphere
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Dataset containing overlap mask variables
+    overlap_category : str
+        Type of overlap analysis:
+        - 'etc_ar_mcs': ETC+AR+MCS (3-way overlap)
+        - 'etc_mcs': ETC+MCS (2-way overlap)
+        - 'etc_ar': ETC+AR (2-way overlap)
     
-    # Hemisphere masks
-    mask_nh = ds.cof_lat > nh_lat_threshold
-    mask_sh = ds.cof_lat < sh_lat_threshold
+    Returns:
+    --------
+    ds_binary : xarray.Dataset
+        Dataset with binary frequency variables and exclusive precipitation
+    """
+    print(f"\n  Converting masks for overlap category: {overlap_category}")
     
-    print(f"  Northern Hemisphere (lat > {nh_lat_threshold}): {mask_nh.sum().values} points")
-    print(f"  Southern Hemisphere (lat < {sh_lat_threshold}): {mask_sh.sum().values} points")
+    ds_binary = ds.copy()
     
-    # Identify mask variables that need binary conversion
-    mask_vars = ['ar_mcs_etc_overlap_mask', 'mcs_ar_etc_overlap_mask', 'etc_mcs_ar_overlap_mask']
-    available_mask_vars = [v for v in mask_vars if v in ds.data_vars]
-    
-    if available_mask_vars:
-        print(f"\n  Converting mask variables to binary (0/1): {available_mask_vars}")
+    if overlap_category == 'etc_ar_mcs':
+        # 3-way overlap: ETC+AR+MCS
+        mask_vars = ['ar_mcs_etc_overlap_mask', 'mcs_ar_etc_overlap_mask', 'etc_mcs_ar_overlap_mask']
+        available_mask_vars = [v for v in mask_vars if v in ds.data_vars]
         
-        # Create a copy of the dataset with binary masks
-        ds_binary = ds.copy()
+        if not available_mask_vars:
+            print("  WARNING: No mask variables found for ETC+AR+MCS")
+            return ds_binary
+        
+        print(f"  Converting mask variables to binary (0/1): {available_mask_vars}")
         
         # Convert masks to binary (0/1)
         ar_mask_binary = xr.where(ds['ar_mcs_etc_overlap_mask'] > 0, 1, 0) if 'ar_mcs_etc_overlap_mask' in ds else None
         mcs_mask_binary = xr.where(ds['mcs_ar_etc_overlap_mask'] > 0, 1, 0) if 'mcs_ar_etc_overlap_mask' in ds else None
         etc_mask_binary = xr.where(ds['etc_mcs_ar_overlap_mask'] > 0, 1, 0) if 'etc_mcs_ar_overlap_mask' in ds else None
         
-        # Rename mask variables to frequency names
+        # Create frequency variables
         if ar_mask_binary is not None:
             ds_binary['ar_freq'] = ar_mask_binary
             ds_binary['ar_freq'].attrs = {
@@ -246,18 +263,16 @@ def create_composites(ds, nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
             if old_name in ds_binary:
                 ds_binary = ds_binary.drop_vars(old_name)
         
-        # Create exclusive precipitation variables if pr exists
+        # Create exclusive precipitation variables
         if 'pr' in ds and ar_mask_binary is not None and mcs_mask_binary is not None:
             print(f"  Creating exclusive precipitation variables (pr_ar, pr_mcs)")
             
-            # Create exclusive masks (only one type present, not the other)
             # AR exclusive: AR present, but not MCS
             ar_exclusive = (ar_mask_binary == 1) & (mcs_mask_binary == 0)
             
             # MCS exclusive: MCS present, but not AR
             mcs_exclusive = (mcs_mask_binary == 1) & (ar_mask_binary == 0)
             
-            # Apply masks to precipitation
             ds_binary['pr_ar'] = xr.where(ar_exclusive, ds['pr'], 0)
             ds_binary['pr_ar'].attrs = {
                 'long_name': 'Precipitation under AR only',
@@ -271,9 +286,170 @@ def create_composites(ds, nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
                 'description': 'Precipitation occurring under MCS mask exclusively (not under AR)',
                 'units': ds['pr'].attrs.get('units', 'kg m-2 s-1')
             }
+    
+    elif overlap_category == 'etc_mcs':
+        # 2-way overlap: ETC+MCS
+        mask_vars = ['mcs_etc_overlap_mask', 'etc_mcs_overlap_mask']
+        available_mask_vars = [v for v in mask_vars if v in ds.data_vars]
+        
+        if not available_mask_vars:
+            print("  WARNING: No mask variables found for ETC+MCS")
+            return ds_binary
+        
+        print(f"  Converting mask variables to binary (0/1): {available_mask_vars}")
+        
+        # Convert masks to binary (0/1)
+        mcs_mask_binary = xr.where(ds['mcs_etc_overlap_mask'] > 0, 1, 0) if 'mcs_etc_overlap_mask' in ds else None
+        etc_mask_binary = xr.where(ds['etc_mcs_overlap_mask'] > 0, 1, 0) if 'etc_mcs_overlap_mask' in ds else None
+        
+        # Create frequency variables
+        if mcs_mask_binary is not None:
+            ds_binary['mcs_freq'] = mcs_mask_binary
+            ds_binary['mcs_freq'].attrs = {
+                'long_name': 'MCS frequency',
+                'description': 'Frequency of MCS occurrence (0-1)',
+                'units': '1'
+            }
+        
+        if etc_mask_binary is not None:
+            ds_binary['etc_freq'] = etc_mask_binary
+            ds_binary['etc_freq'].attrs = {
+                'long_name': 'ETC frequency',
+                'description': 'Frequency of ETC occurrence (0-1)',
+                'units': '1'
+            }
+        
+        # Remove old mask variable names
+        for old_name in available_mask_vars:
+            if old_name in ds_binary:
+                ds_binary = ds_binary.drop_vars(old_name)
+        
+        # Create exclusive precipitation variables
+        if 'pr' in ds and mcs_mask_binary is not None and etc_mask_binary is not None:
+            print(f"  Creating exclusive precipitation variables (pr_mcs, pr_etc)")
+            
+            # MCS exclusive: MCS present, but not ETC
+            mcs_exclusive = (mcs_mask_binary == 1) & (etc_mask_binary == 0)
+            
+            # ETC exclusive: ETC present, but not MCS
+            etc_exclusive = (etc_mask_binary == 1) & (mcs_mask_binary == 0)
+            
+            ds_binary['pr_mcs'] = xr.where(mcs_exclusive, ds['pr'], 0)
+            ds_binary['pr_mcs'].attrs = {
+                'long_name': 'Precipitation under MCS only',
+                'description': 'Precipitation occurring under MCS mask exclusively (not under ETC)',
+                'units': ds['pr'].attrs.get('units', 'kg m-2 s-1')
+            }
+            
+            ds_binary['pr_etc'] = xr.where(etc_exclusive, ds['pr'], 0)
+            ds_binary['pr_etc'].attrs = {
+                'long_name': 'Precipitation under ETC only',
+                'description': 'Precipitation occurring under ETC mask exclusively (not under MCS)',
+                'units': ds['pr'].attrs.get('units', 'kg m-2 s-1')
+            }
+    
+    elif overlap_category == 'etc_ar':
+        # 2-way overlap: ETC+AR
+        mask_vars = ['etc_ar_overlap_mask', 'ar_etc_overlap_mask']
+        available_mask_vars = [v for v in mask_vars if v in ds.data_vars]
+        
+        if not available_mask_vars:
+            print("  WARNING: No mask variables found for ETC+AR")
+            return ds_binary
+        
+        print(f"  Converting mask variables to binary (0/1): {available_mask_vars}")
+        
+        # Convert masks to binary (0/1)
+        etc_mask_binary = xr.where(ds['etc_ar_overlap_mask'] > 0, 1, 0) if 'etc_ar_overlap_mask' in ds else None
+        ar_mask_binary = xr.where(ds['ar_etc_overlap_mask'] > 0, 1, 0) if 'ar_etc_overlap_mask' in ds else None
+        
+        # Create frequency variables
+        if etc_mask_binary is not None:
+            ds_binary['etc_freq'] = etc_mask_binary
+            ds_binary['etc_freq'].attrs = {
+                'long_name': 'ETC frequency',
+                'description': 'Frequency of ETC occurrence (0-1)',
+                'units': '1'
+            }
+        
+        if ar_mask_binary is not None:
+            ds_binary['ar_freq'] = ar_mask_binary
+            ds_binary['ar_freq'].attrs = {
+                'long_name': 'AR frequency',
+                'description': 'Frequency of AR occurrence (0-1)',
+                'units': '1'
+            }
+        
+        # Remove old mask variable names
+        for old_name in available_mask_vars:
+            if old_name in ds_binary:
+                ds_binary = ds_binary.drop_vars(old_name)
+        
+        # Create exclusive precipitation variables
+        if 'pr' in ds and etc_mask_binary is not None and ar_mask_binary is not None:
+            print(f"  Creating exclusive precipitation variables (pr_ar, pr_etc)")
+            
+            # AR exclusive: AR present, but not ETC
+            ar_exclusive = (ar_mask_binary == 1) & (etc_mask_binary == 0)
+            
+            # ETC exclusive: ETC present, but not AR
+            etc_exclusive = (etc_mask_binary == 1) & (ar_mask_binary == 0)
+            
+            ds_binary['pr_ar'] = xr.where(ar_exclusive, ds['pr'], 0)
+            ds_binary['pr_ar'].attrs = {
+                'long_name': 'Precipitation under AR only',
+                'description': 'Precipitation occurring under AR mask exclusively (not under ETC)',
+                'units': ds['pr'].attrs.get('units', 'kg m-2 s-1')
+            }
+            
+            ds_binary['pr_etc'] = xr.where(etc_exclusive, ds['pr'], 0)
+            ds_binary['pr_etc'].attrs = {
+                'long_name': 'Precipitation under ETC only',
+                'description': 'Precipitation occurring under ETC mask exclusively (not under AR)',
+                'units': ds['pr'].attrs.get('units', 'kg m-2 s-1')
+            }
+    
     else:
-        print("  No mask variables found - using original dataset")
-        ds_binary = ds
+        print(f"  WARNING: Unknown overlap_category '{overlap_category}' - using original dataset")
+        return ds
+    
+    return ds_binary
+
+
+def create_composites(ds, overlap_category='etc_ar_mcs', nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
+    """
+    Create composites by hemisphere and overlap category.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Dataset containing environmental variables and overlap masks
+    overlap_category : str
+        Type of overlap analysis ('etc_ar_mcs', 'etc_mcs', or 'etc_ar')
+    nh_lat_threshold : float
+        Latitude threshold for Northern Hemisphere (default: 20.0)
+    sh_lat_threshold : float
+        Latitude threshold for Southern Hemisphere (default: -20.0)
+    
+    Returns:
+    --------
+    composites_nh, composites_sh : dict, dict
+        Dictionaries containing composites for each overlap flag
+    """
+    print("\nCreating composites by hemisphere...")
+    
+    composites_nh = {}  # Northern Hemisphere
+    composites_sh = {}  # Southern Hemisphere
+    
+    # Hemisphere masks
+    mask_nh = ds.cof_lat > nh_lat_threshold
+    mask_sh = ds.cof_lat < sh_lat_threshold
+    
+    print(f"  Northern Hemisphere (lat > {nh_lat_threshold}): {mask_nh.sum().values} points")
+    print(f"  Southern Hemisphere (lat < {sh_lat_threshold}): {mask_sh.sum().values} points")
+    
+    # Convert masks and create exclusive precipitation variables
+    ds_binary = convert_masks_and_create_exclusive_precip(ds, overlap_category=overlap_category)
     
     # Create composites for each overlap category and hemisphere
     print("\n  Creating composites for each overlap category:")
@@ -301,9 +477,14 @@ def create_composites(ds, nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
         
         print(f"    {description:25s} - NH: {nh_count:6d} points, SH: {sh_count:6d} points")
     
-    if available_mask_vars:
-        print(f"\n  Note: Frequency variables (ar_freq, mcs_freq, etc_freq) represent occurrence frequency (0-1)")
-        print(f"  Note: Exclusive precipitation variables (pr_ar, pr_mcs) are mutually exclusive")
+    # Print notes about frequency and exclusive precipitation variables
+    freq_vars = [v for v in ds_binary.data_vars if v.endswith('_freq')]
+    excl_precip_vars = [v for v in ds_binary.data_vars if v.startswith('pr_') and v != 'pr']
+    
+    if freq_vars:
+        print(f"\n  Note: Frequency variables ({', '.join(freq_vars)}) represent occurrence frequency (0-1)")
+    if excl_precip_vars:
+        print(f"  Note: Exclusive precipitation variables ({', '.join(excl_precip_vars)}) are mutually exclusive")
     
     return composites_nh, composites_sh
 
@@ -320,11 +501,34 @@ def save_composites(composites_nh, composites_sh, out_dir):
     for var in composites_nh['isolated'].data_vars:
         encoding[var] = {'zlib': True, 'complevel': 4}
     
+    # Clean up problematic attributes (like boolean types that NetCDF can't handle)
+    def clean_attributes(ds):
+        """Remove or convert attributes that NetCDF4 cannot handle."""
+        ds_clean = ds.copy()
+        removed_attrs = []
+        for var_name in ds_clean.data_vars:
+            attrs_to_remove = []
+            for attr_name, attr_value in ds_clean[var_name].attrs.items():
+                # Remove boolean attributes or convert them to int
+                if isinstance(attr_value, (bool, np.bool_)):
+                    attrs_to_remove.append(attr_name)
+                    removed_attrs.append(f"{var_name}.{attr_name} = {attr_value} (type: {type(attr_value).__name__})")
+            for attr_name in attrs_to_remove:
+                del ds_clean[var_name].attrs[attr_name]
+        
+        if removed_attrs:
+            print(f"    Removed {len(removed_attrs)} unsupported boolean attribute(s):")
+            for attr_info in removed_attrs:
+                print(f"      - {attr_info}")
+        
+        return ds_clean
+    
     # Save NH composites
     print("  Saving Northern Hemisphere composites:")
     for comp_name, comp_data in composites_nh.items():
         output_path = f"{out_dir}/etc_2d_composite_nh_{comp_name}.nc"
-        comp_data.to_netcdf(output_path, encoding=encoding)
+        comp_data_clean = clean_attributes(comp_data)
+        comp_data_clean.to_netcdf(output_path, encoding=encoding)
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
         print(f"    {comp_name:10s} -> {output_path} ({file_size_mb:.1f} MB)")
     
@@ -332,7 +536,8 @@ def save_composites(composites_nh, composites_sh, out_dir):
     print("  Saving Southern Hemisphere composites:")
     for comp_name, comp_data in composites_sh.items():
         output_path = f"{out_dir}/etc_2d_composite_sh_{comp_name}.nc"
-        comp_data.to_netcdf(output_path, encoding=encoding)
+        comp_data_clean = clean_attributes(comp_data)
+        comp_data_clean.to_netcdf(output_path, encoding=encoding)
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
         print(f"    {comp_name:10s} -> {output_path} ({file_size_mb:.1f} MB)")
     
@@ -371,6 +576,7 @@ def main():
         # Create composites
         composites_nh, composites_sh = create_composites(
             ds, 
+            overlap_category=args.overlap_category,
             nh_lat_threshold=args.nh_lat_threshold,
             sh_lat_threshold=args.sh_lat_threshold
         )

@@ -41,6 +41,8 @@ from src.env_extract_utilities import (
     parse_pressure_levels,
     detect_pressure_units,
     normalize_pressure_levels,
+    convert_w_to_omega, 
+    convert_omega_to_w,
     apply_model_fixes,
     parse_etc_track_file
 )
@@ -246,7 +248,7 @@ def extract_etc_2d_variable(
     
     Returns:
     --------
-    tuple : (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, x_coords, y_coords)
+    tuple : (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, x_coords, y_coords, var_attrs)
     """
     # Calculate expected grid dimensions
     ny = int(2 * radius / lat_res + 1)
@@ -256,6 +258,9 @@ def extract_etc_2d_variable(
     print(f"Output grid dimensions: ({ny}, {nx})")
     print(f"Expected memory per variable: {len(storm_df) * ny * nx * 4 / 1e9:.2f} GB (float32)")
     sys.stdout.flush()
+    
+    # Store variable attributes from the source data
+    var_attrs = dict(variable_data.attrs) if hasattr(variable_data, 'attrs') else {}
     
     # Initialize output array [time, y, x]
     ntimes = len(storm_df)
@@ -317,7 +322,8 @@ def extract_etc_2d_variable(
         # ================================================================
         try:
             # Select time but DON'T compute yet - keep as lazy dask array
-            data_at_time_lazy = variable_data.sel(time=storm_time, method='nearest')
+            # IMPORTANT: .squeeze() to remove extra dimensions (e.g., pressure)
+            data_at_time_lazy = variable_data.sel(time=storm_time, method='nearest').squeeze()
             
             # For efficiency: collect all pixel indices needed for all storms at this time
             # Then compute once with all pixels selected
@@ -454,6 +460,7 @@ def extract_etc_2d_variable(
                 
             except Exception as e:
                 print(f"  Warning: Failed to extract storm {row['storm_id']} at {storm_time}: {e}")
+
                 # Metadata already initialized to None, will be filled with defaults
                 time_array[storm_idx] = storm_time
                 storm_ids[storm_idx] = row['storm_id']
@@ -474,12 +481,12 @@ def extract_etc_2d_variable(
     sys.stdout.flush()
     
     return (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, 
-            x_coords, y_coords)
+            x_coords, y_coords, var_attrs)
 
 
 def save_to_zarr(output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
                  x_coords, y_coords, variable_name, output_path, 
-                 radius, lon_res, lat_res, chunk_size=1000, unstructured_mesh=True):
+                 radius, lon_res, lat_res, chunk_size=1000, unstructured_mesh=True, var_attrs=None):
     """
     Save extracted data to zarr format with proper chunking.
     
@@ -501,6 +508,8 @@ def save_to_zarr(output_array, time_array, storm_ids, grid_ids, storm_lats, stor
         Grid parameters
     chunk_size : int
         Chunk size for time dimension
+    var_attrs : dict, optional
+        Variable attributes from source data
     
     Returns:
     --------
@@ -509,12 +518,18 @@ def save_to_zarr(output_array, time_array, storm_ids, grid_ids, storm_lats, stor
     print(f"Saving {variable_name} to zarr format...")
     sys.stdout.flush()
     
+    # Prepare variable attributes (use source attributes if available)
+    if var_attrs is None:
+        var_attrs = {}
+    # Add extraction-specific metadata to attributes
+    extraction_attrs = dict(var_attrs)  # Copy original attributes
+    extraction_attrs['extraction_info'] = 'Extracted around ETC storm center'
+    if 'long_name' not in extraction_attrs:
+        extraction_attrs['long_name'] = f'{variable_name}'
+    
     # Create xarray Dataset
     data_vars = {
-        variable_name: (['time', 'y', 'x'], output_array, {
-            'long_name': f'{variable_name}',
-            'description': 'Extracted around ETC storm center'
-        }),
+        variable_name: (['time', 'y', 'x'], output_array, extraction_attrs),
         'storm_id': (['time'], np.array(storm_ids), {
             'long_name': 'Storm ID',
             'description': 'ETC storm identifier'
@@ -662,6 +677,12 @@ def main():
     parser.add_argument('--pressure_levels', default=None, 
                         help='Comma-separated list of pressure levels in hPa (e.g., "850,500,300")')
     
+    # Vertical velocity conversion
+    parser.add_argument('--convert_wa_to_omega', action='store_true',
+                        help='Convert vertical velocity (wa) to pressure velocity (omega)')
+    parser.add_argument('--convert_omega_to_wa', action='store_true',
+                        help='Convert pressure velocity (omega) to vertical velocity (wa)')
+    
     # Pre-computed variable options
     parser.add_argument('--precomputed_dir', default=None,
                         help='Directory containing pre-computed variables')
@@ -789,7 +810,7 @@ def main():
     sys.stdout.flush()
 
     storm_df = parse_etc_track_file(args.trackfile, unstructured_mesh=args.unstructured_mesh)
-    
+
     # Filter by storm IDs if provided (for testing)
     if storm_ids_filter:
         storm_df = storm_df[storm_df['storm_id'].isin(storm_ids_filter)]
@@ -862,60 +883,125 @@ def main():
         print("="*60)
         sys.stdout.flush()
         
-        # Check if variable exists
-        if variable_name not in ds:
-            print(f"ERROR: Variable '{variable_name}' not found in dataset")
-            print(f"Available variables: {list(ds.data_vars)}")
-            continue
-        
-        # Get variable data
-        print(f"Loading variable data: {variable_name}")
-        sys.stdout.flush()
-        variable_data = ds[variable_name]
-        
         # Track pressure level info for output filename and variable name
         pressure_suffix = ''
         output_variable_name = variable_name  # Default: use original variable name
         
-        # Check if 3D variable (has pressure dimension)
-        if 'pressure' in variable_data.dims:
+        # =================================================================
+        # HANDLE VERTICAL VELOCITY CONVERSIONS
+        # =================================================================
+        
+        # Option 1: Convert wa to omega
+        if variable_name == 'wa' and args.convert_wa_to_omega:
+            print("Converting vertical velocity (wa) to pressure velocity (omega)...")
+            sys.stdout.flush()
+            
             if pressure_levels is None:
-                print(f"WARNING: Variable '{variable_name}' has pressure dimension but no pressure levels specified")
-                print(f"Use --pressure_levels to specify pressure levels (e.g., --pressure_levels 850,500,300)")
-                print(f"Skipping {variable_name}")
+                print("ERROR: --pressure_levels required for wa to omega conversion")
                 continue
             
-            print(f"3D variable detected with pressure dimension")
-            print(f"Requested pressure levels: {pressure_levels} hPa")
+            # Check if required variables exist
+            if 'wa' not in ds or 'ta' not in ds:
+                print(f"ERROR: Variables 'wa' and 'ta' required for omega conversion")
+                continue
             
-            # Normalize pressure levels to match dataset units
-            pressure_levels_dataset, pressure_units = normalize_pressure_levels(
-                pressure_levels, variable_data.pressure
-            )
-
-            # Select specified pressure levels (using dataset units)
-            variable_data = variable_data.sel(
-                pressure=pressure_levels_dataset, method='nearest'
-            )
+            # Convert wa to omega (returns only omega variable, not full dataset)
+            variable_data = convert_w_to_omega(ds, pressure_levels)
+            output_variable_name = 'omega'  # Change variable name for output
+            print(f"Variable data ready (omega)")
             
-            # Average if multiple levels, otherwise just select single level
+            # Set pressure suffix for output filename
             if len(pressure_levels) == 1:
-                # Single level - just squeeze out the pressure dimension
-                variable_data = variable_data.squeeze('pressure', drop=True)
                 pressure_suffix = f"_{int(pressure_levels[0])}hPa"
-                # Append pressure level to variable name (e.g., hus -> hus850)
-                output_variable_name = f"{variable_name}{int(pressure_levels[0])}"
-                print(f"Selected single pressure level, new shape: {variable_data.shape}")
-                print(f"Output variable name: {output_variable_name}")
+                # Update output variable name
+                output_variable_name = f"omega{int(pressure_levels[0])}"
             else:
-                # Multiple levels - average them
-                variable_data = variable_data.mean(dim='pressure', keep_attrs=True)
                 levels_str = '-'.join([str(int(p)) for p in pressure_levels])
                 pressure_suffix = f"_avg{levels_str}hPa"
-                # Append averaged pressure levels to variable name (e.g., hus -> hus850-500)
-                output_variable_name = f"{variable_name}{levels_str}"
-                print(f"Averaged {len(pressure_levels)} pressure levels, new shape: {variable_data.shape}")
-                print(f"Output variable name: {output_variable_name}")
+                output_variable_name = f"omega{levels_str}"
+        
+        # Option 2: Convert omega to wa
+        elif variable_name == 'omega' and args.convert_omega_to_wa:
+            print("Converting pressure velocity (omega) to vertical velocity (wa)...")
+            sys.stdout.flush()
+            
+            if pressure_levels is None:
+                print("ERROR: --pressure_levels required for omega to wa conversion")
+                continue
+            
+            # Check if required variables exist
+            if 'omega' not in ds or 'ta' not in ds:
+                print(f"ERROR: Variables 'omega' and 'ta' required for wa conversion")
+                continue
+            
+            # Convert omega to wa (returns only wa variable, not full dataset)
+            variable_data = convert_omega_to_w(ds, pressure_levels)
+            output_variable_name = 'wa'  # Change variable name for output
+            print(f"Variable data ready (wa)")
+            
+            # Set pressure suffix for output filename
+            if len(pressure_levels) == 1:
+                pressure_suffix = f"_{int(pressure_levels[0])}hPa"
+                # Update output variable name
+                output_variable_name = f"wa{int(pressure_levels[0])}"
+            else:
+                levels_str = '-'.join([str(int(p)) for p in pressure_levels])
+                pressure_suffix = f"_avg{levels_str}hPa"
+                output_variable_name = f"wa{levels_str}"
+        
+        # Option 3: Standard variable from catalog
+        else:
+            # Check if variable exists
+            if variable_name not in ds:
+                print(f"ERROR: Variable '{variable_name}' not found in dataset")
+                print(f"Available variables: {list(ds.data_vars)}")
+                continue
+            
+            # Get variable data
+            print(f"Loading variable data: {variable_name}")
+            sys.stdout.flush()
+            variable_data = ds[variable_name]
+            
+            # Check if 3D variable (has pressure dimension)
+            # Only process if not already handled by conversion (conversions already handle pressure)
+            if 'pressure' in variable_data.dims:
+                if pressure_levels is None:
+                    print(f"WARNING: Variable '{variable_name}' has pressure dimension but no pressure levels specified")
+                    print(f"Use --pressure_levels to specify pressure levels (e.g., --pressure_levels 850,500,300)")
+                    print(f"Skipping {variable_name}")
+                    continue
+                
+                print(f"3D variable detected with pressure dimension")
+                print(f"Requested pressure levels: {pressure_levels} hPa")
+                
+                # Normalize pressure levels to match dataset units
+                pressure_levels_dataset, pressure_units = normalize_pressure_levels(
+                    pressure_levels, variable_data.pressure
+                )
+
+                # Select specified pressure levels (using dataset units)
+                variable_data = variable_data.sel(
+                    pressure=pressure_levels_dataset, method='nearest'
+                )
+                
+                # Average if multiple levels, otherwise just select single level
+                if len(pressure_levels) == 1:
+                    # Single level - just squeeze out the pressure dimension
+                    variable_data = variable_data.squeeze('pressure', drop=True)
+                    pressure_suffix = f"_{int(pressure_levels[0])}hPa"
+                    # Append pressure level to variable name (e.g., hus -> hus850)
+                    output_variable_name = f"{variable_name}{int(pressure_levels[0])}"
+                    print(f"Selected single pressure level, new shape: {variable_data.shape}")
+                    print(f"Output variable name: {output_variable_name}")
+                else:
+                    # Multiple levels - average them
+                    variable_data = variable_data.mean(dim='pressure', keep_attrs=True)
+                    levels_str = '-'.join([str(int(p)) for p in pressure_levels])
+                    pressure_suffix = f"_avg{levels_str}hPa"
+                    # Append averaged pressure levels to variable name (e.g., hus -> hus850-500)
+                    output_variable_name = f"{variable_name}{levels_str}"
+                    print(f"Averaged {len(pressure_levels)} pressure levels, new shape: {variable_data.shape}")
+                    print(f"Output variable name: {output_variable_name}")
 
         print(f"Variable shape: {variable_data.shape}")
         print(f"Variable dimensions: {variable_data.dims}")
@@ -923,7 +1009,7 @@ def main():
         
         # Extract 2D data for all storm positions using batched approach
         (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
-         x_coords, y_coords) = extract_etc_2d_variable(
+         x_coords, y_coords, var_attrs) = extract_etc_2d_variable(
             storm_df=storm_df,
             variable_data=variable_data,
             hp_grid=hp_grid,
@@ -955,7 +1041,8 @@ def main():
             output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons,
             x_coords, y_coords, output_variable_name, output_path,
             args.radius, args.lon_res, args.lat_res, args.chunk_size,
-            unstructured_mesh=args.unstructured_mesh
+            unstructured_mesh=args.unstructured_mesh,
+            var_attrs=var_attrs
         )
         
         # Print summary for this variable

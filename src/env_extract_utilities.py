@@ -106,6 +106,201 @@ def normalize_pressure_levels(pressure_levels_hPa, dataset_pressure_coord):
     return pressure_levels_dataset, units
 
 
+def convert_w_to_omega(ds, pressure_levels_hPa):
+    """
+    Convert vertical velocity (w) to pressure velocity (omega) using ω = -ρgw
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Dataset containing 'wa' (vertical velocity) and 'ta' (temperature)
+    pressure_levels_hPa : list
+        List of pressure levels in hPa (will be converted to dataset units automatically)
+    
+    Returns:
+    --------
+    xarray.DataArray
+        Omega variable (pressure velocity in Pa/s)
+    """
+    print("Converting vertical velocity (wa) to pressure velocity (omega)...")
+    sys.stdout.flush()
+    
+    # Physical constants
+    g = 9.81  # gravitational acceleration (m/s²)
+    R = 287.04  # specific gas constant for dry air (J/(kg·K))
+    
+    # Get variables
+    w = ds['wa']  # vertical velocity (m/s)
+    T = ds['ta']  # temperature (K)
+    
+    # Normalize pressure levels to dataset units
+    pressure_levels_dataset, pressure_units = normalize_pressure_levels(
+        pressure_levels_hPa, w.pressure
+    )
+
+    # Create omega variable for each pressure level
+    omega_levels = []
+    
+    for i, pressure_hPa in enumerate(pressure_levels_hPa):
+        pressure_dataset = pressure_levels_dataset[i]
+        
+        print(f"  Processing level {pressure_hPa} hPa ({pressure_dataset} {pressure_units})...")
+        sys.stdout.flush()
+        
+        # Select nearest pressure level
+        w_level = w.sel(pressure=pressure_dataset, method='nearest')
+        T_level = T.sel(pressure=pressure_dataset, method='nearest')
+        
+        # Convert pressure to Pa for density calculation if needed
+        if pressure_units == 'hPa':
+            pressure_Pa = pressure_dataset * 100
+        else:
+            pressure_Pa = pressure_dataset
+        
+        # Calculate air density: ρ = p / (R * T)
+        rho = pressure_Pa / (R * T_level)
+        
+        # Calculate omega: ω = -ρgw
+        omega_level = -rho * g * w_level
+        omega_level = omega_level.assign_coords(pressure=pressure_hPa)
+        
+        omega_levels.append(omega_level)
+    
+    # Concatenate all pressure levels
+    omega_combined = xr.concat(omega_levels, dim='pressure')
+    
+    # Add proper attributes
+    omega_combined.attrs = {
+        'long_name': 'Pressure velocity (omega)',
+        'units': 'Pa/s',
+        'description': 'Pressure velocity calculated from vertical velocity using ω = -ρgw',
+        'formula': 'omega = -density * 9.81 * vertical_velocity',
+        'pressure_levels_hPa': str(pressure_levels_hPa),
+        'source_pressure_units': pressure_units
+    }
+    
+    print(f"Omega conversion complete. Pressure levels: {pressure_levels_hPa} hPa")
+    sys.stdout.flush()
+    
+    return omega_combined
+
+
+def convert_omega_to_w(ds, pressure_levels_hPa):
+    """
+    Convert pressure velocity (omega) to vertical velocity (w) using w = -ω/(ρg)
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Dataset containing 'omega' (pressure velocity) and 'ta' (temperature)
+    pressure_levels_hPa : list
+        List of pressure levels in hPa (will be converted to dataset units automatically)
+    
+    Returns:
+    --------
+    xarray.DataArray
+        Vertical velocity variable (m/s)
+    """
+    print("Converting pressure velocity (omega) to vertical velocity (wa)...")
+    sys.stdout.flush()
+    
+    # Physical constants
+    g = 9.81  # gravitational acceleration (m/s²)
+    R = 287.04  # specific gas constant for dry air (J/(kg·K))
+    
+    # Get variables
+    omega = ds['omega']  # pressure velocity (Pa/s)
+    T = ds['ta']  # temperature (K)
+    
+    # Normalize pressure levels to dataset units
+    pressure_levels_dataset, pressure_units = normalize_pressure_levels(
+        pressure_levels_hPa, omega.pressure
+    )
+    
+    # Create wa variable for each pressure level
+    wa_levels = []
+    
+    for i, pressure_hPa in enumerate(pressure_levels_hPa):
+        pressure_dataset = pressure_levels_dataset[i]
+        
+        print(f"  Processing level {pressure_hPa} hPa ({pressure_dataset} {pressure_units})...")
+        sys.stdout.flush()
+        
+        # Select nearest pressure level
+        omega_level = omega.sel(pressure=pressure_dataset, method='nearest')
+        T_level = T.sel(pressure=pressure_dataset, method='nearest')
+        
+        # Convert pressure to Pa for density calculation if needed
+        if pressure_units == 'hPa':
+            pressure_Pa = pressure_dataset * 100
+        else:
+            pressure_Pa = pressure_dataset
+        
+        # Calculate air density: ρ = p / (R * T)
+        rho = pressure_Pa / (R * T_level)
+        
+        # Calculate wa: w = -ω/(ρg)
+        wa_level = -omega_level / (rho * g)
+        wa_level = wa_level.assign_coords(pressure=pressure_hPa)
+        
+        wa_levels.append(wa_level)
+    
+    # Concatenate all pressure levels
+    wa_combined = xr.concat(wa_levels, dim='pressure')
+    
+    # Add proper attributes
+    wa_combined.attrs = {
+        'long_name': 'Vertical velocity (wa)',
+        'units': 'm/s',
+        'description': 'Vertical velocity calculated from pressure velocity using w = -ω/(ρg)',
+        'formula': 'wa = -omega / (density * 9.81)',
+        'pressure_levels_hPa': str(pressure_levels_hPa),
+        'source_pressure_units': pressure_units
+    }
+    
+    print(f"Vertical velocity conversion complete. Pressure levels: {pressure_levels_hPa} hPa")
+    sys.stdout.flush()
+    
+    return wa_combined
+
+
+def compute_surface_wind_speed(ds):
+    """
+    Compute surface wind speed (sfcWind) from horizontal wind components.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Must contain 'uas' and 'vas' variables (eastward and northward surface winds)
+    
+    Returns:
+    --------
+    xarray.DataArray
+        Surface wind speed in m/s
+    """
+    print("  Computing surface wind speed (sfcWind) from uas and vas...")
+    sys.stdout.flush()
+    
+    # Check if both components are available
+    if 'uas' not in ds or 'vas' not in ds:
+        raise ValueError("Both 'uas' and 'vas' required to compute sfcWind")
+    
+    # Compute wind speed: sqrt(u^2 + v^2)
+    sfcWind = np.sqrt(ds['uas']**2 + ds['vas']**2)
+    
+    sfcWind.attrs = {
+        'long_name': 'Near-Surface Wind Speed',
+        'units': 'm s-1',
+        'standard_name': 'wind_speed',
+        'description': 'Surface wind speed computed from eastward and northward components',
+        'formula': 'sqrt(uas^2 + vas^2)'
+    }
+    
+    print("  Surface wind speed computed")
+    sys.stdout.flush()
+    return sfcWind
+
+
 def apply_model_fixes(ds, model_name):
     """
     Apply model-specific fixes for dimension and variable names.

@@ -25,32 +25,38 @@ Date: November 2025
 # VARIABLE RENAMING CONFIGURATION
 # =============================================================================
 
-VARIABLE_RENAMING = {
-    'scream': {
-        # Example: SCREAM uses different naming conventions
-        # 'original_name': 'standard_name'
-        'zg500': 'zg_500hPa',
-        'rh850': 'rh_850hPa',
-    },
-    
+VARIABLE_RENAMING = {       
     'era5': {
         # ERA5 variable renaming
     },
     
-    'nicam': {
+    'scream': {
+        # Example: SCREAM uses different naming conventions
+        # 'original_name': 'standard_name'
+        'zg500': 'zg_500hPa',
+        'rh850': 'hur_850hPa',
+    },
+    
+    'nicam_gl11': {
         # NICAM variable renaming
+        'wa_850hPa': 'omega_850hPa',
+        'wa_500hPa': 'omega_500hPa',
     },
     
-    'icon': {
+    'icon_d3hp003': {
         # ICON variable renaming
+        'wa_850hPa': 'omega_850hPa',
+        'wa_500hPa': 'omega_500hPa',
     },
     
-    'cesm2': {
+    'casesm2_10km_nocumulus': {
         # CESM2 variable renaming
     },
     
-    'um': {
+    'um_glm_n2560_RAL3p3': {
         # UM variable renaming
+        'wa_850hPa': 'omega_850hPa',
+        'wa_500hPa': 'omega_500hPa',
     },
 }
 
@@ -60,19 +66,7 @@ VARIABLE_RENAMING = {
 # =============================================================================
 
 VARIABLE_SCALING = {
-    'scream': {
-        # Precipitation: kg m-2 s-1 → mm/h
-        'pr': (3600000.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3600 s→h)'),
-        
-        # Geopotential: m2 s-2 → geopotential height in m
-        # Using wildcard pattern to match all zg variables (zg850, zg500, zg_850hPa, etc.)
-        'zg*': (1.0, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
-        # Specific Humidity: kg/kg → g/kg
-        'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
-        # Relative Humidity: 1 → %
-        'rh*': (100.0, '%', 'Convert relative humidity (1) to percentage (%)'),
-    },
-    
+
     'era5': {
         # ERA5 variables are typically already in standard units
         'pr': (1.0, 'mm h-1', 'Already in mm/h'),
@@ -81,43 +75,56 @@ VARIABLE_SCALING = {
         # Specific Humidity: kg/kg → g/kg
         'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
     },
+
+    'scream': {
+        # Precipitation: kg m-2 s-1 → mm/h
+        'pr': (3600000.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3600 s→h)'),
+        
+        # Geopotential: m2 s-2 → geopotential height in m
+        # Using wildcard pattern to match all zg variables (zg850, zg500, zg_850hPa, etc.)
+        # 'zg*': (1.0, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
+        # Specific Humidity: kg/kg → g/kg
+        'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
+        # Relative Humidity: 1 → %
+        'rh*': (100.0, '%', 'Convert relative humidity (1) to percentage (%)'),
+    },    
     
-    'nicam': {
+    'nicam_gl11': {
         # Precipitation: kg m-2 s-1 → mm/h
         'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3.6 s→h)'),
         
         # Geopotential: m2 s-2 → geopotential height in m
-        'zg*': (1.0 / 9.81, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
+        # 'zg*': (1.0 / 9.81, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
         # Specific Humidity: kg/kg → g/kg
         'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
     },
     
-    'icon': {
+    'icon_d3hp003': {
         # Precipitation: kg m-2 s-1 → mm/h
         'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3.6 s→h)'),
         
         # Geopotential: m2 s-2 → geopotential height in m
-        'zg*': (1.0 / 9.81, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
+        # 'zg*': (1.0 / 9.81, 'm', 'Convert geopotential (m2 s-2) to geopotential height (m)'),
         # Specific Humidity: kg/kg → g/kg
         'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
     },
     
-    'cesm2': {
+    'casesm2_10km_nocumulus': {
         # Precipitation: kg m-2 s-1 → mm/h
         'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3.6 s→h)'),
         
         # Geopotential height: already in meters
-        'zg*': (1.0, 'm', 'Already in geopotential height'),
+        # 'zg*': (1.0, 'm', 'Already in geopotential height'),
         # Specific Humidity: kg/kg → g/kg
         'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
     },
     
-    'um': {
+    'um_glm_n2560_RAL3p3': {
         # Precipitation: kg m-2 s-1 → mm/h
         'pr': (3600.0, 'mm h-1', 'Convert kg m-2 s-1 to mm/h (×1000 kg→mm, ×3.6 s→h)'),
         
         # Geopotential height: already in meters
-        'zg*': (1.0, 'm', 'Already in geopotential height'),
+        # 'zg*': (1.0, 'm', 'Already in geopotential height'),
         # Specific Humidity: kg/kg → g/kg
         'hus*': (1000.0, 'g kg-1', 'Convert specific humidity (kg/kg) to g/kg'),
     },

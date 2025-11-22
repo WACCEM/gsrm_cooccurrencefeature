@@ -72,6 +72,10 @@ VARIABLES=(
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
@@ -79,7 +83,7 @@ VARIABLES=(
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged): PRESSURE_LEVELS="850,500,300"
 PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
-# PRESSURE_LEVELS="500"  # Uncomment and set for 3D variables
+# PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
 COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables

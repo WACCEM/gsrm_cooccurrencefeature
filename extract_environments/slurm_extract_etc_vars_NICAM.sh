@@ -5,33 +5,28 @@
 ##SBATCH -q shared
 ##SBATCH --mem=8G
 #SBATCH -t 00:15:00
-#SBATCH -J scream
+#SBATCH -J nicam
 #SBATCH -A m1867
-#SBATCH --array=0-9%10
-#SBATCH --output=logs/extract_etc_SCREAM_%A_%a.log
+#SBATCH --array=0-4%5
+#SBATCH --output=logs/extract_etc_NICAM_%A_%a.log
 #SBATCH --mail-user=zhe.feng@pnnl.gov
 #SBATCH --mail-type=FAIL,END
 
-# ===== JOB ARRAY STRUCTURE (SHARED QUEUE) =====
-# This script uses SLURM job arrays on the SHARED queue
-# --array=0-9%10 means:
-#   - 10 tasks total (one per variable, indices 0-9)
-#   - %10 limits to 10 simultaneous tasks (prevents overwhelming remote server)
-# --mem=8G:
-#   - Requests 8 GB memory per task (actual usage ~4-6 GB)
-#   - Shared queue charges only for resources used
-#   - More cost-efficient than full node (512 GB)
+# ===== JOB ARRAY STRUCTURE (REGULAR QUEUE) =====
+# This script uses SLURM job arrays on the REGULAR queue
+# --array=0-4%5 means:
+#   - 5 tasks total (one per variable, indices 0-4)
+#   - %5 limits to 5 simultaneous tasks (prevents overwhelming remote server)
 # Benefits:
-#   - Cost: ~8 GB × 3 tasks = 24 GB vs 512 GB full node (~20x cheaper!)
-#   - Parallel processing: 3x faster than sequential
+#   - Parallel processing: 5x faster than sequential
 #   - Fault tolerance: If one variable fails, others continue
 #   - Resource isolation: Each variable gets dedicated resources
 #   - Easy restart: Can resubmit only failed array indices
 # 
-# The concurrent setting can be overwriten at job submission:
-#   sbatch --array=0-9%5 slurm_extract_etc_2d_vars.sh
+# The concurrent setting can be overwritten at job submission:
+#   sbatch --array=0-4%3 slurm_extract_etc_vars_NICAM.sh
 # To restart failed tasks: 
-#   sbatch --array=2,5 slurm_extract_etc_2d_vars.sh
+#   sbatch --array=2,4 slurm_extract_etc_vars_NICAM.sh
 # ================================
 
 # module load python
@@ -42,9 +37,9 @@ source activate /global/common/software/m1867/python/hackathon
 mkdir -p logs
 
 # Set up paths and parameters
-ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
-TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/scream/single_vars/"
+ROOT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_tracks"
+TRACK_FILE="${ROOT_DIR}/nicam_gl11_hp8.etc_stitched_nodes.txt"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/nicam_gl11/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -53,47 +48,56 @@ mkdir -p $OUTPUT_DIR
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 CURRENT_LOCATION="NERSC"
-# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
-CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
-# CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for pr
-CATALOG_PARAMS='{"zoom": 8}'
+CATALOG_MODEL="nicam_gl11"
+# CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
+# CATALOG_MODEL="nicam_gl11_shifted"            # # For time-shifted NICAM pr data
+# CURRENT_LOCATION=""     # For time-shifted NICAM pr data
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT1H"}'    # For time-shifted NICAM pr data
+CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'    # For 2D NICAM data, use: '{"zoom": 8, "time":"PT3H"}'
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT6H"}'  # For 3D NICAM data, use: '{"zoom": 8, "time":"PT6H"}'
 
 # ===== VARIABLE CONFIGURATION =====
 # 
 # 2D VARIABLES (no pressure dimension):
-#   pr, psl, ua850, va850, ua500, va500, rh850, uivt, vivt, zg500
+#   tas huss ps psl uas vas prw
 #   mcs_ar_etc_overlap_mask, etc_mcs_ar_overlap_mask, ar_mcs_etc_overlap_mask
 #
 # 3D VARIABLES (require --pressure_levels):
-#   ua, va, omega, hus (specific humidity)
+#   ua, va, hus, hur, zg (regular 3D variables)
+#   wa (requires conversion to omega)
 #   Note: For 3D variables, specify pressure levels below
 #
 # Set variables to extract (this corresponds to SLURM array indices)
-# E.g., for 4 variables, do: --array=0-3
+# E.g., for 5 variables, do: --array=0-4
 VARIABLES=(
-    # "pr"    # Hourly 2D variable
-    # "huss" "tas" "uas" "vas" "psl"      # Surface 2D variables
-    # "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"  # 2D variables
-#   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
-  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "pr"  # Hourly 2D variable (must use local cataglog with time-shifted NICAM pr data)
+    # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+#   "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
+  "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
-# For multiple levels (will be averaged): PRESSURE_LEVELS="850,500,300"
-PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
-# PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
+# For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
+# PRESSURE_LEVELS="500"  # Pressure levels in hPa (empty for 2D variables)
+PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+
+# Vertical velocity conversion options (for wa variable)
+# CONVERT_WA_TO_OMEGA=""  # Set to "--convert_wa_to_omega" to convert wa to omega
+CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Uncomment when processing 'wa' variable
+CONVERT_OMEGA_TO_WA=""  # Set to "--convert_omega_to_wa" to convert omega to wa
 
 # COF (Co-occurrence Feature) mask option
-# COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
-COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK="--cof_mask"  # Uncomment to extract COF masks
 
 # Extraction parameters
 RADIUS="20.0"  # Extraction radius in degrees
@@ -117,7 +121,7 @@ MIN_LON=""   # e.g., "-180" or leave empty for no filtering
 MAX_LON=""   # e.g., "180" or leave empty for no filtering
 
 # Storm filtering (for testing - leave empty for production runs)
-# STORM_IDS="1014"  # Comma-separated storm IDs for testing
+# STORM_IDS="100"  # Comma-separated storm IDs for testing
 STORM_IDS=""  # Process all storms
 
 # ===== SELECT VARIABLE FOR THIS ARRAY TASK =====
@@ -165,6 +169,16 @@ if [ -n "$PRESSURE_LEVELS" ]; then
     echo "Pressure levels: $PRESSURE_LEVELS hPa"
 fi
 
+# Add conversion flags if specified (for wa/omega variables)
+if [ -n "$CONVERT_WA_TO_OMEGA" ]; then
+    OPTIONAL_PARAMS="$OPTIONAL_PARAMS $CONVERT_WA_TO_OMEGA"
+    echo "Will convert wa to omega"
+fi
+if [ -n "$CONVERT_OMEGA_TO_WA" ]; then
+    OPTIONAL_PARAMS="$OPTIONAL_PARAMS $CONVERT_OMEGA_TO_WA"
+    echo "Will convert omega to wa"
+fi
+
 # Add storm ID filtering if specified (for testing)
 if [ -n "$STORM_IDS" ]; then
     OPTIONAL_PARAMS="$OPTIONAL_PARAMS --storm_ids $STORM_IDS"
@@ -177,9 +191,15 @@ if [ -n "$COF_MASK" ]; then
     echo "Extracting COF masks"
 fi
 
+# Add current_location if specified (empty means use None in Python)
+if [ -n "$CURRENT_LOCATION" ]; then
+    OPTIONAL_PARAMS="$OPTIONAL_PARAMS --current_location $CURRENT_LOCATION"
+fi
+
 echo "================================================"
 echo "Extraction Configuration:"
 echo "  Model: $CATALOG_MODEL"
+echo "  Catalog params: $CATALOG_PARAMS"
 echo "  Spatial bounds: [$MIN_LON, $MAX_LON] × [$MIN_LAT, $MAX_LAT]"
 echo "  Extraction radius: ${RADIUS}°"
 echo "  Grid resolution: ${LON_RES}° × ${LAT_RES}°"
@@ -187,8 +207,14 @@ echo "  Variable: $CURRENT_VAR"
 if [ -n "$PRESSURE_LEVELS" ]; then
     echo "  Pressure levels: $PRESSURE_LEVELS hPa (for 3D variables)"
 fi
+if [ -n "$CONVERT_WA_TO_OMEGA" ]; then
+    echo "  Conversion: wa → omega"
+fi
+if [ -n "$CONVERT_OMEGA_TO_WA" ]; then
+    echo "  Conversion: omega → wa"
+fi
 echo "  Total variables in array: ${#VARIABLES[@]}"
-echo "  Concurrent tasks limit: 3"
+echo "  Concurrent tasks limit: 5"
 echo "================================================"
 
 # ===== RUN EXTRACTION FOR SINGLE VARIABLE =====
@@ -201,7 +227,6 @@ echo "================================================"
 # Only the current variable (selected by SLURM_ARRAY_TASK_ID) is processed
 srun -n 1 -c 32 --cpu_bind=cores python extract_etc_2d_vars.py \
   --catalog_url "$CATALOG_URL" \
-  --current_location "$CURRENT_LOCATION" \
   --catalog_model "$CATALOG_MODEL" \
   --catalog_params "$CATALOG_PARAMS" \
   --trackfile "$TRACK_FILE" \

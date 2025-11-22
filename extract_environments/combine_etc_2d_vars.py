@@ -398,30 +398,30 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Combine all zarr files in a directory, grouping by suffix
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files
+  # Combine all zarr files for a ERA5 data
+  python combine_etc_2d_vars.py --source era5
   
-  # Apply unit standardization for SCREAM data
+  # Specify optional input directory for SCREAM data
   python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --source scream
   
-  # Specify output directory and source
+  # Specify optional output directory and source
   python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_dir /path/to/output --source era5
   
   # Process only specific suffix pattern with source
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --suffix track1014 --source nicam
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --suffix track1014 --source nicam_gl11
   
   # Custom output filename prefix
-  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_prefix etc_combined --source icon
+  python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --output_prefix etc_combined --source icon_d3hp003
         """
     )
     
-    parser.add_argument('--input_dir', required=True,
-                        help='Directory containing individual zarr files')
+    parser.add_argument('--source', required=True,
+                        choices=['scream', 'era5', 'nicam_gl11', 'icon_d3hp003', 'casesm2_10km_nocumulus', 'um_glm_n2560_RAL3p3'],
+                        help='Source model/dataset name for variable unit standardization and default input path')
+    parser.add_argument('--input_dir', default=None,
+                        help='Directory containing individual zarr files (default: /pscratch/sd/w/wcmca1/hackathon/etc_data/{source}/single_vars)')
     parser.add_argument('--output_dir', default=None,
                         help='Output directory (default: parent directory of input_dir)')
-    parser.add_argument('--source', default=None,
-                        choices=['scream', 'era5', 'nicam', 'icon', 'cesm2', 'um'],
-                        help='Source model/dataset name for variable unit standardization')
     parser.add_argument('--output_prefix', default='etc_2d_combined',
                         help='Prefix for output filenames (default: etc_2d_combined)')
     parser.add_argument('--suffix', default=None,
@@ -435,6 +435,16 @@ Examples:
     
     args = parser.parse_args()
     
+    # Set input directory - default based on source
+    if args.input_dir is None:
+        args.input_dir = f"/pscratch/sd/w/wcmca1/hackathon/etc_data/{args.source}/single_vars"
+        print(f"Using default input directory for source '{args.source}'")
+    
+    # Verify input directory exists
+    if not os.path.exists(args.input_dir):
+        print(f"ERROR: Input directory does not exist: {args.input_dir}")
+        return
+    
     # Set output directory - default is parent directory of input_dir
     if args.output_dir:
         output_dir = args.output_dir
@@ -445,7 +455,7 @@ Examples:
     print("="*70)
     print("ETC 2D Variable Combiner")
     print("="*70)
-    print("Input directory: {args.input_dir}")
+    print(f"Input directory: {args.input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Output prefix: {args.output_prefix}")
     if args.source:
@@ -507,7 +517,7 @@ Examples:
     print(f"{'='*70}")
     print(f"Successfully combined {len(combined_files)} file group(s):")
     for filepath in combined_files:
-        print(f"  {os.path.basename(filepath)}")
+        print(f"  {filepath}")
     print(f"{'='*70}")
 
 
