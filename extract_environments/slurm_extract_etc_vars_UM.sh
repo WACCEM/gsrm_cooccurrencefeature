@@ -52,8 +52,8 @@ CATALOG_MODEL="um_glm_n2560_RAL3p3"
 # CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml" # For local catalog UM data
 # CURRENT_LOCATION=""
 # CATALOG_MODEL="um_glm_n2560_RAL3p3"
-CATALOG_PARAMS='{"zoom": 8, "time": "PT1H"}'    # For 2D UM data
-# CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'  # For 3D UM data
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT1H"}'    # For 2D UM data
+CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'  # For 3D UM data
 
 # ===== VARIABLE CONFIGURATION =====
 # 
@@ -70,24 +70,24 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT1H"}'    # For 2D UM data
 # E.g., for 5 variables, do: --array=0-4
 VARIABLES=(
 #   "pr"  # Hourly 2D variable
-    # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+    "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
 #   "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
-#   "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
-  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "pr" "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
-# PRESSURE_LEVELS="850"  # Pressure levels in hPa (empty for 2D variables)
-PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+PRESSURE_LEVELS="500"  # Pressure levels in hPa (empty for 2D variables)
+# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # Vertical velocity conversion options (for wa variable)
 # CONVERT_WA_TO_OMEGA=""  # Set to "--convert_wa_to_omega" to convert wa to omega
@@ -95,8 +95,8 @@ CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Uncomment when processing 'wa' va
 CONVERT_OMEGA_TO_WA=""  # Set to "--convert_omega_to_wa" to convert omega to wa
 
 # COF (Co-occurrence Feature) mask option
-# COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
-COF_MASK="--cof_mask"  # Uncomment to extract COF masks
+COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK="--cof_mask"  # Uncomment to extract COF masks
 
 # Extraction parameters
 RADIUS="20.0"  # Extraction radius in degrees
