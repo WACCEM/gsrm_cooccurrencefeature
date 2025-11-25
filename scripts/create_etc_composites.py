@@ -2,14 +2,13 @@
 Create ETC composites separated by hemisphere and overlap category.
 
 This script:
-1. Loads ETC COF parquet data (contains overlap flags and track IDs)
-2. Loads ETC 2D Zarr data (contains environmental fields)
-3. Combines the datasets by matching storm_id and time
-4. Creates composites for NH and SH separately
-5. Converts mask variables to binary (0/1) for frequency calculation
-6. Saves composites as compressed NetCDF files
+1. Loads ETC 2D Zarr data (contains environmental fields and COF overlap data)
+2. Creates composites for NH and SH separately
+3. Converts mask variables to binary (0/1) for frequency calculation
+4. Saves composites as compressed NetCDF files
 
-Note: Variable unit standardization is now applied in combine_etc_2d_vars.py
+Note: Variable unit standardization and COF data integration are now applied
+      in combine_etc_2d_vars.py. Run that script first to prepare the zarr file.
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """
@@ -33,12 +32,6 @@ def parse_args():
         required=True,
         choices=['scream', 'era5', 'nicam_gl11', 'icon_d3hp003', 'casesm2_10km_nocumulus', 'um_glm_n2560_RAL3p3'],
         help='Source model/dataset name'
-    )
-    parser.add_argument(
-        '--etc-path',
-        type=str,
-        default='/pscratch/sd/w/wcmca1/hackathon/etc_tracks/',
-        help='Path to ETC COF parquet files'
     )
     parser.add_argument(
         '--zarr-path',
@@ -74,19 +67,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_etc_cof_data(etc_file):
-    """Load ETC COF parquet file."""
-    print(f"\nLoading ETC COF data from: {etc_file}")
-    if not os.path.isfile(etc_file):
-        raise FileNotFoundError(f"ETC COF file not found: {etc_file}")
-    
-    etc_df = pd.read_parquet(etc_file)
-    print(f"  Loaded {len(etc_df)} records")
-    print(f"  Unique storms: {etc_df['storm_id'].nunique()}")
-    
-    return etc_df
-
-
 def load_etc_zarr_data(zarr_file):
     """Load ETC 2D Zarr data."""
     print(f"\nLoading ETC 2D Zarr data from: {zarr_file}")
@@ -120,99 +100,6 @@ def get_overlap_category(overlap_flag):
         3: '3way'        # ETC + AR + MCS (3-way)
     }
     return overlap_map.get(overlap_flag, '3way')
-
-
-def combine_datasets(ds, etc_df):
-    """Combine Zarr dataset with parquet DataFrame."""
-    print("\nCombining datasets...")
-    
-    # Ensure base_time in DataFrame matches the time coordinate in Zarr
-    etc_df['time'] = pd.to_datetime(etc_df['base_time'])
-    
-    # Create arrays for the new variables matching Zarr's time dimension
-    n_times = len(ds.time)
-    
-    # Initialize arrays
-    overlap_flag_array = np.full(n_times, np.nan)
-    ar_tracks_list = [[] for _ in range(n_times)]
-    mcs_tracks_list = [[] for _ in range(n_times)]
-    cof_lat_array = np.full(n_times, np.nan)
-    cof_lon_array = np.full(n_times, np.nan)
-    
-    # Create a lookup dictionary for fast access
-    # Key: (storm_id, time), Value: (overlap_flag, ar_tracks, mcs_tracks, lat, lon)
-    etc_lookup = {}
-    for idx, row in etc_df.iterrows():
-        key = (row['storm_id'], pd.Timestamp(row['time']))
-        etc_lookup[key] = (row['overlap_flag'], row['ar_tracks'], row['mcs_tracks'], 
-                           row['lat'], row['lon'])
-    
-    print(f"  Created lookup dictionary with {len(etc_lookup)} entries")
-    
-    # Match Zarr time points with DataFrame
-    for i, (time_val, storm_id_val) in enumerate(zip(ds.time.values, ds.storm_id.values)):
-        time_key = pd.Timestamp(time_val)
-        key = (int(storm_id_val), time_key)
-        
-        if key in etc_lookup:
-            overlap_flag_array[i] = etc_lookup[key][0]
-            ar_tracks_list[i] = etc_lookup[key][1]
-            mcs_tracks_list[i] = etc_lookup[key][2]
-            cof_lat_array[i] = etc_lookup[key][3]
-            cof_lon_array[i] = etc_lookup[key][4]
-    
-    # Check matching statistics
-    matched = np.sum(~np.isnan(overlap_flag_array))
-    print(f"  Matched {matched}/{n_times} time points ({100*matched/n_times:.1f}%)")
-    
-    print(f"  Overlap flag distribution:")
-    for flag in [0, 1, 2, 3]:
-        count = np.sum(overlap_flag_array == flag)
-        if matched > 0:
-            print(f"    Flag {flag}: {count} ({100*count/matched:.1f}% of matched)")
-        else:
-            print(f"    Flag {flag}: {count}")
-    
-    # Add the new variables to the Zarr dataset
-    ds['overlap_flag'] = (['time'], overlap_flag_array, {
-        'long_name': 'Co-occurrence overlap flag',
-        'description': '0=isolated, 1=MCS only, 2=AR only, 3=MCS+AR',
-        'units': '1'
-    })
-    
-    # For ar_tracks and mcs_tracks, we'll store them as string representations
-    ar_tracks_str = [str(tracks) if tracks is not None and len(tracks) > 0 else '[]' 
-                     for tracks in ar_tracks_list]
-    mcs_tracks_str = [str(tracks) if tracks is not None and len(tracks) > 0 else '[]' 
-                      for tracks in mcs_tracks_list]
-    
-    ds['ar_tracks_str'] = (['time'], ar_tracks_str, {
-        'long_name': 'AR track IDs',
-        'description': 'List of AR tracks overlapping with ETC (string representation)',
-        'units': '1'
-    })
-    
-    ds['mcs_tracks_str'] = (['time'], mcs_tracks_str, {
-        'long_name': 'MCS track IDs',
-        'description': 'List of MCS tracks overlapping with ETC (string representation)',
-        'units': '1'
-    })
-    
-    ds['cof_lat'] = (['time'], cof_lat_array, {
-        'long_name': 'ETC center latitude from COF data',
-        'description': 'Latitude of ETC center from co-occurrence feature tracking',
-        'units': 'degrees_north'
-    })
-    
-    ds['cof_lon'] = (['time'], cof_lon_array, {
-        'long_name': 'ETC center longitude from COF data',
-        'description': 'Longitude of ETC center from co-occurrence feature tracking',
-        'units': 'degrees_east'
-    })
-    
-    print(f"  Added variables: overlap_flag, ar_tracks_str, mcs_tracks_str, cof_lat, cof_lon")
-    
-    return ds
 
 
 def convert_masks_and_create_exclusive_precip(ds, overlap_category='3way'):
@@ -486,9 +373,9 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
     """
     print(f"\nCreating composite for overlap_flag={overlap_flag} ({overlap_name})...")
     
-    # Hemisphere masks
-    mask_nh = ds.cof_lat > nh_lat_threshold
-    mask_sh = ds.cof_lat < sh_lat_threshold
+    # Hemisphere masks - compute to avoid dask array indexing issues
+    mask_nh = (ds.cof_lat > nh_lat_threshold).compute()
+    mask_sh = (ds.cof_lat < sh_lat_threshold).compute()
     
     print(f"  Northern Hemisphere (lat > {nh_lat_threshold}): {mask_nh.sum().values} points")
     print(f"  Southern Hemisphere (lat < {sh_lat_threshold}): {mask_sh.sum().values} points")
@@ -497,15 +384,15 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
     ds_binary = convert_masks_and_create_exclusive_precip(ds, overlap_category=overlap_category)
     
     # Create composite for this specific overlap flag
-    # NH composite
-    mask_nh_overlap = (ds_binary.overlap_flag == overlap_flag) & mask_nh
+    # Compute overlap masks to avoid dask array indexing issues
+    mask_nh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_nh).compute()
     nh_count = mask_nh_overlap.sum().values
     composite_nh = ds_binary.where(mask_nh_overlap, drop=True).mean(
         dim='time', skipna=True, keep_attrs=True
     )
     
     # SH composite
-    mask_sh_overlap = (ds_binary.overlap_flag == overlap_flag) & mask_sh
+    mask_sh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_sh).compute()
     sh_count = mask_sh_overlap.sum().values
     composite_sh = ds_binary.where(mask_sh_overlap, drop=True).mean(
         dim='time', skipna=True, keep_attrs=True
@@ -586,7 +473,6 @@ def main():
     print(f"Source: {args.source}")
     
     # Set up paths
-    etc_file = f"{args.etc_path}/{args.source}_etc_cof_data.parquet"
     zarr_file = f"{args.zarr_path}/{args.source}/etc_2d_combined_all_all.zarr"
     
     if args.out_dir is None:
@@ -596,14 +482,23 @@ def main():
     
     try:
         # Load data
-        etc_df = load_etc_cof_data(etc_file)
         ds = load_etc_zarr_data(zarr_file)
         
-        # Note: Variable unit standardization is now applied in combine_etc_2d_vars.py
-        # The zarr file should already have standardized units
+        # Note: Variable unit standardization and COF data integration
+        # are now applied in combine_etc_2d_vars.py
+        # The zarr file should already have standardized units and COF overlap data
         
-        # Combine datasets
-        ds = combine_datasets(ds, etc_df)
+        # Verify COF data is present
+        if 'overlap_flag' not in ds:
+            raise ValueError(
+                "COF overlap data not found in zarr file. "
+                "Please run combine_etc_2d_vars.py with --add-cof-data (default) first."
+            )
+        
+        print(f"\nCOF overlap data found in zarr file")
+        print(f"  overlap_flag: {ds.overlap_flag.dims}")
+        print(f"  cof_lat: {ds.cof_lat.dims}")
+        print(f"  cof_lon: {ds.cof_lon.dims}")
         
         # Define overlap flag configurations
         overlap_configs = [

@@ -6,7 +6,12 @@ This script:
 2. Groups files by their suffix pattern (e.g., track1014, all_all)
 3. Combines variables from the same group into a single zarr file
 4. Applies variable unit standardization based on source model/dataset
-5. Preserves all metadata and coordinates
+5. Optionally adds ETC COF (Co-Occurrence Feature) overlap data from parquet files:
+   - Adds overlap_flag (0=isolated, 1=MCS only, 2=AR only, 3=MCS+AR)
+   - Adds AR and MCS track IDs for overlapping features
+   - Adds ETC center coordinates (cof_lat, cof_lon) from tracking data
+   - Enabled by default, can be disabled with --no-cof-data flag
+6. Preserves all metadata and coordinates
 
 Author: Zhe Feng
 Last updated: November 2025
@@ -20,6 +25,7 @@ from pathlib import Path
 import re
 import sys
 from collections import defaultdict
+import pandas as pd
 
 # Import variable scaling configuration
 try:
@@ -179,7 +185,134 @@ def group_zarr_files(directory):
     return groups
 
 
-def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1000):
+def add_cof_data_to_combined(combined_ds, source, etc_path=None):
+    """
+    Add ETC COF overlap information to the combined dataset.
+    
+    This function loads ETC COF parquet data and adds overlap flags and track IDs
+    to the combined zarr dataset by matching storm_id and time.
+    
+    Parameters:
+    -----------
+    combined_ds : xarray.Dataset
+        Combined dataset with storm_id and time coordinates
+    source : str
+        Source identifier (e.g., 'era5', 'scream', 'nicam_gl11')
+    etc_path : str, optional
+        Path to ETC COF parquet files (default: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/)
+    
+    Returns:
+    --------
+    combined_ds : xarray.Dataset
+        Dataset with added COF variables: overlap_flag, ar_tracks_str, mcs_tracks_str, cof_lat, cof_lon
+    """
+    if etc_path is None:
+        etc_path = '/pscratch/sd/w/wcmca1/hackathon/etc_tracks/'
+    
+    etc_file = f"{etc_path}/{source}_etc_cof_data.parquet"
+    
+    print(f"\n  Loading ETC COF data from: {etc_file}")
+    
+    if not os.path.isfile(etc_file):
+        print(f"  WARNING: ETC COF file not found: {etc_file}")
+        print(f"  Skipping COF data integration")
+        return combined_ds
+    
+    # Load COF data
+    etc_df = pd.read_parquet(etc_file)
+    print(f"    Loaded {len(etc_df)} COF records")
+    print(f"    Unique storms: {etc_df['storm_id'].nunique()}")
+    
+    # Ensure base_time in DataFrame matches the time coordinate
+    etc_df['time'] = pd.to_datetime(etc_df['base_time'])
+    
+    # Create arrays for the new variables matching dataset's time dimension
+    n_times = len(combined_ds.time)
+    
+    # Initialize arrays
+    overlap_flag_array = np.full(n_times, np.nan)
+    ar_tracks_list = [[] for _ in range(n_times)]
+    mcs_tracks_list = [[] for _ in range(n_times)]
+    cof_lat_array = np.full(n_times, np.nan)
+    cof_lon_array = np.full(n_times, np.nan)
+    
+    # Create a lookup dictionary for fast access
+    # Key: (storm_id, time), Value: (overlap_flag, ar_tracks, mcs_tracks, lat, lon)
+    etc_lookup = {}
+    for idx, row in etc_df.iterrows():
+        key = (row['storm_id'], pd.Timestamp(row['time']))
+        etc_lookup[key] = (row['overlap_flag'], row['ar_tracks'], row['mcs_tracks'], 
+                           row['lat'], row['lon'])
+    
+    print(f"    Created lookup dictionary with {len(etc_lookup)} entries")
+    
+    # Match dataset time points with DataFrame
+    for i, (time_val, storm_id_val) in enumerate(zip(combined_ds.time.values, combined_ds.storm_id.values)):
+        time_key = pd.Timestamp(time_val)
+        key = (int(storm_id_val), time_key)
+        
+        if key in etc_lookup:
+            overlap_flag_array[i] = etc_lookup[key][0]
+            ar_tracks_list[i] = etc_lookup[key][1]
+            mcs_tracks_list[i] = etc_lookup[key][2]
+            cof_lat_array[i] = etc_lookup[key][3]
+            cof_lon_array[i] = etc_lookup[key][4]
+    
+    # Check matching statistics
+    matched = np.sum(~np.isnan(overlap_flag_array))
+    print(f"    Matched {matched}/{n_times} time points ({100*matched/n_times:.1f}%)")
+    
+    print(f"    Overlap flag distribution:")
+    for flag in [0, 1, 2, 3]:
+        count = np.sum(overlap_flag_array == flag)
+        if matched > 0:
+            print(f"      Flag {flag}: {count} ({100*count/matched:.1f}% of matched)")
+        else:
+            print(f"      Flag {flag}: {count}")
+    
+    # Add the new variables to the dataset
+    combined_ds['overlap_flag'] = (['time'], overlap_flag_array, {
+        'long_name': 'Co-occurrence overlap flag',
+        'description': '0=isolated, 1=MCS only, 2=AR only, 3=MCS+AR',
+        'units': '1'
+    })
+    
+    # For ar_tracks and mcs_tracks, we'll store them as string representations
+    ar_tracks_str = [str(tracks) if tracks is not None and len(tracks) > 0 else '[]' 
+                     for tracks in ar_tracks_list]
+    mcs_tracks_str = [str(tracks) if tracks is not None and len(tracks) > 0 else '[]' 
+                      for tracks in mcs_tracks_list]
+    
+    combined_ds['ar_tracks_str'] = (['time'], ar_tracks_str, {
+        'long_name': 'AR track IDs',
+        'description': 'List of AR tracks overlapping with ETC (string representation)',
+        'units': '1'
+    })
+    
+    combined_ds['mcs_tracks_str'] = (['time'], mcs_tracks_str, {
+        'long_name': 'MCS track IDs',
+        'description': 'List of MCS tracks overlapping with ETC (string representation)',
+        'units': '1'
+    })
+    
+    combined_ds['cof_lat'] = (['time'], cof_lat_array, {
+        'long_name': 'ETC center latitude from COF data',
+        'description': 'Latitude of ETC center from co-occurrence feature tracking',
+        'units': 'degrees_north'
+    })
+    
+    combined_ds['cof_lon'] = (['time'], cof_lon_array, {
+        'long_name': 'ETC center longitude from COF data',
+        'description': 'Longitude of ETC center from co-occurrence feature tracking',
+        'units': 'degrees_east'
+    })
+    
+    print(f"    Added COF variables: overlap_flag, ar_tracks_str, mcs_tracks_str, cof_lat, cof_lon")
+    
+    return combined_ds
+
+
+def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1000, add_cof_data=True, etc_path=None):
     """
     Combine multiple zarr files into a single multi-variable zarr file.
     
@@ -195,6 +328,10 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
         Source identifier for variable scaling (e.g., 'scream', 'era5')
     chunk_size : int
         Chunk size for time dimension
+    add_cof_data : bool
+        Whether to add COF overlap data to the combined file (default: True)
+    etc_path : str, optional
+        Path to ETC COF parquet files (default: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/)
     """
     print(f"\nCombining {len(file_list)} variables for suffix '{suffix}':")
     
@@ -306,6 +443,12 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
     else:
         print("\n  No source specified - skipping variable renaming and unit standardization")
     
+    # Add COF overlap data if requested
+    if add_cof_data and source:
+        combined_ds = add_cof_data_to_combined(combined_ds, source, etc_path)
+    elif add_cof_data and not source:
+        print("\n  WARNING: Cannot add COF data without source specification - skipping")
+    
     # Set up chunking - same as individual files
     ny = len(combined_ds['y'])
     nx = len(combined_ds['x'])
@@ -398,8 +541,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Combine all zarr files for a ERA5 data
+  # Combine all zarr files for ETC data (includes COF overlap data by default)
   python combine_etc_2d_vars.py --source era5
+  
+  # Combine without COF overlap data
+  python combine_etc_2d_vars.py --source era5 --no-cof-data
+  
+  # Specify custom COF data path
+  python combine_etc_2d_vars.py --source era5 --etc-path /custom/path/to/etc_tracks/
   
   # Specify optional input directory for SCREAM data
   python combine_etc_2d_vars.py --input_dir /path/to/zarr/files --source scream
@@ -432,6 +581,12 @@ Examples:
                         help='Verify combined files after creation (default: True)')
     parser.add_argument('--no-verify', dest='verify', action='store_false',
                         help='Skip verification step')
+    parser.add_argument('--add-cof-data', action='store_true', default=True,
+                        help='Add ETC COF overlap data to combined files (default: True)')
+    parser.add_argument('--no-cof-data', dest='add_cof_data', action='store_false',
+                        help='Skip adding COF overlap data')
+    parser.add_argument('--etc-path', default=None,
+                        help='Path to ETC COF parquet files (default: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/)')
     
     args = parser.parse_args()
     
@@ -460,6 +615,14 @@ Examples:
     print(f"Output prefix: {args.output_prefix}")
     if args.source:
         print(f"Source (for unit standardization): {args.source}")
+    if args.add_cof_data:
+        print(f"Add COF overlap data: Yes")
+        if args.etc_path:
+            print(f"COF data path: {args.etc_path}")
+        else:
+            print(f"COF data path: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/ (default)")
+    else:
+        print(f"Add COF overlap data: No")
     if args.suffix:
         print(f"Processing suffix: {args.suffix}")
     print("="*70)
@@ -502,7 +665,8 @@ Examples:
         
         # Combine files
         result = combine_zarr_files(file_list, output_path, suffix, 
-                                   source=args.source, chunk_size=args.chunk_size)
+                                   source=args.source, chunk_size=args.chunk_size,
+                                   add_cof_data=args.add_cof_data, etc_path=args.etc_path)
         
         if result:
             combined_files.append(result)
