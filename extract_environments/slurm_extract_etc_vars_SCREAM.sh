@@ -42,7 +42,7 @@ source activate /global/common/software/m1867/python/hackathon
 mkdir -p logs
 
 # Set up paths and parameters
-ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
+ROOT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_tracks"
 TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
 OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/scream/single_vars/"
 
@@ -71,17 +71,18 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 4 variables, do: --array=0-3
 VARIABLES=(
+    "ps"
     # "pr"    # Hourly 2D variable
-    # "huss" "tas" "uas" "vas" "psl"      # Surface 2D variables
+    # "huss" "tas" "uas" "vas" "psl" "ps"      # Surface 2D variables
     # "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"  # 2D variables
 #   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
-  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
-  "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
-  "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
-  "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "etc_ar_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
+#   "etc_mcs_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "mcs_etc_overlap_mask"     # COF mask (2D, requires --cof_mask flag)
+#   "ar_etc_overlap_mask"      # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
@@ -92,8 +93,8 @@ PRESSURE_LEVELS=""  # Pressure levels in hPa (empty for 2D variables)
 # PRESSURE_LEVELS="850"  # Uncomment and set for 3D variables
 
 # COF (Co-occurrence Feature) mask option
-# COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
-COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+COF_MASK=""  # Set to "--cof_mask" to extract COF masks instead of model variables
+# COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
 
 # Extraction parameters
 RADIUS="20.0"  # Extraction radius in degrees

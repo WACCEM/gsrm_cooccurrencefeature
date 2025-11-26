@@ -18,7 +18,7 @@
 # ===================================
 
 # Set up paths and parameters
-ROOT_DIR="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking"
+ROOT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_tracks"
 TRACK_FILE="${ROOT_DIR}/screamv2_ne120_hp8.etc_stitched_nodes.txt"
 OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/scream/single_vars/"
 
@@ -45,11 +45,12 @@ CATALOG_PARAMS='{"zoom": 8}'
 #
 # Set variables to extract
 VARIABLES=(
+    "ps"
     # "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
 #   "pr"  # Example 2D variable
 #   "psl" "uivt" "vivt" "zg500"  # More 2D variables
 #   "va" "omega" "hus"  # More 3D variables (need PRESSURE_LEVELS)
-  "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
+#   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
 
 # 3D variable options (for pressure level data)
@@ -60,8 +61,8 @@ VARIABLES=(
 PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # COF (Co-occurrence Feature) mask option
-# COF_MASK=""
-COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
+COF_MASK=""
+# COF_MASK="--cof_mask"  # Set to "--cof_mask" to extract COF masks instead of model variables
 
 # Extraction parameters
 RADIUS="20.0"  # Extraction radius in degrees
