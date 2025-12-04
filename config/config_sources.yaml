@@ -56,8 +56,8 @@ nicam_gl11:
     time: PT6H
   varname_precip_liq: pr
   pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
-  startdate: '2020-03-01T00:00'
-  enddate: '2021-02-28T23:59'
+  start_datetime: '2020-03-01T00:00'
+  end_datetime: '2021-02-28T23:59'
   dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/nicam_gl11_tracking/
   source_te: nicam_gl11
   source_res: hp8_H

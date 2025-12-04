@@ -61,13 +61,13 @@ def parse_args():
         '--overlap-flag',
         type=str,
         default='all',
-        help='Overlap flag to process: 0=isolated, 1=mcs_only, 2=ar_only, 3=3way, or "all" (default: all)'
+        help='Overlap flag to process: -1=all_frames, 0=isolated, 1=mcs_only, 2=ar_only, 3=3way, or "all" to process all flags (default: all)'
     )
     
     return parser.parse_args()
 
 
-def load_etc_zarr_data(zarr_file):
+def load_etc_zarr_data(zarr_file, source=None):
     """Load ETC 2D Zarr data."""
     print(f"\nLoading ETC 2D Zarr data from: {zarr_file}")
     if not os.path.isdir(zarr_file):
@@ -76,6 +76,15 @@ def load_etc_zarr_data(zarr_file):
     ds = xr.open_zarr(zarr_file, consolidated=True)
     print(f"  Dataset dimensions: {dict(ds.sizes)}")
     print(f"  Number of variables: {len(ds.data_vars)}")
+    
+    # Apply time filter for ERA5 (consistent with notebook analysis)
+    if source == 'era5':
+        era5_time_start = "2019-08-01"
+        era5_time_end = "2020-09-01"
+        ds = ds.sortby('time')
+        ds = ds.sel(time=slice(era5_time_start, era5_time_end))
+        print(f"  Filtered ERA5 to {era5_time_start} - {era5_time_end}")
+        print(f"  Time points after filtering: {len(ds.time)}")
     
     return ds
 
@@ -97,7 +106,8 @@ def get_overlap_category(overlap_flag):
         0: 'isolated',   # No overlaps - only ETC
         1: 'mcs_only',   # ETC + MCS only
         2: 'ar_only',    # ETC + AR only
-        3: '3way'        # ETC + AR + MCS (3-way)
+        3: '3way',       # ETC + AR + MCS (3-way)
+        -1: 'all'        # All time frames (no filtering)
     }
     return overlap_map.get(overlap_flag, '3way')
 
@@ -126,8 +136,8 @@ def convert_masks_and_create_exclusive_precip(ds, overlap_category='3way'):
     
     ds_binary = ds.copy()
     
-    if overlap_category == '3way':
-        # 3-way overlap: ETC+AR+MCS
+    if overlap_category == '3way' or overlap_category == 'all':
+        # 3-way overlap: ETC+AR+MCS (also used for 'all' category)
         mask_vars = ['ar_mcs_etc_overlap_mask', 'mcs_ar_etc_overlap_mask', 'etc_mcs_ar_overlap_mask']
         available_mask_vars = [v for v in mask_vars if v in ds.data_vars]
         
@@ -336,7 +346,7 @@ def convert_masks_and_create_exclusive_precip(ds, overlap_category='3way'):
         
         # Just copy the dataset, no mask conversion needed for isolated
         # The overlap_flag filtering will handle selecting isolated cases
-        
+    
     else:
         print(f"  WARNING: Unknown overlap_category '{overlap_category}' - using original dataset")
         return ds
@@ -384,19 +394,36 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
     ds_binary = convert_masks_and_create_exclusive_precip(ds, overlap_category=overlap_category)
     
     # Create composite for this specific overlap flag
-    # Compute overlap masks to avoid dask array indexing issues
-    mask_nh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_nh).compute()
-    nh_count = mask_nh_overlap.sum().values
-    composite_nh = ds_binary.where(mask_nh_overlap, drop=True).mean(
-        dim='time', skipna=True, keep_attrs=True
-    )
-    
-    # SH composite
-    mask_sh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_sh).compute()
-    sh_count = mask_sh_overlap.sum().values
-    composite_sh = ds_binary.where(mask_sh_overlap, drop=True).mean(
-        dim='time', skipna=True, keep_attrs=True
-    )
+    # For 'all' category, don't filter by overlap_flag - use all time frames
+    if overlap_flag == -1:  # 'all' category
+        # No overlap_flag filtering - use all time frames in the hemisphere
+        mask_nh_overlap = mask_nh.compute()
+        nh_count = mask_nh_overlap.sum().values
+        composite_nh = ds_binary.where(mask_nh_overlap, drop=True).mean(
+            dim='time', skipna=True, keep_attrs=True
+        )
+        
+        # SH composite
+        mask_sh_overlap = mask_sh.compute()
+        sh_count = mask_sh_overlap.sum().values
+        composite_sh = ds_binary.where(mask_sh_overlap, drop=True).mean(
+            dim='time', skipna=True, keep_attrs=True
+        )
+    else:
+        # Specific overlap_flag - filter as usual
+        # Compute overlap masks to avoid dask array indexing issues
+        mask_nh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_nh).compute()
+        nh_count = mask_nh_overlap.sum().values
+        composite_nh = ds_binary.where(mask_nh_overlap, drop=True).mean(
+            dim='time', skipna=True, keep_attrs=True
+        )
+        
+        # SH composite
+        mask_sh_overlap = ((ds_binary.overlap_flag == overlap_flag) & mask_sh).compute()
+        sh_count = mask_sh_overlap.sum().values
+        composite_sh = ds_binary.where(mask_sh_overlap, drop=True).mean(
+            dim='time', skipna=True, keep_attrs=True
+        )
     
     print(f"  NH: {nh_count:6d} points, SH: {sh_count:6d} points")
     
@@ -481,8 +508,8 @@ def main():
         out_dir = args.out_dir
     
     try:
-        # Load data
-        ds = load_etc_zarr_data(zarr_file)
+        # Load data (pass source for ERA5 time filtering)
+        ds = load_etc_zarr_data(zarr_file, source=args.source)
         
         # Note: Variable unit standardization and COF data integration
         # are now applied in combine_etc_2d_vars.py
@@ -505,7 +532,8 @@ def main():
             (0, 'isolated', 'Isolated (no overlaps)'),
             (1, 'mcs_only', 'MCS only'),
             (2, 'ar_only', 'AR only'),
-            (3, '3way', 'MCS+AR (3-way)')
+            (3, '3way', 'MCS+AR (3-way)'),
+            (-1, 'all', 'All (all time frames)')
         ]
         
         # Determine which overlap flags to process
@@ -516,7 +544,7 @@ def main():
             flag_val = int(args.overlap_flag)
             flags_to_process = [config for config in overlap_configs if config[0] == flag_val]
             if not flags_to_process:
-                raise ValueError(f"Invalid overlap flag: {flag_val}. Must be 0, 1, 2, 3, or 'all'")
+                raise ValueError(f"Invalid overlap flag: {flag_val}. Must be -1, 0, 1, 2, 3, or 'all'")
             print(f"\nProcessing overlap flag: {flag_val}")
         
         # Create composites for each requested overlap flag
