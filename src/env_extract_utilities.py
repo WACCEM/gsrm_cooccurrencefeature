@@ -264,6 +264,54 @@ def convert_omega_to_w(ds, pressure_levels_hPa):
     return wa_combined
 
 
+def convert_scream_zg(zg_data, elev_data):
+    """
+    Convert SCREAM geopotential height by adding terrain elevation.
+    
+    SCREAM stores geopotential height (zg) as height above surface,
+    but for consistency with other models, we need to add the terrain
+    elevation (ELEV) to get the actual geopotential height above sea level.
+    
+    Parameters
+    ----------
+    zg_data : xarray.DataArray
+        SCREAM geopotential height variable (e.g., zg500, zg_500hPa)
+        May have dimensions: (time, cell) or (time, pressure, cell)
+    elev_data : xarray.DataArray
+        SCREAM terrain elevation (ELEV) - static field with dimension (cell)
+    
+    Returns
+    -------
+    xarray.DataArray
+        Corrected geopotential height with terrain elevation added
+    
+    Notes
+    -----
+    - ELEV is a static field (no time dimension)
+    - The correction is: zg_corrected = zg + ELEV
+    - This operation broadcasts ELEV across time and pressure dimensions
+    
+    Example
+    -------
+    >>> zg500_corrected = convert_scream_zg(ds['zg500'], ds['ELEV'])
+    """
+    # Make a copy to avoid modifying original data
+    zg_corrected = zg_data.copy()
+    
+    # Add terrain elevation to geopotential height
+    # xarray handles broadcasting automatically - ELEV will be broadcast
+    # across time and pressure dimensions as needed
+    zg_corrected = zg_corrected + elev_data
+    
+    # Update attributes to document the correction
+    if hasattr(zg_corrected, 'attrs'):
+        zg_corrected.attrs['scream_correction'] = 'Added terrain elevation (ELEV) to geopotential height'
+        if 'long_name' in zg_corrected.attrs:
+            zg_corrected.attrs['long_name'] = zg_corrected.attrs['long_name'] + ' (with terrain correction)'
+    
+    return zg_corrected
+
+
 def compute_surface_wind_speed(ds):
     """
     Compute surface wind speed (sfcWind) from horizontal wind components.

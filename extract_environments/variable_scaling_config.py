@@ -35,6 +35,10 @@ VARIABLE_RENAMING = {
         # 'original_name': 'standard_name'
         'zg500': 'zg_500hPa',
         'rh850': 'hur_850hPa',
+        'omega_850hPa': 'omega_850hPa_avg',  # 3D slice is 3h average
+        'omega_500hPa': 'omega_500hPa_avg',  # 3D slice is 3h average
+        'omega850': 'omega_850hPa',     # 2D omega is instantaneous
+        'omega500': 'omega_500hPa',     # 2D omega is instantaneous
     },
     
     'nicam_gl11': {

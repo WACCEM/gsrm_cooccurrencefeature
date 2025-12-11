@@ -43,6 +43,7 @@ from src.env_extract_utilities import (
     normalize_pressure_levels,
     convert_w_to_omega, 
     convert_omega_to_w,
+    convert_scream_zg,
     apply_model_fixes,
     parse_etc_track_file
 )
@@ -961,6 +962,17 @@ def main():
             print(f"Loading variable data: {variable_name}")
             sys.stdout.flush()
             variable_data = ds[variable_name]
+
+            # Handle SCREAM specific variable fixes
+            if 'scream' in args.catalog_model.lower() and 'zg' in variable_name:
+                # Check if ELEV exists in dataset
+                if 'ELEV' in ds:
+                    print("Applying SCREAM zg variable fix (add ELEV to zg)")
+                    variable_data = convert_scream_zg(variable_data, ds['ELEV'])
+                    print("SCREAM zg variable fix applied")
+                else:
+                    print("WARNING: ELEV not found in dataset - skipping SCREAM zg correction")
+                sys.stdout.flush()
             
             # Check if 3D variable (has pressure dimension)
             # Only process if not already handled by conversion (conversions already handle pressure)

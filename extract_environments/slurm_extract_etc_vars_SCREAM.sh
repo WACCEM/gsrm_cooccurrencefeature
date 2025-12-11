@@ -29,9 +29,9 @@
 #   - Easy restart: Can resubmit only failed array indices
 # 
 # The concurrent setting can be overwriten at job submission:
-#   sbatch --array=0-9%5 slurm_extract_etc_2d_vars.sh
+#   sbatch --array=0-9%5 slurm_extract_etc_vars_SCREAM.sh
 # To restart failed tasks: 
-#   sbatch --array=2,5 slurm_extract_etc_2d_vars.sh
+#   sbatch --array=2,5 slurm_extract_etc_vars_SCREAM.sh
 # ================================
 
 # module load python
@@ -53,15 +53,15 @@ mkdir -p $OUTPUT_DIR
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 CURRENT_LOCATION="NERSC"
-# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
-CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
+CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
+# CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
 # CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for pr
 CATALOG_PARAMS='{"zoom": 8}'
 
 # ===== VARIABLE CONFIGURATION =====
 # 
 # 2D VARIABLES (no pressure dimension):
-#   pr, psl, ua850, va850, ua500, va500, rh850, uivt, vivt, zg500
+#   pr, psl, ua850, va850, omega850, rh850, ua500, va500, omega500, rh500, zg500, uivt, vivt
 #   mcs_ar_etc_overlap_mask, etc_mcs_ar_overlap_mask, ar_mcs_etc_overlap_mask
 #
 # 3D VARIABLES (require --pressure_levels):
@@ -71,7 +71,7 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 4 variables, do: --array=0-3
 VARIABLES=(
-    "ps"
+    "omega850" "omega500"
     # "pr"    # Hourly 2D variable
     # "huss" "tas" "uas" "vas" "psl" "ps"      # Surface 2D variables
     # "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"  # 2D variables
