@@ -53,8 +53,8 @@ if __name__ == "__main__":
     # Specify which code function to run
     # code_func = "make_mcs_swath_masks"
     # code_func = "combine_tracking_masks"
-    # code_func = "make_cooccurrence_masks"
-    code_func = "calc_monthly_rainmap_by_cof"
+    code_func = "make_cooccurrence_masks"
+    # code_func = "calc_monthly_rainmap_by_cof"
 
     # Define a list of run names to process
     runnames = [
