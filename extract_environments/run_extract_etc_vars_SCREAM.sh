@@ -27,9 +27,11 @@ mkdir -p $OUTPUT_DIR
 
 # ===== PARAMETERS TO CUSTOMIZE =====
 # Model and catalog settings
-CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+# CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
 CURRENT_LOCATION="NERSC"
-CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
+CATALOG_MODEL="scream2D_hrly"  # Use scream2D_hrly for pr
+# CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
 # CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
 CATALOG_PARAMS='{"zoom": 8}'
 
@@ -45,9 +47,9 @@ CATALOG_PARAMS='{"zoom": 8}'
 #
 # Set variables to extract
 VARIABLES=(
-    "zg500"
+    # "zg500"
     # "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)
-#   "pr"  # Example 2D variable
+  "pr"  # Example 2D variable
 #   "psl" "uivt" "vivt" "zg500"  # More 2D variables
 #   "va" "omega" "hus"  # More 3D variables (need PRESSURE_LEVELS)
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)

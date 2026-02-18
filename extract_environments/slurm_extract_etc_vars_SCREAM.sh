@@ -51,7 +51,8 @@ mkdir -p $OUTPUT_DIR
 
 # ===== PARAMETERS TO CUSTOMIZE =====
 # Model and catalog settings
-CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+# CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
 CURRENT_LOCATION="NERSC"
 CATALOG_MODEL="scream_ne120_inst"  # Use scream_ne120_inst for 2D instantaneous variables
 # CATALOG_MODEL="scream_ne120"  # Use scream_ne120 for 3D 3h average variables
@@ -71,8 +72,8 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 4 variables, do: --array=0-3
 VARIABLES=(
-    "omega850" "omega500"
-    # "pr"    # Hourly 2D variable
+    # "omega850" "omega500"
+    "pr"    # Hourly 2D variable
     # "huss" "tas" "uas" "vas" "psl" "ps"      # Surface 2D variables
     # "ua850" "va850" "ua500" "va500" "rh850" "uivt" "vivt" "zg500"  # 2D variables
 #   "ua" "va" "omega" "hus"  # 3D variables (need PRESSURE_LEVELS)

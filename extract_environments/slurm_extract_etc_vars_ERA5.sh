@@ -67,7 +67,8 @@ CATALOG_PARAMS='{"zoom": 8}'
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 3 variables, do: --array=0-2
 VARIABLES=(
-  "pr" "ps" "psl" "tas" "d2m" "u10" "v10" "sstk" "prw"  # 2D variables
+    "pr"    # Hourly 2D variable (will use IMERG V7 precipitation for ERA5)
+#   "pr" "ps" "psl" "tas" "d2m" "u10" "v10" "sstk" "prw"  # 2D variables
 #   "ua" "va" "omega" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)

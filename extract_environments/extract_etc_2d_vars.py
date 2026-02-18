@@ -745,7 +745,7 @@ def main():
             # Load IMERG data for precipitation
             dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
             in_basename = "IMERG_V7_"
-            time_res = "1H"
+            time_res = "6H"
             zoom = catalog_params.get('zoom', 8)
             in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
             
@@ -761,6 +761,91 @@ def main():
             print(f"  IMERG dataset loaded successfully")
             print(f"  Variables available: {list(ds.data_vars)}")
             sys.stdout.flush()
+        
+        elif 'scream' in args.catalog_model.lower() and 'pr' in args.variables:
+            print(f"Special case detected: SCREAM model with 'pr' variable")
+            print(f"Loading SCREAM precipitation (NOT from catalog)")
+            
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
+            in_basename = "scream_pr"
+            time_res = "6h"
+            zoom = catalog_params.get('zoom', 8)
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            
+            print(f"  Reading: {in_zarr}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(in_zarr, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            
+            print(f"  SCREAM dataset loaded successfully")
+            print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+        
+        elif 'nicam_gl11' in args.catalog_model.lower() and 'pr' in args.variables:
+            print(f"Special case detected: NICAM model with 'pr' variable")
+            print(f"Loading NICAM precipitation (NOT from catalog)")
+            
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
+            in_basename = "NICAM_pr"
+            time_res = "6h"
+            zoom = catalog_params.get('zoom', 8)
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            
+            print(f"  Reading: {in_zarr}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(in_zarr, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            
+            print(f"  NICAM dataset loaded successfully")
+            print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+        
+        elif 'um_glm_n2560_ral3p3' in args.catalog_model.lower() and 'pr' in args.variables:
+            print(f"Special case detected: UM GLM model with 'pr' variable")
+            print(f"Loading UM GLM precipitation (NOT from catalog)")
+            
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
+            in_basename = "um_glm_n2560_RAL3p3_pr"
+            time_res = "6h"
+            zoom = catalog_params.get('zoom', 8)
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            
+            print(f"  Reading: {in_zarr}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(in_zarr, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            
+            print(f"  UM GLM dataset loaded successfully")
+            print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+        
+        elif 'casesm2_10km_nocumulus' in args.catalog_model.lower() and 'pr' in args.variables:
+            print(f"Special case detected: CASESM2 model with 'pr' variable")
+            print(f"Loading CASESM2 precipitation (NOT from catalog)")
+            
+            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/"
+            in_basename = "casesm2_10km_nocumulus_pr"
+            time_res = "6h"
+            zoom = catalog_params.get('zoom', 8)
+            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
+            
+            print(f"  Reading: {in_zarr}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(in_zarr, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            
+            print(f"  CASESM2 dataset loaded successfully")
+            print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+            
         else:
             # Standard catalog loading for all other cases
             if args.current_location is not None:

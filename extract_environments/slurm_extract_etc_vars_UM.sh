@@ -70,8 +70,8 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'  # For 3D UM data
 # E.g., for 5 variables, do: --array=0-4
 VARIABLES=(
 #   "pr"  # Hourly 2D variable
-    "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
-#   "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
+    # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+  "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
 #   "pr" "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
@@ -90,8 +90,8 @@ PRESSURE_LEVELS="500"  # Pressure levels in hPa (empty for 2D variables)
 # PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # Vertical velocity conversion options (for wa variable)
-# CONVERT_WA_TO_OMEGA=""  # Set to "--convert_wa_to_omega" to convert wa to omega
-CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Uncomment when processing 'wa' variable
+CONVERT_WA_TO_OMEGA=""  # Set to "--convert_wa_to_omega" to convert wa to omega
+# CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Uncomment when processing 'wa' variable
 CONVERT_OMEGA_TO_WA=""  # Set to "--convert_omega_to_wa" to convert omega to wa
 
 # COF (Co-occurrence Feature) mask option

@@ -20,7 +20,8 @@
 # Set up paths and parameters
 ROOT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_tracks"
 TRACK_FILE="${ROOT_DIR}/um_glm_n2560_RAL3p3_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/um_glm_n2560_RAL3p3/single_vars/"
+# OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/um_glm_n2560_RAL3p3/single_vars/"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/um_glm_n2560_RAL3p3/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -49,8 +50,8 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'  # For 3D UM data
 # Set variables to extract
 VARIABLES=(
     # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
-    "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
-    # "pr"  # Hourly 2D variable
+    # "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
+    "pr"  # Hourly 2D variable
 #   "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # More 2D variables
 #   "etc_mcs_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
@@ -59,8 +60,8 @@ VARIABLES=(
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
-PRESSURE_LEVELS="850"  # Pressure levels in hPa
-# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+# PRESSURE_LEVELS="850"  # Pressure levels in hPa
+PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 # ONVERT_WA_TO_OMEGA=""
 CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Set to "--convert_wa_to_omega" to convert wa to omega
 CONVERT_OMEGA_TO_WA=""  # Set to "--convert_omega_to_wa" to convert omega to wa
@@ -91,8 +92,8 @@ MIN_LON=""   # e.g., "-180" or leave empty for no filtering
 MAX_LON=""   # e.g., "180" or leave empty for no filtering
 
 # Storm filtering (for testing - leave empty for production runs)
-STORM_IDS="100"  # Comma-separated storm IDs for testing
-# STORM_IDS=""  # Uncomment to process all storms
+# STORM_IDS="100"  # Comma-separated storm IDs for testing
+STORM_IDS=""  # Uncomment to process all storms
 
 echo "Starting ETC 2D variable extraction (Interactive Mode)..."
 echo "Processing ${#VARIABLES[@]} variable(s)"

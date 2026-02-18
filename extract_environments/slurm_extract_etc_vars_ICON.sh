@@ -53,8 +53,8 @@ CATALOG_MODEL="icon_d3hp003"
 # CURRENT_LOCATION=""
 # CATALOG_MODEL="icon_d3hp003"
 # CATALOG_PARAMS='{"zoom": 8, "time": "PT1H", "time_method": "inst"}'    # For hourly pr data
-# CATALOG_PARAMS='{"zoom": 8, "time": "PT3H", "time_method": "mean"}'    # For 2D ICON data
-CATALOG_PARAMS='{"zoom": 8, "time": "PT6H", "time_method": "inst"}'  # For 3D ICON data
+CATALOG_PARAMS='{"zoom": 8, "time": "PT3H", "time_method": "mean"}'    # For 2D ICON data
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT6H", "time_method": "inst"}'  # For 3D ICON data
 
 # ===== VARIABLE CONFIGURATION =====
 # 
@@ -70,8 +70,8 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT6H", "time_method": "inst"}'  # For 3D IC
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 5 variables, do: --array=0-4
 VARIABLES=(
-#   "pr"  # Hourly 2D variable
-    "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+  "pr"  # Hourly 2D variable
+    # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
 #   "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
 #   "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
@@ -87,8 +87,8 @@ VARIABLES=(
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
-PRESSURE_LEVELS="500"  # Pressure levels in hPa (empty for 2D variables)
-# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+# PRESSURE_LEVELS="500"  # Pressure levels in hPa (empty for 2D variables)
+PRESSURE_LEVELS=""  # Uncomment for 2D variables only
 
 # Vertical velocity conversion options (for wa variable)
 # CONVERT_WA_TO_OMEGA=""  # Set to "--convert_wa_to_omega" to convert wa to omega

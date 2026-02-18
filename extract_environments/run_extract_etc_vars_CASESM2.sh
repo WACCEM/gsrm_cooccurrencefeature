@@ -9,7 +9,7 @@
 #   2. Activate Python environment:
 #      source activate /global/common/software/m1867/python/hackathon
 #   3. Run this script:
-#      bash run_extract_etc_vars_ICON.sh
+#      bash run_extract_etc_vars_CASESM2.sh
 #
 # Benefits of interactive mode:
 #   - Real-time output monitoring
@@ -19,8 +19,9 @@
 
 # Set up paths and parameters
 ROOT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_tracks"
-TRACK_FILE="${ROOT_DIR}/icon_d3hp003_hp8.etc_stitched_nodes.txt"
-OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/icon_d3hp003/single_vars/"
+TRACK_FILE="${ROOT_DIR}/casesm2_10km_nocumulus_hp8.etc_stitched_nodes.txt"
+# OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/tests/casesm2_10km_nocumulus/single_vars/"
+OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/etc_data/casesm2_10km_nocumulus/single_vars/"
 
 # Create output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
@@ -28,14 +29,13 @@ mkdir -p $OUTPUT_DIR
 # ===== PARAMETERS TO CUSTOMIZE =====
 # Model and catalog settings
 CATALOG_URL="https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
-CURRENT_LOCATION="NERSC"
-CATALOG_MODEL="icon_d3hp003"
-# CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml" # For time-shifted NICAM pr data
+CURRENT_LOCATION="online"
+# CATALOG_URL="/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml" # NERSC catalog
 # CURRENT_LOCATION=""
-# CATALOG_MODEL="icon_d3hp003"
-# CATALOG_PARAMS='{"zoom": 8, "time": "PT1H", "time_method": "inst"}'    # For hourly pr data
-CATALOG_PARAMS='{"zoom": 8, "time": "PT3H", "time_method": "mean"}'    # For 2D ICON data
-# CATALOG_PARAMS='{"zoom": 8, "time": "PT6H", "time_method": "inst"}'  # For 3D ICON data
+CATALOG_MODEL="casesm2_10km_nocumulus"
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT1H"}'    # For hourly pr data
+# CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'    # For 2D data, use: '{"zoom": 8, "time":"PT3H"}'
+CATALOG_PARAMS='{"zoom": 8, "time": "PT6H"}'  # For 3D data, use: '{"zoom": 8, "time":"PT6H"}'
 
 # ===== VARIABLE CONFIGURATION =====
 # 
@@ -50,9 +50,10 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT3H", "time_method": "mean"}'    # For 2D 
 #
 # Set variables to extract
 VARIABLES=(
-    # "ua" "va" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
+    "wa"
+    # "ua" "va" "hus" "hur" "zg" "wa" # 3D variables (need PRESSURE_LEVELS)
     # "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
-    "pr"  # Hourly 2D variable
+    # "pr"  # Hourly 2D variable
 #   "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # More 2D variables
 #   "etc_mcs_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 )
@@ -61,10 +62,10 @@ VARIABLES=(
 # Leave empty for 2D variables
 # For single level: PRESSURE_LEVELS="850"
 # For multiple levels (will be averaged among the layers): PRESSURE_LEVELS="800,750,700,600"
-# PRESSURE_LEVELS="850"  # Pressure levels in hPa
-PRESSURE_LEVELS=""  # Uncomment for 2D variables only
-# ONVERT_WA_TO_OMEGA=""
-CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Set to "--convert_wa_to_omega" to convert wa to omega
+PRESSURE_LEVELS="850"  # Pressure levels in hPa
+# PRESSURE_LEVELS=""  # Uncomment for 2D variables only
+ONVERT_WA_TO_OMEGA=""
+# CONVERT_WA_TO_OMEGA="--convert_wa_to_omega"  # Set to "--convert_wa_to_omega" to convert wa to omega
 CONVERT_OMEGA_TO_WA=""  # Set to "--convert_omega_to_wa" to convert omega to wa
 
 # COF (Co-occurrence Feature) mask option
@@ -93,8 +94,8 @@ MIN_LON=""   # e.g., "-180" or leave empty for no filtering
 MAX_LON=""   # e.g., "180" or leave empty for no filtering
 
 # Storm filtering (for testing - leave empty for production runs)
-STORM_IDS="100"  # Comma-separated storm IDs for testing
-# STORM_IDS=""  # Uncomment to process all storms
+# STORM_IDS="100"  # Comma-separated storm IDs for testing
+STORM_IDS=""  # Uncomment to process all storms
 
 echo "Starting ETC 2D variable extraction (Interactive Mode)..."
 echo "Processing ${#VARIABLES[@]} variable(s)"

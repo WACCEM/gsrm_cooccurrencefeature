@@ -55,6 +55,8 @@ VARIABLE_RENAMING = {
     
     'casesm2_10km_nocumulus': {
         # CESM2 variable renaming
+        'wa_850hPa': 'omega_850hPa',
+        'wa_500hPa': 'omega_500hPa',
     },
     
     'um_glm_n2560_RAL3p3': {

@@ -70,10 +70,10 @@ CATALOG_PARAMS='{"zoom": 8, "time": "PT3H"}'    # For 2D NICAM data, use: '{"zoo
 # Set variables to extract (this corresponds to SLURM array indices)
 # E.g., for 5 variables, do: --array=0-4
 VARIABLES=(
-#   "pr"  # Hourly 2D variable (must use local cataglog with time-shifted NICAM pr data)
+  "pr"  # Hourly 2D variable (must use local cataglog with time-shifted NICAM pr data)
     # "ua" "va" "wa" "hus" "hur" "zg"  # 3D variables (need PRESSURE_LEVELS)
 #   "wa"  # 3D variable (need PRESSURE_LEVELS & CONVERT_WA_TO_OMEGA)
-  "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
+#   "tas" "huss" "ps" "psl" "uas" "vas" "prw"  # 2D variables
 #   "mcs_ar_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "ar_mcs_etc_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
 #   "etc_mcs_ar_overlap_mask"  # COF mask (2D, requires --cof_mask flag)
