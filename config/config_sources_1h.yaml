@@ -1,0 +1,117 @@
+---
+# Configuration file for different data sources (1-hourly)
+# Note: not all catalog models support the 'time' or 'time_method' catalog_params.
+#       For models that do not support these parameters, they are omitted.
+catalog_file: "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+
+# IMERG configuration (IMERG data is not in the catalog; using local 1-hourly Zarr files)
+IMERG:
+  source_name: IMERGv7
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+  varname_precip_liq: precipitation
+  varname_precip_ice:
+  pr_convert_factor: 1.0  # Already in [mm/h]
+  start_datetime: 2019-01-01T00:00
+  end_datetime: 2021-12-31T23:59
+  # start_datetime: 2019-08-01T00:00
+  # end_datetime: 2021-12-31T23:59
+
+# SCREAM model configuration
+# Note: scream_ne120 does not support 'time' or 'time_method' in catalog_params
+scream_ne120:
+  source_name: scream
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+  varname_precip_liq: pr
+  varname_precip_ice: prs
+  pr_convert_factor: 3600000.0  # Convert from [m/s] to [mm/h]
+  start_datetime: 2019-08-01T00:00
+  end_datetime: 2020-08-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking/
+  source_te: screamv2_ne120
+  source_res: hp8_hp8
+
+# ICON model configuration
+icon_d3hp003:
+  source_name: icon_d3hp003
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+    time: PT1H
+    time_method: inst
+  varname_precip_liq: pr
+  varname_precip_ice: prs
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-01-02T00:00
+  end_datetime: 2020-12-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/icon_d3hp003_1year_tracking/
+  source_te: icon_d3hp003
+  source_res: hp8_PT1H
+
+# NICAM model
+nicam_gl11:
+  source_name: nicam_gl11
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+    time: PT1H
+  varname_precip_liq: pr
+  varname_precip_ice:
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: '2020-03-01T00:00'
+  end_datetime: '2021-02-28T23:59'
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/nicam_gl11_tracking/
+  source_te: nicam_gl11
+  source_res: hp8_PT1H
+
+# UM model
+# Note: um_glm_n2560_RAL3p3 does not support 'time' or 'time_method' in catalog_params
+um_glm_n2560_RAL3p3:
+  source_name: um_glm_n2560_RAL3p3
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+  varname_precip_liq: pr
+  varname_precip_ice:
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-01-01T00:00
+  end_datetime: 2021-02-28T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/um_glm_n2560_RAL3p3_tracking/
+  source_te: um_glm_n2560_RAL3p3
+  source_res: hp8_PT1H
+
+# CASESM2 model configuration
+casesm2_10km_nocumulus:
+  source_name: casesm2_10km_nocumulus
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+    time: PT1H
+  varname_precip_liq: pr
+  varname_precip_ice: prs
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-03-01T00:00
+  end_datetime: 2021-02-28T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/casesm2_10km_nocumulus_tracking/
+  source_te: casesm2_10km_nocumulus
+  source_res: hp8_PT1H
+
+# IFS model configuration
+ifs_tco3999_rcbmf:
+  source_name: ifs_tco3999_rcbmf
+  catalog_location: online
+  catalog_params:
+    zoom: 8
+    time: PT1H
+    time_method: mean
+  varname_precip_liq: pr
+  varname_precip_ice:
+  pr_convert_factor: 3600.0  # Convert flux unit to [mm/h]
+  start_datetime: 2020-01-01T00:00
+  end_datetime: 2021-03-31T23:59
+  dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/ifs_tco3999_rcbmf_tracking/
+  source_te: ifs_tco3999_rcbmf
+  source_res: PT1H
