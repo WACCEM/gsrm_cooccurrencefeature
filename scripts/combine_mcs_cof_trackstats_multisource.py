@@ -277,8 +277,12 @@ def ds_to_dataframe(ds, keep_indices=None, time_res_h=1.0, name='', logger=None)
             if v in _SUM_MERGERS:
                 # Clip times to max valid step — single contiguous hyperslab
                 # read of (all_tracks, max_time, mergers); fill→0, sum mergers
-                arr = np.clip(ds[v].values[:, :max_time, :].astype(float),
-                              0, None)             # fill (-9999) → 0
+                # Use nan_to_num before clip to also handle NaN fill values
+                arr = np.nan_to_num(
+                    ds[v].values[:, :max_time, :].astype(float),
+                    nan=0.0, posinf=0.0, neginf=0.0,
+                )
+                arr = np.clip(arr, 0, None)        # numeric fill (-9999) → 0
                 data[v] = arr.sum(axis=2)[orig_track_idx, time_idx]
 
         elif dims == ('tracks', 'times', 'nmaxpf'):
