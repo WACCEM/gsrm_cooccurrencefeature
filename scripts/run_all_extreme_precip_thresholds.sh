@@ -31,6 +31,7 @@ SOURCES=(
 # PERCENTILES="90 95"
 # TIME_DURATIONS="6h 1D"
 # METHOD="linear"
+MIN_PRECIP_THRESHOLD=0.1  # Minimum precipitation threshold in mm/h (default: 0.1)
 # OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/extreme_precip/"
 # VERSION="v1"
 
@@ -65,6 +66,9 @@ for SOURCE in "${SOURCES[@]}"; do
     # if [ ! -z "${METHOD}" ]; then
     #     CMD="${CMD} --method ${METHOD}"
     # fi
+    if [ ! -z "${MIN_PRECIP_THRESHOLD}" ]; then
+        CMD="${CMD} --min_precip_threshold ${MIN_PRECIP_THRESHOLD}"
+    fi
     # if [ ! -z "${OUTPUT_DIR}" ]; then
     #     CMD="${CMD} --output_dir ${OUTPUT_DIR}"
     # fi

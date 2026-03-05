@@ -17,7 +17,7 @@ N_WORKERS=16  # Increase for better parallelization on NERSC
 
 # Default: process all sources
 if [ -z "$1" ]; then
-    SOURCES=("scream_ne120" "IR_IMERG" "nicam_gl11" "um_glm_n2560_RAL3p3" "casesm2_10km_nocumulus")
+    SOURCES=("scream_ne120" "IR_IMERG" "icon_d3hp003" "nicam_gl11" "um_glm_n2560_RAL3p3" "casesm2_10km_nocumulus")
 else
     SOURCES=("$1")
 fi
