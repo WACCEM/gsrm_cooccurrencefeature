@@ -406,8 +406,13 @@ def add_tb_pr_to_dataset(_ds, config):
     if not common_times:
         raise ValueError("No common time values between mask dataset and catalog dataset!")
     
-    # 3. Select ds_p to only the common times (BEFORE expensive operations)
-    ds_p = ds_p.sel(time=common_times)
+    # 3. Select ds_p to only the common times (BEFORE expensive operations).
+    # Eagerly load the small time slice into memory here so the full multi-year
+    # catalog task graph (with its native 262144-cell chunks) is released before
+    # we derive pr/tb. Without .load(), the 4x chunk size mismatch between the
+    # catalog (cell=262144) and the MCS mask zarr (cell=65536) causes a large
+    # intermediate memory spike when _ds.load() is called later in the worker.
+    ds_p = ds_p.sel(time=common_times).load()
     
     # 4. Convert precipitation units (only for common times)
     # Check liquid precipitation variable
@@ -554,7 +559,8 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         'dz_pr': dz_pr,
     }
 
-def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbose=False):
+def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbose=False,
+                                    store_offsets=None):
     """
     Wrapper function for processing a time chunk by reading from zarr file.
     
@@ -565,32 +571,66 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
     Args:
         start_idx: Start index in the time dimension
         end_idx: End index in the time dimension (exclusive)
-        zarr_path: Path to the zarr file containing the data
+        zarr_path: Path (str) or list of paths to the zarr store(s).
+            When a list is provided the stores are opened and concatenated
+            along the time dimension before slicing.
         config: Configuration dictionary with catalog and variable information
         verbose: Whether to print verbose output
+        store_offsets: Optional list of (global_start, global_end_exclusive, path) tuples.
+            When provided, each worker opens only the store(s) that contain the
+            requested time range instead of opening and concatenating all stores.
         
     Returns:
         tuple: (time_str, results_dict) or (time_str, None) if error
     """
     try:
-        # Each worker opens the zarr file independently
-        ds = xr.open_dataset(zarr_path, engine='zarr', chunks=None)
-        
-        # Select the specific times for this chunk using integer indexing
-        _ds = ds.isel(time=slice(start_idx, end_idx))
+        # Open only the zarr store(s) needed for this time slice.
+        # store_offsets lets each worker target a single annual store rather than
+        # opening and concatenating all stores (avoids per-worker memory overhead).
+        open_stores = []
+        if store_offsets is not None:
+            relevant = [(gs, ge, p) for gs, ge, p in store_offsets
+                        if gs < end_idx and ge > start_idx]
+            if len(relevant) == 1:
+                gs, _ge, path = relevant[0]
+                _s = xr.open_dataset(path, engine='zarr', chunks=None)
+                open_stores.append(_s)
+                _ds = _s.isel(time=slice(start_idx - gs, end_idx - gs))
+            else:
+                parts = []
+                for gs, ge, path in relevant:
+                    _s = xr.open_dataset(path, engine='zarr', chunks=None)
+                    open_stores.append(_s)
+                    local_start = max(0, start_idx - gs)
+                    local_end = min(ge - gs, end_idx - gs)
+                    parts.append(_s.isel(time=slice(local_start, local_end)))
+                _ds = xr.concat(parts, dim='time')
+        elif isinstance(zarr_path, list):
+            for p in zarr_path:
+                _s = xr.open_dataset(p, engine='zarr', chunks=None)
+                open_stores.append(_s)
+            _ds = xr.concat(open_stores, dim='time').isel(time=slice(start_idx, end_idx))
+        else:
+            _s = xr.open_dataset(zarr_path, engine='zarr', chunks=None)
+            open_stores.append(_s)
+            _ds = _s.isel(time=slice(start_idx, end_idx))
         
         # Get the first time value for output
         out_time_val = _ds.time.values[0]
         
-        # Load the data into memory
+        # Load zarr data into memory and close the open stores to free memory
         _ds = _ds.load()
         _ds = _ds.pipe(egh.attach_coords)
-        
-        # Close the full dataset to free memory
-        ds.close()
+        for _s in open_stores:
+            _s.close()
         
         # Add tb and pr variables to the dataset chunk
         _ds = add_tb_pr_to_dataset(_ds, config)
+        # Eagerly load tb/pr into numpy to release the catalog's dask task graphs.
+        # Without this, each .values call in process_timechunk_swath triggers a
+        # separate catalog read and keeps the full task graph alive in worker memory.
+        _ds = _ds.load()
+        gc.collect()
         
         # Process this time chunk (all times in the chunk)
         timestep_results = process_timechunk_swath(_ds, verbose=verbose)
@@ -611,7 +651,7 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                           time_groups, output_time_coords,
                           client=None, logger=None, parallel=True, 
                           input_zarr_path=None, batch_size=100,
-                          config=None):
+                          config=None, store_offsets=None):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
     
@@ -706,7 +746,8 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                     meta['end_idx'],
                     input_zarr_path,
                     config,
-                    verbose=False
+                    verbose=False,
+                    store_offsets=store_offsets
                 )
                 futures[future] = meta
             
@@ -787,7 +828,7 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             chunk_results = {}
             time_str, result = process_timechunk_wrapper_zarr(
                 start_idx, end_idx, input_zarr_path, config,
-                verbose=False
+                verbose=False, store_offsets=store_offsets
             )
             if result is not None and time_str is not None:
                 chunk_results[time_str] = result
@@ -929,7 +970,21 @@ def main():
     pixel_path_name = config.get("pixel_path_name")
     pixel_path = f"{root_path}{pixel_path_name}/"
     in_basename = config.get("zarr_output_presets", {}).get("healpix").get("out_filebase")
-    in_zarr = f"{pixel_path}{in_basename}hp{zoom}_v1.zarr"
+    # Prefer dated zarr stores (e.g., *_hp8_v1_20190101.0000_20200101.0100.zarr).
+    # Pattern matches *_v1_{date}_*.zarr but not *_v1.zarr.
+    # Falls back to the canonical *_hp8_v1.zarr when no dated stores exist.
+    zarr_pattern = f"{pixel_path}{in_basename}hp{zoom}_v1_[0-9]*.zarr"
+    dated_zarr_stores = sorted(glob.glob(zarr_pattern))
+    if len(dated_zarr_stores) >= 1:
+        logger.info(f"Found {len(dated_zarr_stores)} dated zarr store(s) to use:")
+        for p in dated_zarr_stores:
+            logger.info(f"  {os.path.basename(p)}")
+        in_zarr = dated_zarr_stores if len(dated_zarr_stores) > 1 else dated_zarr_stores[0]
+    else:
+        # Fall back to the canonical v1 store
+        in_zarr = f"{pixel_path}{in_basename}hp{zoom}_v1.zarr"
+        logger.info(f"No dated zarr stores found, using: {os.path.basename(in_zarr)}")
+
     # Catalog information
     catalog_file = config.get('catalog_file')
     catalog_location = config.get('catalog_location')
@@ -968,7 +1023,12 @@ def main():
     print("MAKE MCS SWATH MASK PROCESSING")
     print("="*80)
     print(f"Source: {source_name}")
-    print(f"Input: {in_zarr}")
+    if isinstance(in_zarr, list):
+        print(f"Input: {len(in_zarr)} zarr stores (concatenated by time):")
+        for p in in_zarr:
+            print(f"  {p}")
+    else:
+        print(f"Input: {in_zarr}")
     print(f"Output: {out_zarr}")
     print(f"Parallel processing: {parallel}")
     if parallel:
@@ -986,20 +1046,33 @@ def main():
     try:
         # Load the full dataset
         print(f"\nLoading full dataset...")
+        store_offsets = None  # per-store offset table so workers open only what they need
         try:
-            # Read MCS mask dataset from zarr
-            # ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=False)
-            ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
+            # Read MCS mask dataset from zarr (single store or multiple dated stores).
+            # Build store_offsets alongside so workers can target individual stores.
+            if isinstance(in_zarr, list):
+                ds_list = []
+                store_offsets = []
+                offset = 0
+                for p in in_zarr:
+                    _s = xr.open_zarr(p, consolidated=True, mask_and_scale=True)
+                    n = len(_s.time)
+                    store_offsets.append((offset, offset + n, p))
+                    offset += n
+                    ds_list.append(_s)
+                ds = xr.concat(ds_list, dim='time')
+            else:
+                ds = xr.open_zarr(in_zarr, consolidated=True, mask_and_scale=True)
+            
             # ds = ds.pipe(egh.attach_coords)  # Commented out for testing
             print(f"  ✅ Dataset loaded successfully")
             print(f"  Time steps: {len(ds.time)}")
             print(f"  Data variables: {list(ds.data_vars)}")
             print(f"  Spatial dimensions: {dict(ds.dims)}")
-
+        
         except Exception as e:
             print(f"  ❌ Error loading dataset: {e}")
             return
-        
         # Limit time steps for testing if requested
         if args.test_steps is not None:
             ds = ds.isel(time=slice(0, args.test_steps))
@@ -1070,6 +1143,7 @@ def main():
                 input_zarr_path=in_zarr,  # Pass the input zarr path for workers
                 batch_size=batch_size,  # Number of chunks per batch
                 config=processing_config,  # Configuration dictionary
+                store_offsets=store_offsets,  # Per-store offset table for targeted reads
             )
             
             logger.info(f"✅ Processing complete: {total_processed} chunks written to {out_zarr}")
