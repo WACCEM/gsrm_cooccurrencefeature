@@ -29,6 +29,12 @@ try:
 except ImportError:
     DASK_AVAILABLE = False
 
+try:
+    import dask.array as da
+    DASK_ARRAY_AVAILABLE = True
+except ImportError:
+    DASK_ARRAY_AVAILABLE = False
+
 
 def zoom_level_from_nside(nside):
     """
@@ -260,10 +266,16 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
         if var_attrs and var_name in var_attrs:
             default_attrs.update(var_attrs[var_name])
         
-        # Initialize with zeros
-        data_vars[var_name] = (['time', 'cell'], 
-                              np.zeros((len(time_coords), n_cells), dtype=np.float32),
-                              default_attrs)
+        # Initialize with lazy dask zeros so the full array is never materialized
+        # in memory. np.zeros would allocate all time × cells × n_vars at once:
+        # e.g. 21 vars × 4384 steps × 786432 cells × 4 bytes = 290 GB for 3-year
+        # hp8 data. dask.array.zeros writes chunk-by-chunk (~150 MB per chunk).
+        if DASK_ARRAY_AVAILABLE:
+            data = da.zeros((len(time_coords), n_cells), dtype=np.float32,
+                            chunks=(chunk_size_time, chunksize_cell))
+        else:
+            data = np.zeros((len(time_coords), n_cells), dtype=np.float32)
+        data_vars[var_name] = (['time', 'cell'], data, default_attrs)
     
     # Create coordinates dictionary (only the actual coordinates)
     coords = {
