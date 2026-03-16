@@ -1,9 +1,14 @@
 #!/bin/bash
 #
-# Bash script to calculate extreme precipitation percentiles for all data sources
-# defined in config_sources.yaml
+# Bash script to calculate extreme precipitation percentiles for one or more
+# data sources. Runs all sources by default; optionally pass specific source
+# names or --all.
 #
-# Usage: bash run_all_extreme_precip_thresholds.sh
+# Usage examples:
+#   bash run_all_extreme_precip_thresholds.sh
+#   bash run_all_extreme_precip_thresholds.sh --all
+#   bash run_all_extreme_precip_thresholds.sh IR_IMERG
+#   bash run_all_extreme_precip_thresholds.sh IR_IMERG scream_ne120 icon_d3hp003
 #
 # Author: Zhe Feng, zhe.feng@pnnl.gov
 # Date: November 2025
@@ -15,7 +20,7 @@ CONFIG_FILE="/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/con
 
 # List of all catalog sources from config_sources.yaml
 # Update this list if you add/remove sources in the config file
-SOURCES=(
+ALL_SOURCES=(
     "IR_IMERG"
     "scream_ne120"
     "icon_d3hp003"
@@ -24,6 +29,13 @@ SOURCES=(
     "casesm2_10km_nocumulus"
     "ifs_tco3999_rcbmf"
 )
+
+# Determine which sources to process
+if [ $# -eq 0 ] || [ "$1" == "--all" ]; then
+    SOURCES=("${ALL_SOURCES[@]}")
+else
+    SOURCES=("$@")
+fi
 
 # Optional: Customize these parameters as needed
 # Uncomment and modify if you want different values than the defaults
@@ -36,7 +48,7 @@ MIN_PRECIP_THRESHOLD=0.1  # Minimum precipitation threshold in mm/h (default: 0.
 # VERSION="v1"
 
 echo "========================================================================"
-echo "Starting extreme precipitation percentile calculation for all sources"
+echo "Starting extreme precipitation percentile calculation"
 echo "========================================================================"
 echo "Python script: ${PYTHON_SCRIPT}"
 echo "Config file: ${CONFIG_FILE}"
@@ -44,6 +56,9 @@ echo "Sources to process: ${SOURCES[@]}"
 echo ""
 
 # Loop through each source and run the Python script
+SUCCESS_COUNT=0
+FAIL_COUNT=0
+
 for SOURCE in "${SOURCES[@]}"; do
     echo "========================================================================"
     echo "Processing: ${SOURCE}"
@@ -87,10 +102,12 @@ for SOURCE in "${SOURCES[@]}"; do
         echo ""
         echo "✓ Successfully completed: ${SOURCE}"
         echo "End time: $(date)"
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else
         echo ""
         echo "✗ Error processing: ${SOURCE}"
         echo "End time: $(date)"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
         echo "Continuing with next source..."
     fi
     echo ""
@@ -99,4 +116,6 @@ done
 echo "========================================================================"
 echo "All sources processed!"
 echo "Completion time: $(date)"
+echo "Successfully processed: ${SUCCESS_COUNT} source(s)"
+echo "Failed: ${FAIL_COUNT} source(s)"
 echo "========================================================================"
