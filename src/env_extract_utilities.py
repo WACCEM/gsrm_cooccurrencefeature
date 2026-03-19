@@ -453,62 +453,98 @@ def apply_model_fixes(ds, model_name):
 def parse_etc_track_file(file_path, unstructured_mesh=True):
     """
     Parse ETC track data from text file.
-    
+
+    Data line layout (structured / ERA5):
+        lon_id  lat_id  lon  lat  slp  wind  zs  pr  [ws1000 ws925 ws850 ws700 ws500 ws300 ws250]  year  month  day  hour
+
+    Data line layout (unstructured / HEALPix):
+        grid_id  lon  lat  slp  wind  zs  pr  [ws1000 ws925 ws850 ws700 ws500 ws300 ws250]  year  month  day  hour
+
+    The optional wind-speed columns may or may not be present; year/month/day/hour
+    are always the last four columns.
+
     Parameters:
     -----------
     file_path : str
         Path to ETC track file
     unstructured_mesh : bool
-        Whether using HEALPix (True) or regular grid (False)
-    
+        Whether using HEALPix (True) or regular lat/lon grid (False)
+
     Returns:
     --------
     pd.DataFrame
-        DataFrame with columns: storm_id, grid_id, lon, lat, year, month, day, hour, base_time
+        DataFrame with columns: storm_id, [grid_id | lon_id + lat_id], lon, lat,
+        slp, wind, zs, pr, [ws1000…ws250], year, month, day, hour, base_time
     """
     print(f"Parsing ETC track file: {file_path}")
     sys.stdout.flush()
-    
+
+    optional_ws_columns = ["ws1000", "ws925", "ws850", "ws700", "ws500", "ws300", "ws250"]
+
     storm_data = []
     with open(file_path, 'r') as f:
         storm_id = 0
         for line in f:
             line = line.strip()
+            if not line:
+                continue
             if line.startswith("start"):
-                # New storm
+                # New storm segment
                 storm_id += 1
                 num_timesteps, year, month, day, hour = map(int, line.split()[1:])
             else:
-                # Storm details
                 cols = line.split()
                 if unstructured_mesh:
-                    storm_data.append({
+                    # grid_id  lon  lat  slp  wind  zs  pr  [ws...]  year  month  day  hour
+                    base_dict = {
                         "storm_id": storm_id,
-                        "grid_id": int(cols[0]),
-                        "lon": float(cols[1]),
-                        "lat": float(cols[2]),
-                        "year": int(cols[-4]),
-                        "month": int(cols[-3]),
-                        "day": int(cols[-2]),
-                        "hour": int(cols[-1]),
-                        "base_time": np.datetime64(f"{int(cols[-4]):04d}-{int(cols[-3]):02d}-{int(cols[-2]):02d}T{int(cols[-1]):02d}:00")
-                    })
+                        "grid_id":  int(cols[0]),
+                        "lon":      float(cols[1]),
+                        "lat":      float(cols[2]),
+                        "slp":      float(cols[3]),
+                        "wind":     float(cols[4]),
+                        "zs":       float(cols[5]),
+                        "pr":       float(cols[6]),
+                    }
+                    ws_start_idx = 7
                 else:
-                    storm_data.append({
+                    # lon_id  lat_id  lon  lat  slp  wind  zs  pr  [ws...]  year  month  day  hour
+                    base_dict = {
                         "storm_id": storm_id,
-                        "lon_id": int(cols[0]),
-                        "lat_id": int(cols[1]),
-                        "lon": float(cols[2]),
-                        "lat": float(cols[3]),
-                        "year": int(cols[-4]),
-                        "month": int(cols[-3]),
-                        "day": int(cols[-2]),
-                        "hour": int(cols[-1]),
-                        "base_time": np.datetime64(f"{int(cols[-4]):04d}-{int(cols[-3]):02d}-{int(cols[-2]):02d}T{int(cols[-1]):02d}:00")
-                    })
-    
+                        "lon_id":   int(cols[0]),
+                        "lat_id":   int(cols[1]),
+                        "lon":      float(cols[2]),
+                        "lat":      float(cols[3]),
+                        "slp":      float(cols[4]),
+                        "wind":     float(cols[5]),
+                        "zs":       float(cols[6]),
+                        "pr":       float(cols[7]),
+                    }
+                    ws_start_idx = 8
+
+                # Optional wind-speed columns between pr and the trailing date fields
+                num_ws_cols = len(cols) - 4 - ws_start_idx
+                for i, ws_name in enumerate(optional_ws_columns):
+                    if i < num_ws_cols:
+                        base_dict[ws_name] = float(cols[ws_start_idx + i])
+
+                # Date fields are always the last four columns
+                year  = int(cols[-4])
+                month = int(cols[-3])
+                day   = int(cols[-2])
+                hour  = int(cols[-1])
+                base_dict.update({
+                    "year":  year,
+                    "month": month,
+                    "day":   day,
+                    "hour":  hour,
+                    "base_time": np.datetime64(f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:00"),
+                })
+
+                storm_data.append(base_dict)
+
     df = pd.DataFrame(storm_data)
     print(f"Parsed {len(df)} storm points from {df['storm_id'].nunique()} unique storms")
     sys.stdout.flush()
-    
+
     return df

@@ -18,67 +18,9 @@ import sys
 import argparse
 from pathlib import Path
 
-
-def parse_etc_track_file(file_path, unstructured_mesh=True):
-    """
-    Parse ETC track data from text file.
-    
-    Parameters:
-    -----------
-    file_path : str
-        Path to ETC track file
-    unstructured_mesh : bool
-        Whether using HEALPix (True) or regular grid (False)
-    
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with columns: storm_id, grid_id, lon, lat, year, month, day, hour, base_time
-    """
-    print(f"Parsing ETC track file: {file_path}")
-    
-    storm_data = []
-    with open(file_path, 'r') as f:
-        storm_id = 0
-        for line in f:
-            line = line.strip()
-            if line.startswith("start"):
-                # New storm
-                storm_id += 1
-                num_timesteps, year, month, day, hour = map(int, line.split()[1:])
-            else:
-                # Storm details
-                cols = line.split()
-                if unstructured_mesh:
-                    storm_data.append({
-                        "storm_id": storm_id,
-                        "grid_id": int(cols[0]),
-                        "lon": float(cols[1]),
-                        "lat": float(cols[2]),
-                        "year": int(cols[-4]),
-                        "month": int(cols[-3]),
-                        "day": int(cols[-2]),
-                        "hour": int(cols[-1]),
-                        "base_time": np.datetime64(f"{int(cols[-4]):04d}-{int(cols[-3]):02d}-{int(cols[-2]):02d}T{int(cols[-1]):02d}:00")
-                    })
-                else:
-                    storm_data.append({
-                        "storm_id": storm_id,
-                        "lon_id": int(cols[0]),
-                        "lat_id": int(cols[1]),
-                        "lon": float(cols[2]),
-                        "lat": float(cols[3]),
-                        "year": int(cols[-4]),
-                        "month": int(cols[-3]),
-                        "day": int(cols[-2]),
-                        "hour": int(cols[-1]),
-                        "base_time": np.datetime64(f"{int(cols[-4]):04d}-{int(cols[-3]):02d}-{int(cols[-2]):02d}T{int(cols[-1]):02d}:00")
-                    })
-    
-    df = pd.DataFrame(storm_data)
-    print(f"  Parsed {len(df)} storm points from {df['storm_id'].nunique()} unique storms")
-    
-    return df
+# Add parent directory to path to import from src
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.env_extract_utilities import parse_etc_track_file
 
 
 def combine_etc_cof_data(etc_file, cof_file, output_file):
