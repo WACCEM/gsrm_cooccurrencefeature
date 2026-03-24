@@ -1,11 +1,3 @@
-SOURCE_TO_SBATCH = {
-    "CASESM2": "casesm2_10km_nocumulus",
-    "ERA5": "era5",
-    "ICON": "icon",
-    "NICAM": "nicam",
-    "SCREAM": "scream",
-    "UM": "um_glm_n2560_RAL3p3",
-}
 """
 Scan ETC variable extraction SLURM log files to find failed jobs for a specified source and print resubmit commands.
 
@@ -30,7 +22,18 @@ import os
 import re
 from collections import defaultdict
 
+# Default logs directory (adjust if needed)
 LOG_DIR = "/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/extract_environments/logs"
+
+# Mapping from source to sbatch script prefix for resubmission commands
+SOURCE_TO_SBATCH = {
+    "CASESM2": "casesm2_10km_nocumulus",
+    "ERA5": "era5",
+    "ICON": "icon",
+    "NICAM": "nicam",
+    "SCREAM": "scream",
+    "UM": "um_glm_n2560_RAL3p3",
+}
 
 def parse_log_filename(filename, source):
     # Example: extract_etc_UM_g0_50472088_0.log
