@@ -1,3 +1,11 @@
+SOURCE_TO_SBATCH = {
+    "CASESM2": "casesm2_10km_nocumulus",
+    "ERA5": "era5",
+    "ICON": "icon",
+    "NICAM": "nicam",
+    "SCREAM": "scream",
+    "UM": "um_glm_n2560_RAL3p3",
+}
 """
 Scan ETC variable extraction SLURM log files to find failed jobs for a specified source and print resubmit commands.
 
@@ -41,6 +49,11 @@ def log_success(log_path):
     # - It contains 'VARIABLE ... COMPLETED' (output written, even if error after)
     with open(log_path, "r") as f:
         lines = [line.strip() for line in f if line.strip()]
+    # If any time batch ERROR is present, consider job failed
+    for line in lines:
+        if "ERROR: Failed to load time slice" in line:
+            return False
+
     for line in reversed(lines):
         if "SUCCESS:" in line:
             return True
@@ -75,11 +88,12 @@ def main():
         return
 
     print(f"Failed jobs for source {args.source}:")
+    sbatch_base = SOURCE_TO_SBATCH.get(args.source, args.source.lower())
     for group, task_ids in sorted(failed.items()):
         task_ids_str = ",".join(str(tid) for tid in sorted(task_ids))
         print(f"  Group {group}: failed array task IDs: {task_ids_str}")
         print(f"  # Resubmit command:")
-        print(f"  sbatch --array={task_ids_str} sbatch_{args.source.lower()}_g{group}_*.sh")
+        print(f"  sbatch --array={task_ids_str} sbatch_{sbatch_base}_g{group}_*.sh")
         print()
 
 if __name__ == "__main__":
