@@ -12,6 +12,7 @@ Usage:
     python submit_etc_extraction_jobs.py --source CASESM2
     python submit_etc_extraction_jobs.py --source ICON
     python submit_etc_extraction_jobs.py --source UM
+    python submit_etc_extraction_jobs.py --source ERA5 --list      # List variable groups without submitting
     python submit_etc_extraction_jobs.py --source ERA5 --dry-run   # Print commands without submitting
     python submit_etc_extraction_jobs.py --source ERA5 --group 2   # Submit only group index 2
 
@@ -86,7 +87,7 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "ERA5": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/era5.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/era5.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/era5/single_vars/",
         "catalog_url": "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml",
         "current_location": "",          # empty → no --current_location argument
@@ -132,12 +133,12 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "SCREAM": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/screamv2_ne120_hp8.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/screamv2_ne120_hp8.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/scream/single_vars/",
         "catalog_url": "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml",
-        "current_location": "NERSC",
+        "current_location": "",          # local catalog has no location sub-key
         "structured_mesh": False,
-        "walltime": "00:15:00",
+        "walltime": "00:20:00",
         "job_name": "scream",
         "log_prefix": "extract_etc_SCREAM",
         "job_groups": [
@@ -158,10 +159,10 @@ MODEL_CONFIGS = {
                 "cof_mask": False,
             },
             {
-                "label": "2D derived pressure-level variables",
-                "catalog_model": "scream_ne120",
+                "label": "2D instantaneous pressure-level variables",
+                "catalog_model": "scream_ne120_inst",
                 "catalog_params": {"zoom": 8},
-                "variables": ["ua850", "va850", "ua500", "va500", "rh850", "uivt", "vivt", "zg500"],
+                "variables": ["ua850", "va850", "ua500", "va500", "omega850", "omega500", "zg500", "rh850", "rh500", "uivt", "vivt"],
                 "pressure_levels": None,
                 "cof_mask": False,
             },
@@ -194,7 +195,7 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "NICAM": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/nicam_gl11_hp8.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/nicam_gl11_hp8.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/nicam_gl11/single_vars/",
         "catalog_url": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
         "current_location": "NERSC",
@@ -269,7 +270,7 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "CASESM2": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/casesm2_10km_nocumulus_hp8.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/casesm2_10km_nocumulus_hp8.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/casesm2_10km_nocumulus/single_vars/",
         "catalog_url": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
         "current_location": "online",
@@ -341,7 +342,7 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "ICON": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/icon_d3hp003_hp8.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/icon_d3hp003/single_vars/",
         "catalog_url": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
         "current_location": "NERSC",
@@ -353,7 +354,7 @@ MODEL_CONFIGS = {
             {
                 "label": "pr (hourly inst)",
                 "catalog_model": "icon_d3hp003",
-                "catalog_params": {"zoom": 8},
+                "catalog_params": {"zoom": 8, "time": "PT6H", "time_method": "mean"},
                 "variables": ["pr"],
                 "pressure_levels": None,
                 "cof_mask": False,
@@ -413,7 +414,7 @@ MODEL_CONFIGS = {
 
     # ----------------------------------------------------------
     "UM": {
-        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/um_glm_n2560_RAL3p3_hp8.etc_stitched_nodes.txt",
+        "track_file": "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/um_glm_n2560_RAL3p3_hp8.etc_stitched_nodes.filtered_out_tcs.txt",
         "output_dir": "/pscratch/sd/w/wcmca1/hackathon/etc_data/um_glm_n2560_RAL3p3/single_vars/",
         "catalog_url": "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml",
         "current_location": "online",
@@ -433,8 +434,8 @@ MODEL_CONFIGS = {
             {
                 "label": "2D variables",
                 "catalog_model": "um_glm_n2560_RAL3p3",
-                "catalog_params": {"zoom": 8, "time": "PT3H"},
-                "variables": ["tas", "huss", "ps", "psl", "uas", "vas", "prw"],
+                "catalog_params": {"zoom": 8, "time": "PT1H"},
+                "variables": ["psl", "tas", "huss", "ps", "uas", "vas", "prw"],
                 "pressure_levels": None,
                 "cof_mask": False,
             },

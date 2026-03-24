@@ -1152,7 +1152,11 @@ def main():
         print(f"Output file: {zarr_path}")
         print(f"Storm points processed: {len(storm_df)}")
         print(f"Unique storms: {storm_df['storm_id'].nunique()}")
-        print(f"Time range: {min(time_array)} to {max(time_array)}")
+        valid_times = [t for t in time_array if t is not None]
+        if valid_times:
+            print(f"Time range: {min(valid_times)} to {max(valid_times)}")
+        else:
+            print("Time range: No valid times found")
         print(f"NaN values: {np.isnan(output_array).sum()} / {output_array.size} "
               f"({100*np.isnan(output_array).sum()/output_array.size:.2f}%)")
         print(f"Total time: {var_elapsed_time:.2f} seconds ({var_elapsed_time/60:.2f} minutes)")
