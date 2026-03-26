@@ -13,7 +13,7 @@ Options:
 
 Output:
   Writes a single NetCDF file combining all input years to:
-    /pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/stats/mcs_tracks_final_startdate_enddate.nc
+    /pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7/stats/mcs_tracks_final_startdate_enddate.nc
 """
 
 import os
@@ -29,7 +29,8 @@ def main():
     parser.add_argument('--overwrite', action='store_true', help='Overwrite output file if it exists')
     args = parser.parse_args()
 
-    stats_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/stats"
+    # stats_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/stats"
+    stats_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7/stats"
     pattern = os.path.join(stats_dir, "mcs_tracks_final_20??????.????_20??????.????.nc")
 
     files = sorted(glob.glob(pattern))

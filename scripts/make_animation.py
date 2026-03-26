@@ -23,16 +23,17 @@ cof_plot_type = "1panel"  # Only used when feature_type="cof"
 # Script parameters
 # source_name = "scream"
 source_name = "IMERGv7"
+# source_name = "icon_d3hp003"
 
 # start_date = "2020-02-25T00"
 # end_date = "2020-03-01T23"
-# start_date = "2020-05-01T00"
-# end_date = "2020-05-31T23"
-start_date = "2019-08-01T00"
-end_date = "2019-08-31T23"
+# start_date = "2020-12-01T00"
+# end_date = "2020-12-31T23"
+start_date = "2019-01-01T00"
+end_date = "2019-01-31T23"
 
 parallel_mode = 1
-n_workers = 8
+n_workers = 64
 output_dpi = 200
 
 # Optional: Override time frequency for plotting (set to None to auto-calculate)
@@ -40,7 +41,7 @@ output_dpi = 200
 plot_freq = '6h'  # Set to desired frequency string or None for auto-calculation
 
 # Execution control options
-run_plotting = False   # Set to False to skip plotting and use existing PNG files
+run_plotting = True   # Set to False to skip plotting and use existing PNG files
 run_ffmpeg = True     # Set to False to skip animation creation (plotting only)
 
 # FFmpeg animation parameters

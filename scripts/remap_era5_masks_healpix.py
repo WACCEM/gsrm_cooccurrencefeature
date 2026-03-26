@@ -130,7 +130,8 @@ def combine_masks(ds_ar, ds_tc, ds_etc, logger=None):
         # 'TC_binary_tag': 'tc_mask',
         # 'ETC_binary_tag': 'etc_mask',
         'AR_count_index': 'ar_mask',
-        'TC_count_index': 'tc_mask',
+        # 'TC_count_index': 'tc_mask',
+        'TC_int_tag': 'tc_mask',
         'ETC_int_tag': 'etc_mask',
         'longitude': 'lon',
         'latitude': 'lat',
@@ -477,12 +478,13 @@ def main():
 
     # Bryce's original ERA5 tracking files
     # in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/ERA5_tracking/"
-    in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking/"
+    # in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking/"
+    in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking_etc_nocoldcoreonly/"
     dir_ar = f"{in_dir}"
     dir_tc = f"{in_dir}"
     dir_etc = f"{in_dir}"
     basename_ar = f"AR_tracks_era5_*.nc"
-    basename_tc = f"TC_tracks_era5_*.nc"
+    basename_tc = f"TC_test_tracks_era5_*.nc"
     basename_etc = f"ETC_test_tracks_era5_*.nc"
 
     out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"

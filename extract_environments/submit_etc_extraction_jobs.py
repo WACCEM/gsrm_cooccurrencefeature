@@ -15,6 +15,7 @@ Usage:
     python submit_etc_extraction_jobs.py --source ERA5 --list      # List variable groups without submitting
     python submit_etc_extraction_jobs.py --source ERA5 --dry-run   # Print commands without submitting
     python submit_etc_extraction_jobs.py --source ERA5 --group 2   # Submit only group index 2
+    python submit_etc_extraction_jobs.py --source ERA5 --create-only  # Create sbatch scripts without submitting (scripts are still written to logs/)
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """
@@ -627,19 +628,28 @@ def submit_group(model_cfg, group, group_idx, dry_run=False):
     if group.get("convert_wa_to_omega"):
         print("  Convert       : wa → omega")
 
+    # Use global create_only flag if present
+    global CREATE_ONLY
+
     if dry_run:
         print("\n--- SBATCH SCRIPT (dry run) ---")
         print(script_text)
         print("--- END SCRIPT ---")
         return None
 
-    # Write to a named temp file and submit
+    # Write to a named temp file
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".sh", prefix=f"sbatch_{model_cfg['job_name']}_g{group_idx}_",
         dir=SCRIPT_DIR, delete=False
     ) as f:
         f.write(script_text)
         tmp_path = f.name
+
+    print(f"  Wrote sbatch script: {os.path.basename(tmp_path)}")
+
+    if CREATE_ONLY:
+        print(f"  (Not submitting: --create-only set)")
+        return None
 
     try:
         result = subprocess.run(
@@ -669,6 +679,7 @@ Examples:
   python submit_etc_extraction_jobs.py --source ERA5 --list-groups
         """
     )
+
     parser.add_argument(
         "--source", required=True,
         choices=list(MODEL_CONFIGS.keys()),
@@ -683,10 +694,17 @@ Examples:
         help="Print sbatch scripts without submitting."
     )
     parser.add_argument(
+        "--create-only", action="store_true",
+        help="Write sbatch scripts to disk but do not submit jobs."
+    )
+    parser.add_argument(
         "--list-groups", action="store_true",
         help="List variable groups for the source and exit."
     )
     args = parser.parse_args()
+
+    global CREATE_ONLY
+    CREATE_ONLY = args.create_only
 
     model_cfg = MODEL_CONFIGS[args.source].copy()
     model_cfg["_source_key"] = args.source

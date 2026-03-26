@@ -570,7 +570,7 @@ def process_single_timestep(pr_t, ds_t, pr_threshold, compute_cloud_types=True):
 
 
 def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
-                             compute_cloud_types=True, n_workers=8):
+                             compute_cloud_types=True, n_workers=8, batch_size=200):
     """
     Process all time steps using Dask for parallel processing.
     
@@ -588,87 +588,56 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
         Whether to compute cloud type contributions
     n_workers : int
         Number of Dask workers
+    batch_size : int
+        Number of time steps to process per batch. Reduce if running out of memory.
     
     Returns:
     --------
     xr.Dataset : Spatial counts dataset
     """
-    print(f"\nProcessing {len(pr.time)} time steps with Dask ({n_workers} workers)...")
+    n_times = len(pr.time)
+    n_batches = (n_times + batch_size - 1) // batch_size
+    print(f"\nProcessing {n_times} time steps with Dask ({n_workers} workers)...")
     print(f"Percentile threshold: {percentile_name}")
+    print(f"Batch size: {batch_size} time steps ({n_batches} batches total)")
     
-    # Create a Dask delayed function for each time step
-    delayed_results = []
-    
-    for t in range(len(pr.time)):
-        pr_t = pr.isel(time=t)
-        ds_t = ds.isel(time=t)
-        
-        # Create delayed computation
-        delayed_result = dask.delayed(process_single_timestep)(
-            pr_t, ds_t, pr_threshold, compute_cloud_types
-        )
-        delayed_results.append(delayed_result)
-    
-    print(f"Created {len(delayed_results)} delayed tasks")
-    print("Computing results in parallel...")
-    
-    # Compute all tasks in parallel
-    with ProgressBar():
-        results_list = dask.compute(*delayed_results)
-    
-    print("✅ Parallel computation complete!")
-    print("Aggregating results...")
-    
-    # Initialize accumulators for counts and precipitation amounts
-    # Use .compute() to convert from dask to numpy arrays to avoid memory issues
-    ncells = len(pr.cell)
+    # Initialize accumulators (one set of arrays for the whole run)
     template = pr.isel(time=0).compute()
+    storm_type_keys = ['mcs_isolated', 'ar_isolated', 'etc_isolated', 'tc',
+                       'mcs_ar_2way', 'mcs_etc_2way', 'ar_etc_2way', 'mcs_ar_etc_3way',
+                       'dc', 'nd', 'st', 'dz', 'unassigned']
     
-    accumulated_counts = {
-        'total_extreme': xr.zeros_like(template),
-        'mcs_isolated': xr.zeros_like(template),
-        'ar_isolated': xr.zeros_like(template),
-        'etc_isolated': xr.zeros_like(template),
-        'tc': xr.zeros_like(template),
-        'mcs_ar_2way': xr.zeros_like(template),
-        'mcs_etc_2way': xr.zeros_like(template),
-        'ar_etc_2way': xr.zeros_like(template),
-        'mcs_ar_etc_3way': xr.zeros_like(template),
-        'dc': xr.zeros_like(template),
-        'nd': xr.zeros_like(template),
-        'st': xr.zeros_like(template),
-        'dz': xr.zeros_like(template),
-        'unassigned': xr.zeros_like(template),
-    }
+    accumulated_counts = {k: xr.zeros_like(template) for k in ['total_extreme'] + storm_type_keys}
+    accumulated_precip = {k: xr.zeros_like(template) for k in ['total_extreme'] + storm_type_keys}
     
-    accumulated_precip = {
-        'total_extreme': xr.zeros_like(template),
-        'mcs_isolated': xr.zeros_like(template),
-        'ar_isolated': xr.zeros_like(template),
-        'etc_isolated': xr.zeros_like(template),
-        'tc': xr.zeros_like(template),
-        'mcs_ar_2way': xr.zeros_like(template),
-        'mcs_etc_2way': xr.zeros_like(template),
-        'ar_etc_2way': xr.zeros_like(template),
-        'mcs_ar_etc_3way': xr.zeros_like(template),
-        'dc': xr.zeros_like(template),
-        'nd': xr.zeros_like(template),
-        'st': xr.zeros_like(template),
-        'dz': xr.zeros_like(template),
-        'unassigned': xr.zeros_like(template),
-    }
+    # Process in batches to avoid holding all results in memory simultaneously
+    for batch_idx in range(n_batches):
+        t_start = batch_idx * batch_size
+        t_end = min(t_start + batch_size, n_times)
+        print(f"\nBatch {batch_idx + 1}/{n_batches}: time steps {t_start}–{t_end - 1}")
+        
+        delayed_results = []
+        for t in range(t_start, t_end):
+            pr_t = pr.isel(time=t)
+            ds_t = ds.isel(time=t)
+            delayed_result = dask.delayed(process_single_timestep)(
+                pr_t, ds_t, pr_threshold, compute_cloud_types
+            )
+            delayed_results.append(delayed_result)
+        
+        with ProgressBar():
+            batch_results = dask.compute(*delayed_results, scheduler='threads', num_workers=n_workers)
+        
+        # Accumulate and immediately discard batch results
+        for result in batch_results:
+            accumulated_counts['total_extreme'] += result['extreme_mask']
+            accumulated_precip['total_extreme'] += result['total_extreme_pr']
+            for key in storm_type_keys:
+                accumulated_counts[key] += result[key]
+                accumulated_precip[key] += result[f'{key}_pr']
+        del batch_results
     
-    # Aggregate results from all time steps
-    for result in results_list:
-        accumulated_counts['total_extreme'] += result['extreme_mask']
-        accumulated_precip['total_extreme'] += result['total_extreme_pr']
-        for key in ['mcs_isolated', 'ar_isolated', 'etc_isolated', 'tc',
-                   'mcs_ar_2way', 'mcs_etc_2way', 'ar_etc_2way', 'mcs_ar_etc_3way',
-                   'dc', 'nd', 'st', 'dz', 'unassigned']:
-            accumulated_counts[key] += result[key]
-            accumulated_precip[key] += result[f'{key}_pr']
-    
-    print("✅ Aggregation complete!")
+    print("\n✅ All batches complete!")
     print("Calculating precipitation fractions...")
     
     # Create output dataset
@@ -867,6 +836,9 @@ def parse_args():
     parser.add_argument('--n_workers', type=int, default=8,
                        help='Number of Dask workers for parallel processing')
     
+    parser.add_argument('--batch_size', type=int, default=200,
+                       help='Number of time steps per processing batch. Reduce if OOM. (default: 200)')
+    
     parser.add_argument('--compute_cloud_types', action='store_true', default=True,
                        help='Compute cloud type contributions')
     
@@ -892,6 +864,7 @@ def main():
     print(f"Percentiles: {', '.join(args.percentiles)}")
     print(f"Output directory: {args.output_dir}")
     print(f"Dask workers: {args.n_workers}")
+    print(f"Batch size: {args.batch_size}")
     print(f"Compute cloud types: {args.compute_cloud_types}")
     print("="*80)
     
@@ -1006,7 +979,8 @@ def main():
             pr, pr_threshold, ds,
             percentile_name=pname,
             compute_cloud_types=args.compute_cloud_types,
-            n_workers=args.n_workers
+            n_workers=args.n_workers,
+            batch_size=args.batch_size
         )
         elapsed = time.time() - start_time
         print(f"\n⏱️  Processing time: {elapsed/60:.2f} minutes")

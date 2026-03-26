@@ -420,10 +420,17 @@ def main():
     # Load precipitation data
     logger.info(f"Loading precipitation data for {catalog_source}...")
     pr, ds_p, config = load_precipitation_data(config_file, catalog_source, zoom, logger)
-    
+
     source_name = config.get('source_name')
     start_datetime = config.get('start_datetime')
     end_datetime = config.get('end_datetime')
+
+    # Subset precipitation to the configured time range
+    if start_datetime and end_datetime:
+        logger.info(f"Subsetting time range: {start_datetime} to {end_datetime}")
+        pr = pr.sel(time=slice(str(start_datetime), str(end_datetime)))
+        logger.info(f"Time steps after subsetting: {len(pr.time)} "
+                    f"({pr.time.values[0]} to {pr.time.values[-1]})")
 
     # Process each time duration
     for time_duration in time_durations:

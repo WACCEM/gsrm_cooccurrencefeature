@@ -8,28 +8,35 @@
 # Date: 2026-03-04
 
 # ---------------------------------------------------------------------------
-# Source definitions: parallel arrays of source name and trackstats filename
+# Source definitions: 1-to-1 mapping of source name to trackstats filename
 # ---------------------------------------------------------------------------
-SOURCES=(
-    "scream"
-    "icon_d3hp003"
-    # "ifs_tco3999_rcbmf"
-    "IMERGv7"
-    "nicam_gl11"
-    "casesm2_10km_nocumulus"
-    "um_glm_n2560_RAL3p3"
+declare -A SOURCE_TO_TRACKSTATS
+SOURCE_TO_TRACKSTATS=(
+    ["scream"]="mcs_tracks_final_20190801.0000_20200901.0000.nc"
+    ["icon_d3hp003"]="mcs_tracks_final_20200102.0000_20201231.2330.nc"
+    ["IMERGv7"]="mcs_tracks_final_20190101.0000_20220101.0100.nc"   # Combined 3-year IMERGv7 trackstats (produced by combine_mcs_track_stats.py)
+    ["nicam_gl11"]="mcs_tracks_final_20200301.0000_20210301.0000.nc"
+    ["casesm2_10km_nocumulus"]="mcs_tracks_final_20200301.0000_20210301.0000.nc"
+    ["um_glm_n2560_RAL3p3"]="mcs_tracks_final_20200201.0000_20210301.0000.nc"
 )
 
-# Corresponding MCS track stats filenames (same order as SOURCES)
-TRACKSTATS_FILES=(
-    "mcs_tracks_final_20190801.0000_20200901.0000.nc"
-    "mcs_tracks_final_20200102.0000_20201231.2330.nc"
-    # "mcs_tracks_final_20200101.0000_20210228.2330.nc"
-    "mcs_tracks_final_20190801.0000_20200901.0000.nc"
-    "mcs_tracks_final_20200301.0000_20210301.0000.nc"
-    "mcs_tracks_final_20200301.0000_20210301.0000.nc"
-    "mcs_tracks_final_20200201.0000_20210301.0000.nc"
-)
+# List of sources (for ordering)
+SOURCES=("scream" "icon_d3hp003" "IMERGv7" "nicam_gl11" "casesm2_10km_nocumulus" "um_glm_n2560_RAL3p3")
+
+# Optionally run for a single source if provided as an argument
+if [ $# -gt 1 ]; then
+    echo "Usage: $0 [SOURCE]"
+    exit 1
+fi
+
+if [ $# -eq 1 ]; then
+    SELECTED_SOURCE="$1"
+    if [[ ! " ${SOURCES[@]} " =~ " ${SELECTED_SOURCE} " ]]; then
+        echo "ERROR: Source '${SELECTED_SOURCE}' not recognized. Valid options: ${SOURCES[*]}"
+        exit 1
+    fi
+    SOURCES=("${SELECTED_SOURCE}")
+fi
 
 # ---------------------------------------------------------------------------
 # Base paths
@@ -55,10 +62,6 @@ if [ ! -f "${PYTHON_SCRIPT}" ]; then
     exit 1
 fi
 
-if [ ${#SOURCES[@]} -ne ${#TRACKSTATS_FILES[@]} ]; then
-    echo "ERROR: SOURCES and TRACKSTATS_FILES arrays must have the same length."
-    exit 1
-fi
 
 # Activate conda environment
 source activate /global/common/software/m1867/python/hackathon
@@ -89,9 +92,10 @@ echo "" | tee -a "${MASTER_LOG}"
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 
-for i in "${!SOURCES[@]}"; do
-    SOURCE="${SOURCES[$i]}"
-    TRACKSTATS="${MCS_ROOT}/${SOURCE}/stats/${TRACKSTATS_FILES[$i]}"
+
+for SOURCE in "${SOURCES[@]}"; do
+    TRACKSTATS_FILE="${SOURCE_TO_TRACKSTATS[$SOURCE]}"
+    TRACKSTATS="${MCS_ROOT}/${SOURCE}/stats/${TRACKSTATS_FILE}"
     SOURCE_LOG="${LOG_DIR}/extract_mcs_cof_tracks_${SOURCE}_$(date +%Y%m%d_%H%M%S).log"
 
     echo "----------------------------------------" | tee -a "${MASTER_LOG}"

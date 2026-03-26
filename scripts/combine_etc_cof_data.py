@@ -113,27 +113,27 @@ Example usage:
     # Define file mappings
     # Format: (etc_filename, cof_filename, output_basename)
     file_mappings = [
-        ('casesm2_10km_nocumulus_hp8.etc_stitched_nodes.txt', 
+        ('casesm2_10km_nocumulus_hp8.etc_stitched_nodes.filtered_out_tcs.txt', 
          'casesm2_10km_nocumulus_etc_overlap_tracking.parquet',
          'casesm2_10km_nocumulus'),
         
-        ('era5.etc_stitched_nodes.txt', 
+        ('era5.etc_stitched_nodes.filtered_out_tcs.txt', 
          'IMERGv7_etc_overlap_tracking.parquet',
          'era5'),
         
-        ('icon_d3hp003_hp8.etc_stitched_nodes.txt', 
+        ('icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt', 
          'icon_d3hp003_etc_overlap_tracking.parquet',
          'icon_d3hp003'),
         
-        ('nicam_gl11_hp8.etc_stitched_nodes.txt', 
+        ('nicam_gl11_hp8.etc_stitched_nodes.filtered_out_tcs.txt', 
          'nicam_gl11_etc_overlap_tracking.parquet',
          'nicam_gl11'),
         
-        ('screamv2_ne120_hp8.etc_stitched_nodes.txt', 
+        ('screamv2_ne120_hp8.etc_stitched_nodes.filtered_out_tcs.txt', 
          'scream_etc_overlap_tracking.parquet',
          'scream'),
         
-        ('um_glm_n2560_RAL3p3_hp8.etc_stitched_nodes.txt', 
+        ('um_glm_n2560_RAL3p3_hp8.etc_stitched_nodes.filtered_out_tcs.txt', 
          'um_glm_n2560_RAL3p3_etc_overlap_tracking.parquet',
          'um_glm_n2560_RAL3p3'),
     ]

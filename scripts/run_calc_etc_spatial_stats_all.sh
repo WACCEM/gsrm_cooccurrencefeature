@@ -1,11 +1,12 @@
 #!/bin/bash
 #
 # Wrapper script to run ETC processing scripts for all sources:
-# - combine_etc_2d_vars.py (combines individual zarr files)
-# - calc_etc_spatial_stats.py
-# - create_etc_composites.py
+# - combine_etc_cof_data.py (combines ETC track files with COF overlap parquet data)
+# - combine_etc_2d_vars.py (combines individual zarr files and adds COF data)
+# - create_etc_composites.py (creates 2D ETC composites)
+# - calc_etc_spatial_stats.py (calculates spatial statistics for ETC tracks)
 #
-# Usage: ./run_calc_etc_spatial_stats_all.sh
+# Usage: ./run_calc_etc_spatial_stats_all.sh [CATALOG_SOURCE]
 #
 # Author: Zhe Feng (zhe.feng@pnnl.gov)
 # Date: 2026-02-17
@@ -13,20 +14,25 @@
 # List of Python scripts to run (in order)
 # Format: "relative_path/script_name.py" or just "script_name.py" for scripts in same directory
 SCRIPTS=(
+    "combine_etc_cof_data.py"
     "../extract_environments/combine_etc_2d_vars.py"
     "create_etc_composites.py"
     "calc_etc_spatial_stats.py"
 )
 
-# List of sources to process
-SOURCES=(
-    "era5"
-    "scream"
-    "icon_d3hp003"
-    "um_glm_n2560_RAL3p3"
-    "nicam_gl11"
-    "casesm2_10km_nocumulus"
-)
+# Default: process all sources
+if [ -z "$1" ]; then
+    SOURCES=(
+        # "era5"
+        # "scream"
+        # "icon_d3hp003"
+        "um_glm_n2560_RAL3p3"
+        # "nicam_gl11"
+        "casesm2_10km_nocumulus"
+    )
+else
+    SOURCES=("$1")
+fi
 
 # Base paths
 ZARR_PATH="/pscratch/sd/w/wcmca1/hackathon/etc_data"
@@ -111,7 +117,11 @@ for SCRIPT in "${SCRIPTS[@]}"; do
         START_TIME=$(date +%s)
         
         # Determine which arguments to use based on the script
-        if [[ "${SCRIPT}" == *"combine_etc_2d_vars.py" ]]; then
+        if [[ "${SCRIPT}" == *"combine_etc_cof_data.py" ]]; then
+            python "${PYTHON_SCRIPT}" \
+                --source "${SOURCE}" \
+                2>&1 | tee "${SOURCE_LOG}"
+        elif [[ "${SCRIPT}" == *"combine_etc_2d_vars.py" ]]; then
             python "${PYTHON_SCRIPT}" \
                 --source "${SOURCE}" \
                 2>&1 | tee "${SOURCE_LOG}"
@@ -165,7 +175,7 @@ echo "========================================" | tee -a "${MASTER_LOG}"
 echo "Batch Processing Complete" | tee -a "${MASTER_LOG}"
 echo "========================================" | tee -a "${MASTER_LOG}"
 echo "End time: $(date)" | tee -a "${MASTER_LOG}"
-echo "Total jobs (scripts × sources): ${TOTAL_COUNT}" | tee -a "${MASTER_LOG}"
+echo "Total jobs (scripts x sources): ${TOTAL_COUNT}" | tee -a "${MASTER_LOG}"
 echo "Successful: ${SUCCESS_COUNT}" | tee -a "${MASTER_LOG}"
 echo "Failed: ${FAIL_COUNT}" | tee -a "${MASTER_LOG}"
 echo "========================================" | tee -a "${MASTER_LOG}"

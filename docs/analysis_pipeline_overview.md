@@ -106,36 +106,45 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
 This pipeline is independent of the COF mask pipeline (Analyses 1 and 2). It operates directly on ETC track files and HEALPix model output. Data sources include ERA5+IMERG (observations) and the same six GSRM models.
 
 ```
-ETC track files        HEALPix model output (catalog)
-       │                           │
-       └───────────────┬───────────┘
-                       │
-                       ▼
-[Step 1] 2D Variable Extraction
+ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
+       │                │                      │                │
+       └────────┬───────┘                      └────────┬───────┘
+                │    (Steps 1 & 2 are independent)      │
+                ▼                                       ▼
+[Step 1] ETC + COF Data Preparation
+  └─ Script:  scripts/combine_etc_cof_data.py
+  └─ Input:   ETC track text files (/hackathon/etc_tracks/)
+              COF overlap tracking parquet (/hackathon/cof_masks/stats/)
+  └─ Output:  /hackathon/etc_tracks/{source}_etc_cof_data.parquet
+              (ETC track points merged with COF overlap flags,
+               AR/MCS partner track IDs, and ETC center coordinates)
+         |
+         v  (Step 2 can run in parallel with Step 1)
+[Step 2] 2D Variable Extraction
   └─ Script:  extract_environments/extract_etc_2d_vars.py
   └─ Method:  Batched time-slice loading; remap HEALPix → 81×81 lat-lon grid
               centered at each ETC track point (0.25° resolution, ±10° radius)
-  └─ Submit:  extract_environments/slurm_extract_etc_vars_SCREAM.sh
-              (Slurm job array; one task per variable; serial shared-queue jobs,
-              ~15 min each; requires uncommenting VARIABLES and tuning options)
+  └─ Submit:  extract_environments/submit_etc_extraction_jobs.py
+              (Python script automating Slurm job array submission per model;
+               one task per variable; serial shared-queue jobs, ~15 min each)
   └─ Input:   HEALPix catalog variables + ETC track file
   └─ Output:  /hackathon/etc_data/{source}/single_vars/
               etc_2d_{variable}_{suffix}.zarr  (one zarr per variable)
               Variables: pr, huss, tas, uas, vas, psl, ua850, va850,
                          rh850, uivt, vivt, zg500, and optional 3D fields
          |
-         v
-[Step 2] Combine Individual Zarr Files
+         v  (requires Steps 1 & 2)
+[Step 3] Combine Individual Zarr Files
   └─ Script:  extract_environments/combine_etc_2d_vars.py
-  └─ Input:   Step 1 single-variable zarr files
-              ETC COF parquet files (/hackathon/etc_tracks/)
+  └─ Input:   Step 2 single-variable zarr files
+              Step 1 ETC COF parquet (/hackathon/etc_tracks/)
   └─ Output:  /hackathon/etc_data/{source}/
               etc_2d_combined_{suffix}.zarr
               (multi-variable zarr with unit standardization applied
                and COF overlap_flag / storm metadata added)
          |
          v
-[Step 3] ETC Spatial Statistics
+[Step 4] ETC Spatial Statistics
   └─ Script:  scripts/calc_etc_spatial_stats.py
   └─ Input:   /hackathon/etc_data/{source}/etc_2d_combined_all_all.zarr
   └─ Output:  /hackathon/etc_data/stats/
@@ -145,20 +154,21 @@ ETC track files        HEALPix model output (catalog)
                feature-specific precipitation statistics;
                overlap_flag coordinate for COF stratification)
   └─ Batch:   scripts/run_calc_etc_spatial_stats_all.sh
-              (runs Steps 2 & 3 sequentially for all 6 sources:
+              (handles Steps 1, 3 & 4 for all 6 sources; Step 2 must be
+               submitted separately via submit_etc_extraction_jobs.py:
                era5, scream, icon_d3hp003, um_glm_n2560_RAL3p3,
                nicam_gl11, casesm2_10km_nocumulus)
          |
          v
-[Step 4] Visualization and Analysis
-  └─ Notebooks (composite figures — input: Step 2 zarr):
+[Step 5] Visualization and Analysis
+  └─ Notebooks (composite figures — input: Step 3 zarr):
      notebooks/plot_etc_composites.ipynb
        → 2D ETC composite fields for one data source
      notebooks/plot_etc_composites_diff.ipynb
        → Composite differences between a model and ERA5+IMERG
      notebooks/plot_etc_composites_multipanel.ipynb
        → Multi-panel composites for all data sources (paper figure)
-  └─ Notebooks (spatial statistics — input: Step 3 NetCDF):
+  └─ Notebooks (spatial statistics — input: Step 4 NetCDF):
      notebooks/plot_etc_spatialmean_stats_multisource.ipynb
        → ETC spatial mean statistics for all sources (paper figure)
      notebooks/plot_etc_spatialmean_stats_1source.ipynb
@@ -265,6 +275,35 @@ AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
    rank_map.ipynb              plot_cof_extreme_raintype_
                                rank_map.ipynb
 
+── ETC COMPOSITE ANALYSIS (3) ────────────────────────────────────────────────
+
+ETC tracks  COF parquet    ETC tracks    HEALPix catalog
+    │            │               │             │
+    └─────┬──────┘               └──────┬──────┘
+          │   (Steps 1 & 2 independent) │
+          ▼                             ▼
+[Step 1] combine_etc_cof_data.py  [Step 2] extract_etc_2d_vars.py
+ → {src}_etc_cof_data.parquet      (Slurm array: one job per variable)
+          │                             │
+          └──────────────┬──────────────┘
+                         │
+                         ▼
+              [Step 3] combine_etc_2d_vars.py
+                         │
+               ┌─────────┴────────┐
+               ▼                  ▼
+     ┌──────────────────┐  ┌──────────────────┐
+     │ etc_2d_combined  │  │  [Step 4]        │
+     │ _{suffix}.zarr   │  │  calc_etc_       │
+     │  (composites)    │  │  spatial_stats   │
+     └────────┬─────────┘  │  etc_spatial_    │
+              │            │  stats_{src}.nc  │
+              ▼            └────────┬─────────┘
+     plot_etc_composites            │
+     plot_etc_composites_diff       ▼
+     plot_etc_composites_   plot_etc_spatialmean_
+     multipanel.ipynb       stats_*.ipynb
+
 ── MCS COF TRACK STATISTICS (4) ──────────────────────────────────────────────
 
 [Step 3 COF masks zarr]  +  MCS track stats NetCDF
@@ -280,34 +319,6 @@ AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
                         │
                         ▼
            plot_mcs_cof_trackstats_multisource.ipynb
-
-── ETC COMPOSITE ANALYSIS (3) ────────────────────────────────────────────────
-
-ETC track files        HEALPix model output (catalog)
-       │                           │
-       └────────────┬──────────────┘
-                    │
-                    ▼
-         [Step 1] extract_etc_2d_vars.py
-          (Slurm array: one job per variable)
-                    │
-                    ▼
-         [Step 2] combine_etc_2d_vars.py
-          + ETC COF parquet (/hackathon/etc_tracks/)
-                    │
-            ┌───────┴────────┐
-            ▼                ▼
-  ┌──────────────────┐  ┌──────────────────┐
-  │ etc_2d_combined  │  │  [Step 3]        │
-  │ _{suffix}.zarr   │  │  calc_etc_       │
-  │  (composites)    │  │  spatial_stats   │
-  └────────┬─────────┘  │  etc_spatial_    │
-           │            │  stats_{src}.nc  │
-           ▼            └────────┬─────────┘
-  plot_etc_composites            │
-  plot_etc_composites_diff       ▼
-  plot_etc_composites_   plot_etc_spatialmean_
-  multipanel.ipynb       stats_*.ipynb
 ```
 
 ---
@@ -318,16 +329,39 @@ ETC track files        HEALPix model output (catalog)
 |-------------------|--------------|
 | `make_mcs_swath_masks.py` | [mcs_swath_cloud_type_procedure.md](mcs_swath_cloud_type_procedure.md) |
 | `combine_tracking_masks.py` | [combine_tracking_masks_procedure.md](combine_tracking_masks_procedure.md) |
+| `combine_era5_imerg_tracking_masks.py` | |
 | `make_cooccurrence_masks.py` | [cof_identification_procedure.md](cof_identification_procedure.md) |
 | `calc_monthly_rainmap_by_cof.py` | [calc_monthly_rainmap_by_cof_procedure.md](calc_monthly_rainmap_by_cof_procedure.md) |
 | `calc_extreme_precip_thresholds.py` | [extreme_precip_by_stormtype_procedure.md](extreme_precip_by_stormtype_procedure.md) |
 | `calc_stormtype_extreme_precip_spatial.py` | [extreme_precip_by_stormtype_procedure.md](extreme_precip_by_stormtype_procedure.md) |
 | `extract_etc_2d_vars.py` | [README_BATCHED_EXTRACTION.md](../extract_environments/README_BATCHED_EXTRACTION.md) |
+| `combine_etc_cof_data.py` | This document (Analysis 3 section) |
 | `combine_etc_2d_vars.py` | This document (Analysis 3 section) |
 | `calc_etc_spatial_stats.py` | This document (Analysis 3 section) |
 | `extract_mcs_cof_tracks.py` | This document (Analysis 4 section) |
 | `extract_mcs_cof_flags.py` | This document (Analysis 4 section, prototype) |
 | `combine_mcs_cof_trackstats_multisource.py` | This document (Analysis 4 section) |
+
+---
+
+## Wrapper Shell Scripts
+
+These scripts automate running one or more Python processing scripts across all model sources in a single invocation. They are the primary entry points for running each analysis step in batch.
+
+| Script | Analysis | Python Script(s) Called | Sources | Notes |
+|--------|----------|------------------------|---------|-------|
+| `slurm/slurm_make_mcs_swath_masks.sh` | Shared Step 1 | `make_mcs_swath_masks.py` | 6 sources (via task file) | SLURM job array (`--array=1-6`); reads commands from `tasks_make_mcs_swath_masks.txt` |
+| `run_combine_tracking_masks_all.sh` | Shared Step 2 | `combine_tracking_masks.py` | scream, icon, nicam, um, casesm2 | Optionally pass a single source as argument |
+| `slurm/slurm_make_cooccurrence_masks.sh` | Shared Step 3 | `make_cooccurrence_masks.py` | 6 sources (via task file) | SLURM job array (`--array=1-6`); reads commands from `tasks_make_cooccurrence_masks_all.txt` |
+| `slurm/slurm_calc_monthly_rainmap_by_cof.sh` | A1 Step 4 | `calc_monthly_rainmap_by_cof.py` | 6 sources (via task file) | SLURM job array (`--array=1-6`); reads commands from `tasks_calc_monthly_rainmap_by_cof.txt` |
+| `run_all_extreme_precip_thresholds.sh` | A2 Step 4a | `calc_extreme_precip_thresholds.py` | all sources (from config) | Uses `config_sources.yaml` |
+| `run_all_extreme_precip_thresholds_1h.sh` | A2 Step 4a | `calc_extreme_precip_thresholds_1h.py` | all sources (from config) | For 1-hourly input data; uses `config_sources_1h.yaml` |
+| `run_stormtype_extreme_precip.sh` | A2 Step 4b | `calc_stormtype_extreme_precip_spatial.py` | scream, icon, nicam, um, casesm2, IR_IMERG | Optionally pass a single source as argument |
+| `extract_environments/submit_etc_extraction_jobs.py` | A3 Step 2 | `extract_etc_2d_vars.py` | all sources | SLURM job array for each group of variables |
+| `run_calc_etc_spatial_stats_all.sh` | A3 Steps 1,3,4 | `combine_etc_cof_data.py` → `combine_etc_2d_vars.py` → `create_etc_composites.py` → `calc_etc_spatial_stats.py` | era5, scream, icon, um, nicam (± casesm2) | Step 2 (2D extraction) must be run separately via `submit_etc_extraction_jobs.py` before this script |
+| `run_extract_mcs_cof_tracks_all.sh` | A4 Step 1 | `extract_mcs_cof_tracks.py` | all sources | Produces `{source}_mcs_cof_tracks_2d.nc` |
+| `combine_mcs_cof_trackstats_multisource.py` | A4 Step 2 | `combine_mcs_cof_trackstats_multisource.py` | all sources | Produces `mcs_cof_trackstats_allsources.parquet` |
+
 
 ---
 
@@ -344,11 +378,12 @@ ETC track files        HEALPix model output (catalog)
 | 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr + Step 4a nc + catalog pr | `/hackathon/extreme_precip/{source}_stormtype_extreme_precip_{Pxx}_hp8_v1.nc` |
 | 5 (A1) | `plot_cof_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
 | 5 (A2) | `plot_cof_extreme_raintype_rank_map.ipynb` | Step 4b (A2) nc | Figures |
-| 1 (A3) | `extract_etc_2d_vars.py` | HEALPix catalog data + ETC track file | `/hackathon/etc_data/{source}/single_vars/etc_2d_{var}_{suffix}.zarr` |
-| 2 (A3) | `combine_etc_2d_vars.py` | Step 1 (A3) zarr + ETC COF parquet | `/hackathon/etc_data/{source}/etc_2d_combined_{suffix}.zarr` |
-| 3 (A3) | `calc_etc_spatial_stats.py` | Step 2 (A3) zarr | `/hackathon/etc_data/stats/etc_spatial_stats_{source}.nc` |
-| 4 (A3) | Composite notebooks | Step 2 (A3) zarr | Figures (2D composite maps) |
-| 4 (A3) | Spatial stats notebooks | Step 3 (A3) nc | Figures (ETC spatial mean statistics) |
+| 1 (A3) | `combine_etc_cof_data.py` | ETC track text files + COF overlap tracking parquet | `/hackathon/etc_tracks/{source}_etc_cof_data.parquet` |
+| 2 (A3) | `extract_etc_2d_vars.py` | HEALPix catalog data + ETC track file | `/hackathon/etc_data/{source}/single_vars/etc_2d_{var}_{suffix}.zarr` |
+| 3 (A3) | `combine_etc_2d_vars.py` | Step 2 (A3) zarr + Step 1 (A3) parquet | `/hackathon/etc_data/{source}/etc_2d_combined_{suffix}.zarr` |
+| 4 (A3) | `calc_etc_spatial_stats.py` | Step 3 (A3) zarr | `/hackathon/etc_data/stats/etc_spatial_stats_{source}.nc` |
+| 5 (A3) | Composite notebooks | Step 3 (A3) zarr | Figures (2D composite maps) |
+| 5 (A3) | Spatial stats notebooks | Step 4 (A3) nc | Figures (ETC spatial mean statistics) |
 | 1 (A4) | `extract_mcs_cof_tracks.py` | Step 3 cofmasks zarr + MCS track stats nc | `/hackathon/cof_masks/stats/{source}_mcs_cof_tracks_2d.nc`, `{source}_mcs_trackstats_cof.parquet` |
 | 2 (A4) | `combine_mcs_cof_trackstats_multisource.py` | Step 1 (A4) nc + MCS track stats nc (all sources) | `/hackathon/cof_masks/stats/mcs_cof_trackstats_allsources.parquet` |
 | 3 (A4) | `plot_mcs_cof_trackstats_multisource.ipynb` | Step 2 (A4) parquet | Figures (MCS track statistics by COF type) |

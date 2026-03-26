@@ -73,7 +73,7 @@ DEFAULT_SOURCES = [
 ]
 
 TRACKSTATS_FILES = {
-    "IMERGv7":                "mcs_tracks_final_20190801.0000_20200901.0000.nc",
+    "IMERGv7":                "mcs_tracks_final_20190101.0000_20220101.0100.nc",
     "scream":                 "mcs_tracks_final_20190801.0000_20200901.0000.nc",
     "icon_d3hp003":           "mcs_tracks_final_20200102.0000_20201231.2330.nc",
     "um_glm_n2560_RAL3p3":   "mcs_tracks_final_20200201.0000_20210301.0000.nc",

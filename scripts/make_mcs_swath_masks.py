@@ -4,7 +4,7 @@ import pandas as pd
 import cftime
 import yaml
 import calendar
-import os, glob
+import os, glob, re
 import time
 import argparse
 import logging
@@ -963,27 +963,27 @@ def main():
     batch_size = args.batch_size
     config_file = args.config
 
-    # Load configuration for the specified source
+    # Load MCS tracking configuration for the specified source
     zoom = 8
     config = load_config(config_file)
     root_path = config.get("root_path")
     pixel_path_name = config.get("pixel_path_name")
     pixel_path = f"{root_path}{pixel_path_name}/"
     in_basename = config.get("zarr_output_presets", {}).get("healpix").get("out_filebase")
-    # Prefer dated zarr stores (e.g., *_hp8_v1_20190101.0000_20200101.0100.zarr).
-    # Pattern matches *_v1_{date}_*.zarr but not *_v1.zarr.
-    # Falls back to the canonical *_hp8_v1.zarr when no dated stores exist.
-    zarr_pattern = f"{pixel_path}{in_basename}hp{zoom}_v1_[0-9]*.zarr"
-    dated_zarr_stores = sorted(glob.glob(zarr_pattern))
-    if len(dated_zarr_stores) >= 1:
-        logger.info(f"Found {len(dated_zarr_stores)} dated zarr store(s) to use:")
-        for p in dated_zarr_stores:
-            logger.info(f"  {os.path.basename(p)}")
-        in_zarr = dated_zarr_stores if len(dated_zarr_stores) > 1 else dated_zarr_stores[0]
-    else:
-        # Fall back to the canonical v1 store
-        in_zarr = f"{pixel_path}{in_basename}hp{zoom}_v1.zarr"
-        logger.info(f"No dated zarr stores found, using: {os.path.basename(in_zarr)}")
+    # # Prefer dated zarr stores (e.g., *_hp8_v1_20190101.0000_20200101.0100.zarr).
+    # # Pattern matches *_v1_{date}_*.zarr but not *_v1.zarr.
+    # # Falls back to the canonical *_hp8_v1.zarr when no dated stores exist.
+    # zarr_pattern = f"{pixel_path}{in_basename}hp{zoom}_v1_[0-9]*.zarr"
+    # dated_zarr_stores = sorted(glob.glob(zarr_pattern))
+    # if len(dated_zarr_stores) >= 1:
+    #     logger.info(f"Found {len(dated_zarr_stores)} dated zarr store(s) to use:")
+    #     for p in dated_zarr_stores:
+    #         logger.info(f"  {os.path.basename(p)}")
+    #     in_zarr = dated_zarr_stores if len(dated_zarr_stores) > 1 else dated_zarr_stores[0]
+    # else:
+    # Fall back to the canonical v1 store
+    in_zarr = f"{pixel_path}{in_basename}hp{zoom}_v1.zarr"
+    logger.info(f"No dated zarr stores found, using: {os.path.basename(in_zarr)}")
 
     # Catalog information
     catalog_file = config.get('catalog_file')
@@ -1000,6 +1000,8 @@ def main():
 
     # Get source name from root path (e.g., /pscratch/sd/w/wcmca1/hackathon/mcs/scream/)
     source_name = os.path.basename(os.path.normpath(root_path))
+    # Strip trailing year-range suffix (e.g., IMERGv7_2019_2021 -> IMERGv7)
+    source_name = re.sub(r'_20\d{2}_20\d{2}$', '', source_name)
 
     # Output paths
     out_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs_masks/"

@@ -13,11 +13,19 @@ OUTPUT_DIR="/pscratch/sd/w/wcmca1/hackathon/extreme_precip"
 
 # Processing parameters
 PERCENTILES="P95"
-N_WORKERS=16  # Increase for better parallelization on NERSC
+N_WORKERS=16    # 16 threads is optimal; more causes GIL contention and is slower
+BATCH_SIZE=200  # 200 tasks / 16 workers = 12.5 tasks/worker; ~33 GB peak memory/batch
 
 # Default: process all sources
 if [ -z "$1" ]; then
-    SOURCES=("scream_ne120" "IR_IMERG" "icon_d3hp003" "nicam_gl11" "um_glm_n2560_RAL3p3" "casesm2_10km_nocumulus")
+    SOURCES=(
+        "scream_ne120" 
+        "IR_IMERG" 
+        "icon_d3hp003" 
+        "nicam_gl11" 
+        "um_glm_n2560_RAL3p3" 
+        "casesm2_10km_nocumulus"
+    )
 else
     SOURCES=("$1")
 fi
@@ -28,6 +36,7 @@ echo "=========================================="
 echo "Catalog sources: ${SOURCES[@]}"
 echo "Percentiles: ${PERCENTILES}"
 echo "Workers: ${N_WORKERS}"
+echo "Batch size: ${BATCH_SIZE}"
 echo "Output: ${OUTPUT_DIR}"
 echo "=========================================="
 echo ""
@@ -53,6 +62,7 @@ for SOURCE in "${SOURCES[@]}"; do
         --percentiles ${PERCENTILES} \
         --output_dir ${OUTPUT_DIR} \
         --n_workers ${N_WORKERS} \
+        --batch_size ${BATCH_SIZE} \
         --compute_cloud_types
     
     if [ $? -eq 0 ]; then

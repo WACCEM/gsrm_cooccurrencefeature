@@ -106,7 +106,8 @@ def check_cof_mask(storm_df, cof_zarr_path):
 # ---------------------------------------------------------------------------
 
 def main():
-    default_trackfile = "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/era5.etc_stitched_nodes.txt"
+    # default_trackfile = "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/era5.etc_stitched_nodes.txt"
+    default_trackfile = '/pscratch/sd/w/wcmca1/hackathon/etc_tracks/era5.etc_stitched_nodes.filtered_out_tcs.txt'
     default_cof_zarr  = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/IMERGv7_cofmasks_hp8_v1.zarr"
 
     parser = argparse.ArgumentParser(
@@ -115,7 +116,7 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("--trackfile", default=default_trackfile,
-                        help="Path to etc_stitched_nodes.txt  (default: ERA5)")
+                        help="Path to era5.etc_stitched_nodes.filtered_out_tcs.txt (default: ERA5)")
     parser.add_argument("--storm_id", type=int, default=None,
                         help="Sequential storm ID to look up (1-based, Nth 'start' line)")
     parser.add_argument("--list_range", nargs=2, type=int, metavar=("START", "END"),
@@ -170,8 +171,7 @@ def main():
     print(f"{'='*60}")
     print(f"Storm ID : {sid}  (sequential, Nth 'start' line)")
     print(f"Points   : {len(storm_df)}")
-    nt = storm_df["num_timesteps"].iloc[0]
-    print(f"Declared num_timesteps in file: {nt}")
+    print(f"Declared num_timesteps in file: {storm_df['num_timesteps'].iloc[0]}")
     print(f"{'='*60}")
 
     # column layout

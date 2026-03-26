@@ -497,8 +497,9 @@ def parse_etc_track_file(file_path, unstructured_mesh=True):
                 if unstructured_mesh:
                     # grid_id  lon  lat  slp  wind  zs  pr  [ws...]  year  month  day  hour
                     base_dict = {
-                        "storm_id": storm_id,
-                        "grid_id":  int(cols[0]),
+                        "storm_id":      storm_id,
+                        "num_timesteps": num_timesteps,
+                        "grid_id":       int(cols[0]),
                         "lon":      float(cols[1]),
                         "lat":      float(cols[2]),
                         "slp":      float(cols[3]),
@@ -510,8 +511,9 @@ def parse_etc_track_file(file_path, unstructured_mesh=True):
                 else:
                     # lon_id  lat_id  lon  lat  slp  wind  zs  pr  [ws...]  year  month  day  hour
                     base_dict = {
-                        "storm_id": storm_id,
-                        "lon_id":   int(cols[0]),
+                        "storm_id":      storm_id,
+                        "num_timesteps": num_timesteps,
+                        "lon_id":        int(cols[0]),
                         "lat_id":   int(cols[1]),
                         "lon":      float(cols[2]),
                         "lat":      float(cols[3]),

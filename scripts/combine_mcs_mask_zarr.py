@@ -14,7 +14,7 @@ Options:
 
 Output:
   Writes a single Zarr file combining all input years to:
-    /pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/mcstracking/IMERGv7_hrly_mcsmask_hp8_v1.zarr
+    /pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7/mcstracking/IMERGv7_hrly_mcsmask_hp8_v1.zarr
 """
 
 import os
@@ -33,7 +33,8 @@ def main():
     args = parser.parse_args()
 
     # Input/output paths
-    mask_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/mcstracking"
+    # mask_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7_2019_2021/mcstracking"
+    mask_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs/IMERGv7/mcstracking"
     pattern = os.path.join(mask_dir, "IMERGv7_hrly_mcsmask_hp8_v1_20??????.????_20??????.????.zarr")
     out_path = os.path.join(mask_dir, "IMERGv7_hrly_mcsmask_hp8_v1.zarr")
 
