@@ -1,0 +1,7 @@
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_casesm2_10km_nocumulus.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_icon_d3hp003.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_ifs_tco3999_rcbmf.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_IMERGv7.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_nicam_gl11.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_scream.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_um_glm_n2560_RAL3p3.yml

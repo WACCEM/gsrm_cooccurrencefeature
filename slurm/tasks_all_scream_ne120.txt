@@ -1,0 +1,4 @@
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_mcs_swath_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_mcs_tbpf_scream.yml
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/combine_tracking_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources.yaml --source scream_ne120
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_cooccurrence_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources.yaml --source scream_ne120
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/calc_monthly_rainmap_by_cof.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources.yaml --source scream_ne120

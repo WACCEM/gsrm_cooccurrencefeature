@@ -1,0 +1,2 @@
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/make_cooccurrence_masks.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources.yaml --source IR_IMERG
+python /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/calc_monthly_rainmap_by_cof.py -c /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources.yaml --source IR_IMERG
