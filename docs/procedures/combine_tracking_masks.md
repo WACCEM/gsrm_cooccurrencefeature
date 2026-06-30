@@ -160,4 +160,4 @@ All variables are on the HEALPix `cell` dimension with a common 6-hourly time co
 | `tc_mask` | TC NetCDF | TC mask; pixel value = TC track number (0 = no TC) |
 | `etc_mask` | ETC NetCDF | ETC mask; pixel value = ETC integer tag (0 = no ETC) |
 
-This combined dataset is the direct input to the co-occurrence feature (COF) identification procedure described in [cof_identification_procedure.md](cof_identification_procedure.md).
+This combined dataset is the direct input to the co-occurrence feature (COF) identification procedure described in [cof_identification.md](cof_identification.md).

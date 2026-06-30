@@ -171,7 +171,7 @@ where $\Delta t$ is the detected time interval in hours (inferred from the first
 
 ## Step 5 — Union Mask Construction
 
-The COF identification procedure (see [cof_identification_procedure.md](cof_identification_procedure.md)) stores each feature's perspective separately within a co-occurrence pair. For statistics, the spatial union across perspectives is needed:
+The COF identification procedure (see [cof_identification.md](cof_identification.md)) stores each feature's perspective separately within a co-occurrence pair. For statistics, the spatial union across perspectives is needed:
 
 **Two-way union masks:**
 $$M_{\text{MCS-AR}} = (M_{\text{mcs\_ar}} > 0) \cup (M_{\text{ar\_mcs}} > 0)$$

@@ -1,3 +1,6 @@
+# Specific to this repo
+extract_environments/sbatch*.sh
+
 # Python
 __pycache__/
 *.py[cod]
