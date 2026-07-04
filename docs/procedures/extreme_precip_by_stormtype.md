@@ -15,7 +15,7 @@ These two scripts together produce spatial maps of extreme precipitation attribu
 
 1. **Threshold computation** (`calc_extreme_precip_thresholds.py`): for each HEALPix cell, compute the $N$th-percentile precipitation over the full analysis period. This yields a spatially varying threshold $\tau_p(x)$ that defines what counts as "extreme" locally.
 
-2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to exactly one storm type following a strict priority hierarchy. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file.
+2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to the storm type category it belongs to. The underlying COF masks are constructed so that each grid cell belongs to at most one category in the large majority of cases (see the note under Step 4), so this assignment is usually unambiguous; a priority order is applied as a deterministic tie-break for the residual cases where a cell could otherwise match more than one category. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file.
 
 The analysis uses three independent input datasets:
 - **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`
@@ -71,8 +71,10 @@ Input: COF mask zarr  +  percentile threshold file  +  precipitation
 [Step 6] Compute precipitation fractions per storm type
          |
          v
-Output: {source}_stormtype_extreme_precip_{Pxx}_hp8_v1.nc
-        └─ Per-cell counts, precipitation sums, and fractions for each storm type
+Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
+        └─ Per-cell total extreme precipitation plus counts and fractions for each storm type
+        └─ {pxx} is the lowercase percentile name (e.g. p90); {date_suffix} is empty unless
+           --start_date/--end_date were given, in which case it is _{start}_{end}
 ```
 
 ---
@@ -85,7 +87,7 @@ Output: {source}_stormtype_extreme_precip_{Pxx}_hp8_v1.nc
 
 - **Stage 2, Steps 1–2 — Data Loading and Alignment:** The COF mask zarr, threshold file, and precipitation dataset are loaded and aligned to a common time coordinate, handling calendar differences between model outputs and applying an optional analysis date range.
 
-- **Stage 2, Steps 3–4 — Time-Step Attribution:** For each time step, cells where precipitation exceeds the local percentile threshold are identified, then each extreme cell is assigned to exactly one storm type using a strict priority hierarchy (highest-order COF first). This ensures that every extreme event is counted once and assigned to its most complex storm type.
+- **Stage 2, Steps 3–4 — Time-Step Attribution:** For each time step, cells where precipitation exceeds the local percentile threshold are identified, then each extreme cell is assigned to the storm type category it belongs to. Because the COF masks are constructed to be mutually exclusive at each grid cell in the large majority of cases, this assignment is usually determined directly by which category's mask the cell falls in, not by the order categories are checked; a priority order (highest-order COF first) is applied only to deterministically resolve the residual cases where a cell could match more than one category, ensuring every extreme event is still counted exactly once.
 
 - **Stage 2, Steps 5–6 — Spatial Accumulation and Fraction Calculation:** Extreme event counts and precipitation amounts are summed over all time steps at each cell. Precipitation fractions are then computed as the ratio of each storm type's extreme precipitation to the total extreme precipitation, providing a normalized measure of each type's relative contribution.
 
@@ -144,7 +146,17 @@ $$E(t, x) = \mathbf{1}\bigl[P(t, x) > \tau_p(x)\bigr]$$
 
 ### Step 4 — Priority-Based Storm Type Assignment
 
-Each extreme cell is assigned to exactly one storm type following a **strict descending priority order**. An `assigned_mask` accumulates all already-classified cells so that no cell is counted twice:
+Each extreme cell is assigned to the storm type category it belongs to. An `assigned_mask` accumulates all already-classified cells so that no cell is counted twice.
+
+**Mutual exclusivity of storm type categories.** The COF mask categories are constructed so that, for the large majority of grid cells and time steps, a cell belongs to at most one category: each tracked feature (MCS, AR, ETC) is partitioned into isolated vs. two-way/three-way co-occurrence at the track level (see [cof_identification.md](cof_identification.md)), and non-tracked cloud types (DC/ND/ST/DZ) are explicitly re-excluded from every one of the eight tracked-feature categories immediately before classification, regardless of what the upstream masks contain. In this large majority of cases, the assignment below is determined entirely by which category's mask a cell falls in, and the order in which categories are checked has no effect on the result.
+
+This mutual exclusivity is not, however, a mathematically guaranteed invariant of the mask-construction pipeline for the eight tracked-feature categories (priorities 1–8). Three specific, structural situations can leave a cell matching more than one candidate category:
+
+- A feature track can independently satisfy co-occurrence criteria with two different partner feature types without those two partners themselves being linked (three-way promotion currently only triggers when an ETC track bridges an AR pairing and an MCS pairing; the same check is not made for an MCS or AR track bridging two other pairings).
+- Two tracks of different feature types can physically share pixels while their *mutual* overlap fraction stays below the threshold needed to register a co-occurrence pair, leaving both classified as isolated despite the spatial overlap.
+- An MCS track with tropical cyclone (TC) overlap below the MCS-TC removal threshold retains all of its pixels, including any that coincide with TC pixels (AR and ETC do not have this gap, since they are excluded from TC pixels unconditionally at the pixel level, not by an overlap-fraction threshold).
+
+For the residual cells affected by these situations, the priority order below acts as a deterministic tie-break — it does not represent a scientific ranking of storm-type importance, only a fixed convention (favoring three-way, then two-way, then isolated co-occurrence structure) that ensures every extreme event is still counted exactly once. Cloud types (priorities 9–12) are unaffected by any of this: they are unconditionally excluded from all eight tracked-feature categories, so the priority order between a tracked feature and a cloud type is always inert. As an optional diagnostic, the fraction of extreme cells affected by the three situations above (cells where more than one candidate category's mask is true before priority resolution) can be quantified directly from the intermediate masks in `process_single_timestep()`, to report a concrete rate rather than a qualitative "rare."
 
 | Priority | Category | Condition |
 |----------|----------|-----------|
@@ -157,8 +169,8 @@ Each extreme cell is assigned to exactly one storm type following a **strict des
 | 7 | Isolated ETC | Cell in isolated ETC mask, not yet assigned |
 | 8 | TC | Cell in TC mask, not yet assigned |
 | 9 | Deep convective (DC) | `cloud_types == 1`, no feature mask, not yet assigned |
-| 10 | Non-deep convective (ND) | `cloud_types == 2`, no feature mask, not yet assigned |
-| 11 | Stratiform (ST) | `cloud_types == 3`, no feature mask, not yet assigned |
+| 10 | Non-deep convective (ND) | `cloud_types == 3`, no feature mask, not yet assigned |
+| 11 | Stratiform (ST) | `cloud_types == 2`, no feature mask, not yet assigned |
 | 12 | Drizzle (DZ) | `cloud_types == 4`, no feature mask, not yet assigned |
 | 13 | Unassigned | Extreme but not classified by any above |
 
@@ -179,7 +191,7 @@ The fraction of extreme precipitation attributed to storm type $c$ at cell $x$ i
 
 $$f_c(x) = \frac{\text{precip}_c(x)}{\text{precip}_{\text{total}}(x)}$$
 
-where $\text{precip}_{\text{total}}(x) = \sum_c \text{precip}_c(x)$ is the total extreme precipitation at that cell. Cells with zero total extreme precipitation are set to NaN.
+where $\text{precip}_{\text{total}}(x) = \sum_c \text{precip}_c(x)$ is the total extreme precipitation at that cell. Cells with zero total extreme precipitation are assigned a fraction value of 0.0 in the output — including `unassigned_frac`. Downstream consumers that need a true residual/unassigned category should read `unassigned_frac` directly (rather than re-deriving it as `1 - sum(other fractions)`) and mask cells where `total_extreme_count == 0`, since at those cells every `{type}_frac` is 0.0, not undefined.
 
 ---
 
@@ -190,12 +202,13 @@ The attribution output has shape `(cell,)` with one file per percentile threshol
 | Variable | Description |
 |----------|-------------|
 | `total_extreme_count` | Total count of extreme precipitation occurrences (all storm types) |
-| `total_extreme_precip` | Sum of all extreme precipitation amounts (mm h⁻¹) |
+| `total_extreme_precip` | Sum of all extreme precipitation values over extreme time steps (summed over samples, not time-integrated by the sampling interval; not a physical accumulated depth) |
 | `{type}_count` | Extreme event count attributed to each storm type |
-| `{type}_precip` | Extreme precipitation sum for each storm type (mm h⁻¹) |
-| `{type}_fraction` | Fraction of extreme precipitation for each storm type |
+| `{type}_frac` | Fraction of extreme precipitation for each storm type |
 
 where `{type}` is one of: `mcs_isolated`, `ar_isolated`, `etc_isolated`, `tc`, `mcs_ar_2way`, `mcs_etc_2way`, `ar_etc_2way`, `mcs_ar_etc_3way`, `dc`, `nd`, `st`, `dz`, `unassigned`.
+
+Per-type precipitation sums are accumulated internally to compute `{type}_frac`, but they are not written as separate `{type}_precip` variables by the current script.
 
 ---
 

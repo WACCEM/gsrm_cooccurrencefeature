@@ -62,7 +62,7 @@ These scripts automate running one or more Python processing scripts across mode
 | 3 | `make_cooccurrence_masks.py` | Step 2 zarr | `/hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr` |
 | 4 (A1) | `calc_monthly_rainmap_by_cof.py` | Step 3 zarr + catalog pr | `/hackathon/cof_masks/stats/monthly/{source}_monthly_rainmap_cof_hp8_v1.nc` |
 | 4a (A2) | `calc_extreme_precip_thresholds.py` | Catalog pr | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` |
-| 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr + Step 4a nc + catalog pr | `/hackathon/extreme_precip/{source}_stormtype_extreme_precip_{Pxx}_hp8_v1.nc` |
+| 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr + Step 4a nc + catalog pr | `/hackathon/extreme_precip/{source}_stormtype_spatial_{pxx}{date_suffix}.nc` |
 | 5 (A1) | `plot_cof_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
 | 5 (A2) | `plot_cof_extreme_raintype_rank_map.ipynb` | Step 4b (A2) nc | Figures |
 | 1 (A3) | `combine_etc_cof_data.py` | ETC track text files + COF overlap tracking parquet | `/hackathon/etc_tracks/{source}_etc_cof_data.parquet` |

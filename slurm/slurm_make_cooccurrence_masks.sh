@@ -19,8 +19,8 @@ source activate /global/common/software/m1867/python/pyflex-dev
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 
 # Takes a specified line ($SLURM_ARRAY_TASK_ID) from the task file
-# LINE=$(sed -n "$SLURM_ARRAY_TASK_ID"p /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks_all.txt)
-LINE=$(sed -n "$SLURM_ARRAY_TASK_ID"p /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks.txt)
+LINE=$(sed -n "$SLURM_ARRAY_TASK_ID"p /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks_all.txt)
+# LINE=$(sed -n "$SLURM_ARRAY_TASK_ID"p /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks.txt)
 
 echo $LINE
 # Run the line as a command

@@ -81,14 +81,14 @@ Output: COF masks (zarr) + ETC statistics (CSV, Parquet)
 
 ## Step 1 — TC Filtering
 
-Prior to any co-occurrence analysis, MCS features that substantially overlap with tropical cyclones are removed. This prevents TC-embedded convection from being misclassified as non-TC COF systems.
+Prior to any co-occurrence analysis, MCS, AR, and ETC features and non-tracked cloud-type pixels that overlap tropical cyclones are removed. This prevents TC-embedded convection and TC-associated cloud/precipitation from being misclassified as non-TC COF systems.
 
-- A binary overlap mask is constructed by summing the MCS binary mask and the TC binary mask.
-- For each MCS track, the fraction of its total pixels that overlap with any TC pixel is computed.
-- MCS tracks with an overlap fraction **≥ 10%** are removed from subsequent processing.
-- The same procedure is applied to the cloud-type mask using a more conservative threshold of **≥ 1%**, to exclude cloud areas even loosely associated with TC circulation.
+Two different filtering mechanisms are used, because MCS is the only one of these fields that is filtered at the object/track level:
 
-**Result:** A TC-filtered MCS mask and a TC-filtered cloud-type mask are used for all subsequent steps.
+- **MCS (track-level, threshold-based):** a binary overlap mask is constructed by summing the MCS binary mask and the TC binary mask. For each MCS track, the fraction of its total pixels that overlap with any TC pixel is computed, and MCS tracks with an overlap fraction **≥ 10%** are removed entirely from subsequent processing.
+- **Cloud types, AR, and ETC (pixel-level, no threshold):** any individual cloud-type, AR, or ETC pixel that directly coincides with a TC pixel is removed, regardless of what fraction of the parent object or class it represents. Cloud types are per-pixel class labels (1-4), not tracked objects, so an overlap-fraction threshold like MCS's is not meaningful for them. AR and ETC TC-overlap removal is already expected to happen upstream of this repository (in the AR/ETC/TC mask generation step); the pixel-level filtering applied here is an explicit, defensive safety net rather than a new scientifically-tuned threshold.
+
+**Result:** A TC-filtered MCS mask (track-level) and TC-filtered cloud-type, AR, and ETC masks (pixel-level) are used for all subsequent steps.
 
 ---
 
@@ -208,8 +208,10 @@ For ETC tracks in three-way COFs, the associated MCS and AR track IDs are record
 
 | Analysis | Feature | Threshold | Rationale |
 |----------|---------|-----------|-----------|
-| TC filtering | MCS | ≥ 10% | Remove TC-embedded convection |
-| TC filtering | Cloud types | ≥ 1% | Conservative removal of TC cloud areas |
+| TC filtering (track-level) | MCS | ≥ 10% | Remove TC-embedded convection |
+| TC filtering (pixel-level) | Cloud types | any overlap | Cloud types have no track ID; a class-level threshold would zero out an entire class domain-wide, so any TC-overlapping pixel is removed individually instead |
+| TC filtering (pixel-level) | AR | any overlap | Defensive/explicit; already expected to be excluded upstream of this repository |
+| TC filtering (pixel-level) | ETC | any overlap | Defensive/explicit; already expected to be excluded upstream of this repository |
 | 3-way COF | MCS | ≥ 20% | High threshold for smallest feature |
 | 3-way COF | AR | ≥ 10% | Moderate threshold for medium feature |
 | 3-way COF | ETC | ≥ 0% | Any presence accepted for largest feature |

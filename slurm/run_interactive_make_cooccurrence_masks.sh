@@ -42,7 +42,8 @@ while IFS= read -r line; do
 
     echo "End time: $(date)"
     echo ""
-done < /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks.txt
+done < /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks_all.txt
+# done < /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/tasks_make_cooccurrence_masks.txt
 
 echo "=========================================="
 echo "All 6 tasks completed successfully!"

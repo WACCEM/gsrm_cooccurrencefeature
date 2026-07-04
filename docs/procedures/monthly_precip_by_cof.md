@@ -8,7 +8,7 @@
 
 ## Overview
 
-This procedure computes monthly precipitation statistics for each co-occurrence feature (COF) category on a HEALPix grid. Starting from the COF mask dataset (output of `make_cooccurrence_masks.py`) and a precipitation source (catalog or local zarr), each grid cell is attributed to one or more feature categories and its precipitation is accumulated over the month. The output is a single NetCDF file containing, for every month and every HEALPix cell, the total precipitation, feature occurrence counts, and precipitating-hour counts for all categories.
+This procedure computes monthly precipitation statistics for each co-occurrence feature (COF) category on a HEALPix grid. Starting from the COF mask dataset (output of `make_cooccurrence_masks.py`) and a precipitation source (catalog or local zarr), each grid cell is attributed to one or more feature categories and its precipitation is accumulated over the month. The output is a single NetCDF file containing, for every month and every HEALPix cell, the total precipitation, feature occurrence time-step counts, and precipitating time-step counts for all categories.
 
 The COF mask dataset is the final product of a four-script pipeline:
 1. `make_mcs_swath_masks.py` — creates aggregated MCS swath masks and cloud type precipitation on HEALPix
@@ -61,8 +61,8 @@ Input: COF mask zarr  +  precipitation source (catalog or local zarr)
          v
 [Step 6] Precipitation and Count Accumulation (per chunk)
   └─ For each category: sum(pr × Δt where mask > 0) → total precipitation (mm)
-  └─ For each category: sum(mask > 0) → occurrence count (hours)
-  └─ For each category: sum(pr > threshold & mask > 0) → precipitating hours
+  └─ For each category: sum(mask > 0) → occurrence count (time steps)
+  └─ For each category: sum(pr > threshold & mask > 0) → precipitating count (time steps)
   └─ Cloud types: apply all-feature exclusion mask; use pre-computed dc/st/nd/dz_pr
          |
          v
@@ -72,7 +72,7 @@ Input: COF mask zarr  +  precipitation source (catalog or local zarr)
   └─ Write compressed NetCDF4 file
          |
          v
-Output: NetCDF file with monthly precipitation, count, and precipitating-hour maps
+Output: NetCDF file with monthly precipitation, count, and precipitating-count maps
         for all COF categories and cloud types
 ```
 
@@ -90,7 +90,7 @@ Output: NetCDF file with monthly precipitation, count, and precipitating-hour ma
 
 - **Step 5 — Union Mask Construction:** Because the COF identification procedure stores separate perspective masks for each feature within a pair (e.g., `mcs_ar_overlap_mask` and `ar_mcs_overlap_mask`), these are combined into a single spatial union mask before computing areal precipitation statistics. The same is done for all three perspectives of the three-way COF.
 
-- **Step 6 — Statistics Accumulation:** Three statistics are computed for each category at each grid cell: total precipitation (mm), occurrence count (hours present), and precipitating-hour count (hours with precipitation above threshold). Cloud type statistics additionally exclude all feature footprints and use the pre-computed frequency-weighted precipitation variables (`dc_pr`, `st_pr`, `nd_pr`, `dz_pr`).
+- **Step 6 — Statistics Accumulation:** Three statistics are computed for each category at each grid cell: total precipitation (mm), occurrence count (number of sub-daily time steps present), and precipitating count (number of sub-daily time steps with precipitation above threshold). Cloud type statistics additionally exclude all feature footprints and use the pre-computed frequency-weighted precipitation variables (`dc_pr`, `st_pr`, `nd_pr`, `dz_pr`).
 
 - **Step 7 — Output:** Monthly results are stacked into `(time, cell)` arrays and written to a compressed NetCDF4 file with full variable attributes, enabling direct use in downstream climatological analysis.
 
@@ -192,13 +192,13 @@ For each category $c$ and each time chunk with $N_t$ time steps and time interva
 **Total precipitation (mm):**
 $$P_c = \sum_{t=1}^{N_t} \text{pr}(t) \cdot \mathbf{1}[M_c(t) > 0] \cdot \Delta t$$
 
-**Occurrence count (hours):**
-$$K_c = \sum_{t=1}^{N_t} \mathbf{1}[M_c(t) > 0] \cdot \Delta t$$
+**Occurrence count (time steps):**
+$$K_c = \sum_{t=1}^{N_t} \mathbf{1}[M_c(t) > 0]$$
 
-**Precipitating-hour count (hours above threshold $\theta$):**
-$$H_c = \sum_{t=1}^{N_t} \mathbf{1}[M_c(t) > 0 \;\text{and}\; \text{pr}(t) > \theta] \cdot \Delta t$$
+**Precipitating count (time steps above threshold $\theta$):**
+$$H_c = \sum_{t=1}^{N_t} \mathbf{1}[M_c(t) > 0 \;\text{and}\; \text{pr}(t) > \theta]$$
 
-where $\theta = 0.1\;\text{mm\,h}^{-1}$ by default.
+where $\theta = 0.1\;\text{mm\,h}^{-1}$ by default. If elapsed hours are needed, multiply these count variables by the detected time interval $\Delta t$ stored in the output global attributes.
 
 ### Cloud Type Statistics
 
@@ -237,8 +237,8 @@ All output variables have shape `(time, cell)` with a monthly time dimension and
 | `st_precipitation` | mm | Non-feature stratiform precipitation |
 | `nd_precipitation` | mm | Non-feature non-deep convective precipitation |
 | `dz_precipitation` | mm | Non-feature drizzle precipitation |
-| `*_count` | hour | Hours of feature presence (for each category above) |
-| `*_precipitation_count` | hour | Hours with precipitation above threshold |
+| `*_count` | count | Number of sub-daily time steps with feature presence (for each category above) |
+| `*_precipitation_count` | count | Number of sub-daily time steps with precipitation above threshold |
 
 ---
 

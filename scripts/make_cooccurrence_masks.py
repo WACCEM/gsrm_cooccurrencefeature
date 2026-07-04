@@ -34,6 +34,24 @@ from src.zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_
 
 warnings.filterwarnings('ignore')
 
+MCS_OVERLAP_THRESHOLD = 0.20
+AR_OVERLAP_THRESHOLD = 0.10
+ETC_THREEWAY_THRESHOLD = 0.00
+MCS_AR_AR_THRESHOLD = 0.00
+AR_ETC_ETC_THRESHOLD = 0.01
+MCS_ETC_ETC_THRESHOLD = 0.00
+MCS_TC_FILTER_THRESHOLD = 0.10
+# Cloud types, AR, and ETC are filtered for TC overlap at the pixel level (any direct overlap
+# with the TC mask is removed), not via a class/track overlap-fraction threshold like MCS. See
+# Step 1 in process_single_timestep_overlaps(). AR/ETC filtering here is an explicit, defensive
+# safety net: TC-overlap removal from AR/ETC masks is already expected to happen upstream of
+# this repository.
+
+
+def _format_percent(value):
+    return f"{value:.0%}"
+
+
 def setup_logging():
     """Set up logging configuration"""
     logging.basicConfig(
@@ -998,32 +1016,46 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         print(f"Processing single time step overlap analysis...")
     
     # Define thresholds based on atmospheric scale hierarchy
-    mcs_thresh = 0.20  # 20% - smallest features, need substantial overlap
-    ar_thresh = 0.10   # 10% - medium features
-    etc_thresh_2way = 0.05  # 5% - largest features for 2-way overlaps
-    etc_thresh_3way = 0.00  # 0% - environmental context for 3-way overlaps
+    mcs_thresh = MCS_OVERLAP_THRESHOLD
+    ar_thresh = AR_OVERLAP_THRESHOLD
+    etc_thresh_3way = ETC_THREEWAY_THRESHOLD
+    mcs_ar_ar_thresh = MCS_AR_AR_THRESHOLD
+    ar_etc_etc_thresh = AR_ETC_ETC_THRESHOLD
+    mcs_etc_etc_thresh = MCS_ETC_ETC_THRESHOLD
     
     # ===== STEP 1: TC FILTERING =====
     if verbose:
         print("  Step 1: Filtering MCS-TC overlaps...")
-    
-    # Filter MCS masks that significantly overlap with TCs
+
+    # Filter MCS masks that significantly overlap with TCs (track-level, threshold-based:
+    # an MCS track is dropped entirely if its overlap fraction with TC pixels is too high).
     mcs_filtering_results = filter_mcs_tc_overlaps(
         mcs_mask=_ds.mcs_mask,
         tc_mask=_ds.tc_mask,
-        overlap_threshold=0.10,  # 10% threshold
+        overlap_threshold=MCS_TC_FILTER_THRESHOLD,
         verbose=verbose
     )
-    # Filter cloud_types that significantly overlap with TCs
-    cloudtypes_filtering_results = filter_mcs_tc_overlaps(
-        mcs_mask=_ds.cloud_types,
-        tc_mask=_ds.tc_mask,
-        overlap_threshold=0.01,  # 1% threshold
-        verbose=verbose
-    )
-
     mcs_filtered = mcs_filtering_results['mcs_filtered']
-    cloud_types = cloudtypes_filtering_results['mcs_filtered']
+
+    # Filter cloud_types, AR, and ETC pixels that directly overlap TC pixels (pixel-level, not
+    # threshold-based). Cloud types are per-pixel class labels (1-4), not object/track IDs, so
+    # a class overlap-fraction threshold (as used for MCS above) is not meaningful and previously
+    # caused an entire cloud class to be zeroed domain-wide whenever its global TC-overlap
+    # fraction crossed the old threshold. AR/ETC TC-overlap removal is already expected to happen
+    # upstream of this repository; filtering them here too is an explicit, defensive safety net.
+    tc_present = _ds.tc_mask > 0
+    if verbose:
+        n_ct_px = int(((_ds.cloud_types > 0) & tc_present).sum().compute().item())
+        n_ar_px = int(((_ds.ar_mask > 0) & tc_present).sum().compute().item())
+        n_etc_px = int(((_ds.etc_mask > 0) & tc_present).sum().compute().item())
+        print(f"  Pixel-level TC filtering: removed {n_ct_px} cloud-type, {n_ar_px} AR, "
+              f"{n_etc_px} ETC pixels overlapping TC")
+
+    cloud_types = xr.where(tc_present, 0, _ds.cloud_types)
+    _ds = _ds.assign(
+        ar_mask=xr.where(tc_present, 0, _ds.ar_mask),
+        etc_mask=xr.where(tc_present, 0, _ds.etc_mask),
+    )
 
     # ===== STEP 2: CREATE BINARY MASKS =====
     if verbose:
@@ -1063,15 +1095,15 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     
     # Find all potential 2-way overlaps
     mcs_ar_pairs_all = find_overlapping_tracks_and_pairs(mcs_filtered, _ds.ar_mask, mcs_ar_sum,
-                                                        mcs_thresh, 0.0, overlap_threshold=1,
+                                                        mcs_thresh, mcs_ar_ar_thresh, overlap_threshold=1,
                                                         feature1_name="MCS", feature2_name="AR", verbose=verbose)
 
     ar_etc_pairs_all = find_overlapping_tracks_and_pairs(_ds.ar_mask, _ds.etc_mask, ar_etc_sum,
-                                                        ar_thresh, 0.01, overlap_threshold=1,
+                                                        ar_thresh, ar_etc_etc_thresh, overlap_threshold=1,
                                                         feature1_name="AR", feature2_name="ETC", verbose=verbose)
 
     mcs_etc_pairs_all = find_overlapping_tracks_and_pairs(mcs_filtered, _ds.etc_mask, mcs_etc_sum,
-                                                         mcs_thresh, 0.0, overlap_threshold=1,
+                                                         mcs_thresh, mcs_etc_etc_thresh, overlap_threshold=1,
                                                          feature1_name="MCS", feature2_name="ETC", verbose=verbose)
 
     # Filter out tracks that ACTUALLY EXCEED 3-way thresholds (not just participate)
@@ -1234,10 +1266,10 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     # Return all masks and metadata
     return {
         # Original masks
-        'mcs_mask': mcs_filtered,   # TC-filtered MCS
-        'cloud_types': cloud_types,   # TC-filtered cloud types
-        'ar_mask': _ds.ar_mask,
-        'etc_mask': _ds.etc_mask,
+        'mcs_mask': mcs_filtered,   # TC-filtered MCS (track-level)
+        'cloud_types': cloud_types,   # TC-filtered cloud types (pixel-level)
+        'ar_mask': _ds.ar_mask,   # TC-filtered AR (pixel-level; _ds reassigned in Step 1)
+        'etc_mask': _ds.etc_mask,   # TC-filtered ETC (pixel-level; _ds reassigned in Step 1)
         'tc_mask': _ds.tc_mask,
         
         # Precipitation types (frequency-weighted, mutually exclusive with MCS)
@@ -1385,8 +1417,20 @@ def main():
         attrs.update({
             'processing_info': 'Co-occurrence feature masks',
             'processing_date': str(np.datetime64('today')),
-            'thresholds': 'MCS: 20%, AR: 10%, ETC: 5% (2-way), 0% (3-way)',
-            'tc_filtering_threshold': '10%',
+            'thresholds': (
+                f"MCS: {_format_percent(MCS_OVERLAP_THRESHOLD)}, "
+                f"AR: {_format_percent(AR_OVERLAP_THRESHOLD)}, "
+                f"MCS-AR AR: {_format_percent(MCS_AR_AR_THRESHOLD)}, "
+                f"AR-ETC ETC: {_format_percent(AR_ETC_ETC_THRESHOLD)}, "
+                f"MCS-ETC ETC: {_format_percent(MCS_ETC_ETC_THRESHOLD)}, "
+                f"ETC 3-way: {_format_percent(ETC_THREEWAY_THRESHOLD)}"
+            ),
+            'tc_filtering_threshold': (
+                f"MCS-TC: {_format_percent(MCS_TC_FILTER_THRESHOLD)} (track-level), "
+                f"cloud type-TC: pixel-level (any overlap), "
+                f"AR-TC: pixel-level (any overlap), "
+                f"ETC-TC: pixel-level (any overlap)"
+            ),
             'parallel_processing': str(parallel),
             'memory_approach': 'streaming'
         })

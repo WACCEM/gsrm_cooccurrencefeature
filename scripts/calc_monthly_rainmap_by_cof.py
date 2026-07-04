@@ -27,7 +27,7 @@ def parse_cmd_args():
     parser.add_argument("--workers", help="number of Dask workers (default: 14)", type=int, default=14)
     parser.add_argument("--threads-per-worker", help="threads per worker (default: 4)", type=int, default=4)
     parser.add_argument("--chunk_days", help="number of days to process in each chunk (default: 6)", type=int, default=6)
-    parser.add_argument("--pcp_thresh", help="precipitation threshold in mm/h (default: 0.1)", type=float, default=0.1)
+    parser.add_argument("--pcp_thresh", help="precipitation threshold in mm/h (default: 1.0)", type=float, default=1.0)
     args = parser.parse_args()
 
     # Put arguments in a dictionary
@@ -808,7 +808,7 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['lon'].attrs['units'] = 'degree'
     dsout['lat'].attrs['long_name'] = 'Latitude'
     dsout['lat'].attrs['units'] = 'degree'
-    dsout['ntimes'].attrs['long_name'] = 'Number of hours during the month'
+    dsout['ntimes'].attrs['long_name'] = 'Number of sub-daily time steps during the month'
     dsout['ntimes'].attrs['units'] = 'count'
     
     # Total precipitation
@@ -818,119 +818,119 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     # Original features
     dsout['mcs_precipitation'].attrs['long_name'] = 'MCS precipitation (all)'
     dsout['mcs_precipitation'].attrs['units'] = 'mm'
-    dsout['mcs_count'].attrs['long_name'] = 'Number of hours MCS is present'
-    dsout['mcs_count'].attrs['units'] = 'hour'
-    dsout['mcs_precipitation_count'].attrs['long_name'] = 'Number of hours MCS precipitation exceeds threshold'
-    dsout['mcs_precipitation_count'].attrs['units'] = 'hour'
+    dsout['mcs_count'].attrs['long_name'] = 'Number of time steps MCS is present'
+    dsout['mcs_count'].attrs['units'] = 'count'
+    dsout['mcs_precipitation_count'].attrs['long_name'] = 'Number of time steps MCS precipitation exceeds threshold'
+    dsout['mcs_precipitation_count'].attrs['units'] = 'count'
 
     dsout['ar_precipitation'].attrs['long_name'] = 'AR precipitation (all)'
     dsout['ar_precipitation'].attrs['units'] = 'mm'
-    dsout['ar_count'].attrs['long_name'] = 'Number of hours AR is present'
-    dsout['ar_count'].attrs['units'] = 'hour'
-    dsout['ar_precipitation_count'].attrs['long_name'] = 'Number of hours AR precipitation exceeds threshold'
-    dsout['ar_precipitation_count'].attrs['units'] = 'hour'
+    dsout['ar_count'].attrs['long_name'] = 'Number of time steps AR is present'
+    dsout['ar_count'].attrs['units'] = 'count'
+    dsout['ar_precipitation_count'].attrs['long_name'] = 'Number of time steps AR precipitation exceeds threshold'
+    dsout['ar_precipitation_count'].attrs['units'] = 'count'
 
     dsout['etc_precipitation'].attrs['long_name'] = 'ETC precipitation (all)'
     dsout['etc_precipitation'].attrs['units'] = 'mm'
-    dsout['etc_count'].attrs['long_name'] = 'Number of hours ETC is present'
-    dsout['etc_count'].attrs['units'] = 'hour'
-    dsout['etc_precipitation_count'].attrs['long_name'] = 'Number of hours ETC precipitation exceeds threshold'
-    dsout['etc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['etc_count'].attrs['long_name'] = 'Number of time steps ETC is present'
+    dsout['etc_count'].attrs['units'] = 'count'
+    dsout['etc_precipitation_count'].attrs['long_name'] = 'Number of time steps ETC precipitation exceeds threshold'
+    dsout['etc_precipitation_count'].attrs['units'] = 'count'
 
     # TC attributes
     dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation'
     dsout['tc_precipitation'].attrs['units'] = 'mm'
-    dsout['tc_count'].attrs['long_name'] = 'Number of hours TC is present'
-    dsout['tc_count'].attrs['units'] = 'hour'
-    dsout['tc_precipitation_count'].attrs['long_name'] = 'Number of hours TC precipitation exceeds threshold'
-    dsout['tc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['tc_count'].attrs['long_name'] = 'Number of time steps TC is present'
+    dsout['tc_count'].attrs['units'] = 'count'
+    dsout['tc_precipitation_count'].attrs['long_name'] = 'Number of time steps TC precipitation exceeds threshold'
+    dsout['tc_precipitation_count'].attrs['units'] = 'count'
     
     # Isolated features
     # MCS attributes
     dsout['mcs_iso_precipitation'].attrs['long_name'] = 'MCS isolated precipitation'
     dsout['mcs_iso_precipitation'].attrs['units'] = 'mm'
-    dsout['mcs_iso_count'].attrs['long_name'] = 'Number of hours MCS is present'
-    dsout['mcs_iso_count'].attrs['units'] = 'hour'
-    dsout['mcs_iso_precipitation_count'].attrs['long_name'] = 'Number of hours MCS isolated precipitation exceeds threshold'
-    dsout['mcs_iso_precipitation_count'].attrs['units'] = 'hour'
+    dsout['mcs_iso_count'].attrs['long_name'] = 'Number of time steps MCS is present'
+    dsout['mcs_iso_count'].attrs['units'] = 'count'
+    dsout['mcs_iso_precipitation_count'].attrs['long_name'] = 'Number of time steps MCS isolated precipitation exceeds threshold'
+    dsout['mcs_iso_precipitation_count'].attrs['units'] = 'count'
     
     # AR attributes
     dsout['ar_iso_precipitation'].attrs['long_name'] = 'AR isolated precipitation'
     dsout['ar_iso_precipitation'].attrs['units'] = 'mm'
-    dsout['ar_iso_count'].attrs['long_name'] = 'Number of hours AR is present'
-    dsout['ar_iso_count'].attrs['units'] = 'hour'
-    dsout['ar_iso_precipitation_count'].attrs['long_name'] = 'Number of hours AR isolated precipitation exceeds threshold'
-    dsout['ar_iso_precipitation_count'].attrs['units'] = 'hour'
+    dsout['ar_iso_count'].attrs['long_name'] = 'Number of time steps AR is present'
+    dsout['ar_iso_count'].attrs['units'] = 'count'
+    dsout['ar_iso_precipitation_count'].attrs['long_name'] = 'Number of time steps AR isolated precipitation exceeds threshold'
+    dsout['ar_iso_precipitation_count'].attrs['units'] = 'count'
     
     # ETC attributes
     dsout['etc_iso_precipitation'].attrs['long_name'] = 'ETC isolated precipitation'
     dsout['etc_iso_precipitation'].attrs['units'] = 'mm'
-    dsout['etc_iso_count'].attrs['long_name'] = 'Number of hours ETC is present'
-    dsout['etc_iso_count'].attrs['units'] = 'hour'
-    dsout['etc_iso_precipitation_count'].attrs['long_name'] = 'Number of hours ETC isolated precipitation exceeds threshold'
-    dsout['etc_iso_precipitation_count'].attrs['units'] = 'hour'
+    dsout['etc_iso_count'].attrs['long_name'] = 'Number of time steps ETC is present'
+    dsout['etc_iso_count'].attrs['units'] = 'count'
+    dsout['etc_iso_precipitation_count'].attrs['long_name'] = 'Number of time steps ETC isolated precipitation exceeds threshold'
+    dsout['etc_iso_precipitation_count'].attrs['units'] = 'count'
 
     # Co-occurrence features (2-way)
     dsout['mcs_ar_precipitation'].attrs['long_name'] = 'MCS-AR co-occurrence precipitation'
     dsout['mcs_ar_precipitation'].attrs['units'] = 'mm'
-    dsout['mcs_ar_count'].attrs['long_name'] = 'Number of hours MCS-AR co-occurrence is present'
-    dsout['mcs_ar_count'].attrs['units'] = 'hour'
-    dsout['mcs_ar_precipitation_count'].attrs['long_name'] = 'Number of hours MCS-AR co-occurrence precipitation exceeds threshold'
-    dsout['mcs_ar_precipitation_count'].attrs['units'] = 'hour'
+    dsout['mcs_ar_count'].attrs['long_name'] = 'Number of time steps MCS-AR co-occurrence is present'
+    dsout['mcs_ar_count'].attrs['units'] = 'count'
+    dsout['mcs_ar_precipitation_count'].attrs['long_name'] = 'Number of time steps MCS-AR co-occurrence precipitation exceeds threshold'
+    dsout['mcs_ar_precipitation_count'].attrs['units'] = 'count'
 
     dsout['mcs_etc_precipitation'].attrs['long_name'] = 'MCS-ETC co-occurrence precipitation'
     dsout['mcs_etc_precipitation'].attrs['units'] = 'mm'
-    dsout['mcs_etc_count'].attrs['long_name'] = 'Number of hours MCS-ETC co-occurrence is present'
-    dsout['mcs_etc_count'].attrs['units'] = 'hour'
-    dsout['mcs_etc_precipitation_count'].attrs['long_name'] = 'Number of hours MCS-ETC co-occurrence precipitation exceeds threshold'
-    dsout['mcs_etc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['mcs_etc_count'].attrs['long_name'] = 'Number of time steps MCS-ETC co-occurrence is present'
+    dsout['mcs_etc_count'].attrs['units'] = 'count'
+    dsout['mcs_etc_precipitation_count'].attrs['long_name'] = 'Number of time steps MCS-ETC co-occurrence precipitation exceeds threshold'
+    dsout['mcs_etc_precipitation_count'].attrs['units'] = 'count'
 
     dsout['ar_etc_precipitation'].attrs['long_name'] = 'AR-ETC co-occurrence precipitation'
     dsout['ar_etc_precipitation'].attrs['units'] = 'mm'
-    dsout['ar_etc_count'].attrs['long_name'] = 'Number of hours AR-ETC co-occurrence is present'
-    dsout['ar_etc_count'].attrs['units'] = 'hour'
-    dsout['ar_etc_precipitation_count'].attrs['long_name'] = 'Number of hours AR-ETC co-occurrence precipitation exceeds threshold'
-    dsout['ar_etc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['ar_etc_count'].attrs['long_name'] = 'Number of time steps AR-ETC co-occurrence is present'
+    dsout['ar_etc_count'].attrs['units'] = 'count'
+    dsout['ar_etc_precipitation_count'].attrs['long_name'] = 'Number of time steps AR-ETC co-occurrence precipitation exceeds threshold'
+    dsout['ar_etc_precipitation_count'].attrs['units'] = 'count'
 
     # Co-occurrence features (3-way)
     dsout['mcs_ar_etc_precipitation'].attrs['long_name'] = 'MCS-AR-ETC co-occurrence precipitation'
     dsout['mcs_ar_etc_precipitation'].attrs['units'] = 'mm'
-    dsout['mcs_ar_etc_count'].attrs['long_name'] = 'Number of hours MCS-AR-ETC co-occurrence is present'
-    dsout['mcs_ar_etc_count'].attrs['units'] = 'hour'
-    dsout['mcs_ar_etc_precipitation_count'].attrs['long_name'] = 'Number of hours MCS-AR-ETC co-occurrence precipitation exceeds threshold'
-    dsout['mcs_ar_etc_precipitation_count'].attrs['units'] = 'hour'
+    dsout['mcs_ar_etc_count'].attrs['long_name'] = 'Number of time steps MCS-AR-ETC co-occurrence is present'
+    dsout['mcs_ar_etc_count'].attrs['units'] = 'count'
+    dsout['mcs_ar_etc_precipitation_count'].attrs['long_name'] = 'Number of time steps MCS-AR-ETC co-occurrence precipitation exceeds threshold'
+    dsout['mcs_ar_etc_precipitation_count'].attrs['units'] = 'count'
 
     # Cloud types
     # Deep convection
     dsout['dc_precipitation'].attrs['long_name'] = 'Deep convective cloud precipitation'
     dsout['dc_precipitation'].attrs['units'] = 'mm'
     dsout['dc_precipitation'].attrs['cloud_type_value'] = 1
-    dsout['dc_count'].attrs['long_name'] = 'Number of hours deep convective cloud is present'
-    dsout['dc_count'].attrs['units'] = 'hour'
+    dsout['dc_count'].attrs['long_name'] = 'Number of time steps deep convective cloud is present'
+    dsout['dc_count'].attrs['units'] = 'count'
     dsout['dc_count'].attrs['cloud_type_value'] = 1
     
     # Stratiform
     dsout['st_precipitation'].attrs['long_name'] = 'Stratiform cloud precipitation'
     dsout['st_precipitation'].attrs['units'] = 'mm'
     dsout['st_precipitation'].attrs['cloud_type_value'] = 2
-    dsout['st_count'].attrs['long_name'] = 'Number of hours stratiform cloud is present'
-    dsout['st_count'].attrs['units'] = 'hour'
+    dsout['st_count'].attrs['long_name'] = 'Number of time steps stratiform cloud is present'
+    dsout['st_count'].attrs['units'] = 'count'
     dsout['st_count'].attrs['cloud_type_value'] = 2
     
     # Non-deep convective
     dsout['nd_precipitation'].attrs['long_name'] = 'Non-deep convective cloud precipitation'
     dsout['nd_precipitation'].attrs['units'] = 'mm'
     dsout['nd_precipitation'].attrs['cloud_type_value'] = 3
-    dsout['nd_count'].attrs['long_name'] = 'Number of hours non-deep convective cloud is present'
-    dsout['nd_count'].attrs['units'] = 'hour'
+    dsout['nd_count'].attrs['long_name'] = 'Number of time steps non-deep convective cloud is present'
+    dsout['nd_count'].attrs['units'] = 'count'
     dsout['nd_count'].attrs['cloud_type_value'] = 3
     
     # Drizzle
     dsout['dz_precipitation'].attrs['long_name'] = 'Drizzle precipitation'
     dsout['dz_precipitation'].attrs['units'] = 'mm'
     dsout['dz_precipitation'].attrs['cloud_type_value'] = 4
-    dsout['dz_count'].attrs['long_name'] = 'Number of hours drizzle cloud is present'
-    dsout['dz_count'].attrs['units'] = 'hour'
+    dsout['dz_count'].attrs['long_name'] = 'Number of time steps drizzle cloud is present'
+    dsout['dz_count'].attrs['units'] = 'count'
     dsout['dz_count'].attrs['cloud_type_value'] = 4
 
     # Save the output file

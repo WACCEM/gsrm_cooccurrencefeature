@@ -86,7 +86,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Script: scripts/calc_stormtype_extreme_precip_spatial.py
   └─ Input:  Step 3 zarr  +  Step 4a NetCDF  +  precipitation
   └─ Output: /hackathon/extreme_precip/
-             {source}_stormtype_extreme_precip_{Pxx}_hp8_v1.nc
+             {source}_stormtype_spatial_{pxx}{date_suffix}.nc
              (per-cell counts, precipitation sums, and fractions
               for each storm type at each percentile level)
          |
@@ -266,8 +266,8 @@ AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
    │ rainmap_by_cof   │  │ precip_thresh.  │ │ extreme_precip_       │
    │                  │  │                 │ │ spatial               │
    │ monthly_rainmap  │  │ precip_percen-  │ │                       │
-   │ _cof_hp8_v1.nc   │  │ tiles_6h_hp8    │ │ stormtype_extreme_    │
-   └────────┬─────────┘  │ _v1.nc          │ │ precip_{Pxx}_hp8_v1   │
+   │ _cof_hp8_v1.nc   │  │ tiles_6h_hp8    │ │ stormtype_spatial_    │
+   └────────┬─────────┘  │ _v1.nc          │ │ {pxx}{date_suffix}.nc │
             │            └────────────────-┘ └──────────┬────────────┘
             │                    └──────────────────────┘
             ▼                                │

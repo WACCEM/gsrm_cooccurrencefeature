@@ -528,15 +528,16 @@ def process_single_timestep(pr_t, ds_t, pr_threshold, compute_cloud_types=True):
         results['dc_pr'] = xr.where(extreme_dc_mask, pr_t, 0.0)
         assigned_mask = assigned_mask | extreme_dc_mask
         
-        # ND = 2
-        mask_nd = (cloud_types_cleaned == 2)
+        # ND = 3 (non-deep convective; matches upstream cloud-type convention in
+        # make_mcs_swath_masks.py: 1=deep convective, 2=stratiform, 3=non-deep convective, 4=drizzle)
+        mask_nd = (cloud_types_cleaned == 3)
         extreme_nd_mask = (extreme_mask & mask_nd & ~assigned_mask)
         results['nd'] = extreme_nd_mask.astype(float)
         results['nd_pr'] = xr.where(extreme_nd_mask, pr_t, 0.0)
         assigned_mask = assigned_mask | extreme_nd_mask
-        
-        # ST = 3
-        mask_st = (cloud_types_cleaned == 3)
+
+        # ST = 2 (stratiform)
+        mask_st = (cloud_types_cleaned == 2)
         extreme_st_mask = (extreme_mask & mask_st & ~assigned_mask)
         results['st'] = extreme_st_mask.astype(float)
         results['st_pr'] = xr.where(extreme_st_mask, pr_t, 0.0)
@@ -685,7 +686,11 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
         'long_name': 'Total extreme precipitation amount',
         'units': 'mm/h',
         'percentile': percentile_name,
-        'description': 'Sum of precipitation where pr > threshold across all time steps'
+        'description': (
+            'Sum of instantaneous precipitation rate (mm/h) over extreme time steps '
+            '(pr > threshold). This is a sum over samples, not time-integrated by the '
+            'sampling interval, so it is not a physical accumulated depth.'
+        )
     }
     
     # Add counts and fractions for each storm type
@@ -755,17 +760,14 @@ def save_spatial_results(ds_spatial, output_file, source_name,
         'percentile': percentile_name,
         'created_on': time.ctime(time.time()),
         'contact': 'Zhe Feng, zhe.feng@pnnl.gov',
-        'description': 'Per-cell counts of extreme precipitation by storm type. '
-                      'Use dominant_type to identify dominant contributor at each location.'
+        'description': 'Per-cell counts and fractions of extreme precipitation by storm type.'
     })
-    
+
     # Setup encoding
     encoding = {}
     for var in ds_spatial.data_vars:
         if 'count' in var or var == 'total_extreme':
             encoding[var] = {'dtype': 'int32', 'zlib': True, 'complevel': 4}
-        elif var == 'dominant_type':
-            encoding[var] = {'dtype': 'int16', 'zlib': True, 'complevel': 4}
     
     # Save
     print(f"\nSaving results to: {output_file}")

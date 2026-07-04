@@ -485,7 +485,12 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
     
     # Create swaths and coverage for MCS
     mcs_swaths_dict, mcs_coverage_dict = create_track_swaths_and_coverage(mcs_mask)
-    combined_mcs_swath = combine_swaths_with_priority(mcs_swaths_dict, mcs_coverage_dict)
+    if not mcs_swaths_dict:
+        # No MCS present anywhere in this aggregation window (e.g., MCS-free window or short
+        # test subset). Fall back to an all-zero swath instead of indexing into an empty dict.
+        combined_mcs_swath = np.zeros(mcs_mask.shape[1:], dtype=int)
+    else:
+        combined_mcs_swath = combine_swaths_with_priority(mcs_swaths_dict, mcs_coverage_dict)
 
     # Filter out CCS that overlap with MCS swaths
     # ccs_mask_sum[combined_mcs_swath > 0] = 0
