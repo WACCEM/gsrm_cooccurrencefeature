@@ -248,6 +248,6 @@ All output variables have shape `(time, cell)` with a monthly time dimension and
 |-----------|---------|-------------|
 | Aggregation | Monthly | Output time resolution |
 | `chunk_days` | 6 days | Sub-chunk size for within-month processing |
-| `pcp_thresh` | 0.1 mm h⁻¹ | Precipitation threshold for precipitating-hour count |
+| `pcp_thresh` | 1 mm h⁻¹ | Precipitation threshold for precipitating-hour count |
 | HEALPix zoom | 8 | Spatial resolution of input and output grids |
 | Time interval $\Delta t$ | Auto-detected | Hours between consecutive time steps |
