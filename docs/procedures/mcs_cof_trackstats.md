@@ -296,7 +296,7 @@ significance test:
 | Aspect | Choice |
 |--------|--------|
 | Comparison | Each non-isolated COF type vs. Isolated, within the same source and land/ocean subset |
-| Percent difference | $(\overline{x}_\text{type} - \overline{x}_\text{isolated}) / \|\overline{x}_\text{isolated}\| \times 100$ |
+| Percent difference | $(\overline{x}\_\text{type} - \overline{x}\_\text{isolated}) / \|\overline{x}\_\text{isolated}\| \times 100$ |
 | Significance test | Mann-Whitney U (two-sided), chosen because several variables (e.g. total rain, PF area) are heavily right-skewed and not well-suited to a parametric t-test |
 | Significance threshold | $\alpha = 0.05$ |
 | Minimum sample size | 5 valid tracks per group; comparisons with fewer are reported as not applicable |
