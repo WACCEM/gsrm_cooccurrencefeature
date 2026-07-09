@@ -12,6 +12,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | Co-occurrence feature identification | [procedures/cof_identification.md](procedures/cof_identification.md) |
 | Monthly precipitation by COF type | [procedures/monthly_precip_by_cof.md](procedures/monthly_precip_by_cof.md) |
 | Extreme precipitation by storm type | [procedures/extreme_precip_by_stormtype.md](procedures/extreme_precip_by_stormtype.md) |
+| MCS co-occurring feature (COF) track statistics | [procedures/mcs_cof_trackstats.md](procedures/mcs_cof_trackstats.md) |
 | Batched ETC environment extraction | [../extract_environments/README_BATCHED_EXTRACTION.md](../extract_environments/README_BATCHED_EXTRACTION.md) |
 | ETC variable scaling | [../extract_environments/README_VARIABLE_SCALING.md](../extract_environments/README_VARIABLE_SCALING.md) |
 | ETC extraction optimization notes | [../extract_environments/OPTIMIZATION_NOTES.md](../extract_environments/OPTIMIZATION_NOTES.md) |
@@ -31,9 +32,10 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | `combine_etc_cof_data.py` | Documented in [pipeline overview](pipelines/overview.md) |
 | `combine_etc_2d_vars.py` | Documented in [pipeline overview](pipelines/overview.md) |
 | `calc_etc_spatial_stats.py` | Documented in [pipeline overview](pipelines/overview.md) |
-| `extract_mcs_cof_tracks.py` | Documented in [pipeline overview](pipelines/overview.md) |
+| `extract_mcs_cof_tracks.py` | [procedures/mcs_cof_trackstats.md](procedures/mcs_cof_trackstats.md) |
 | `extract_mcs_cof_flags.py` | Prototype documented in [pipeline overview](pipelines/overview.md) |
-| `combine_mcs_cof_trackstats_multisource.py` | Documented in [pipeline overview](pipelines/overview.md) |
+| `combine_mcs_cof_trackstats_multisource.py` | [procedures/mcs_cof_trackstats.md](procedures/mcs_cof_trackstats.md) |
+| `plot_mcs_cof_trackstats_multisource.ipynb` | [procedures/mcs_cof_trackstats.md](procedures/mcs_cof_trackstats.md) |
 
 ## Wrapper Shell Scripts
 
