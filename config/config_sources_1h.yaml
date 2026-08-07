@@ -13,10 +13,22 @@ IMERG:
   varname_precip_liq: precipitation
   varname_precip_ice:
   pr_convert_factor: 1.0  # Already in [mm/h]
-  start_datetime: 2019-01-01T00:00
-  end_datetime: 2021-12-31T23:59
-  # start_datetime: 2019-08-01T00:00
-  # end_datetime: 2021-12-31T23:59
+  # Metadata only (start_date/end_date global attrs in the output NetCDF) -- must match
+  # the Zarr path actually opened in load_precipitation_data(), not used to subset data.
+  start_datetime: 2001-01-01T00:00
+  end_datetime: 2024-12-31T23:59
+
+# GsMAP configuration
+GSMAP:
+  source_name: GsMAPv8
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+  varname_precip_liq: hourlyPrecipRate
+  varname_precip_ice:
+  pr_convert_factor: 1.0  # Already in [mm/h]
+  start_datetime: 2010-01-01T00:00
+  end_datetime: 2024-12-31T23:59
 
 # SCREAM model configuration
 # Note: scream_ne120 does not support 'time' or 'time_method' in catalog_params
