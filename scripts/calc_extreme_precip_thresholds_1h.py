@@ -11,6 +11,8 @@ Author: Zhe Feng, zhe.feng@pnnl.gov
 import numpy as np
 import sys
 import os
+import glob
+import math
 from pathlib import Path
 import yaml
 import xarray as xr
@@ -35,6 +37,31 @@ def parse_cmd_args():
                              '(default: /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/config/config_sources_1h.yaml)')
     parser.add_argument('--zoom', type=int, default=8,
                         help='HEALPix zoom level (default: 8)')
+    parser.add_argument('--start_time', type=str, default=None,
+                        help='Inclusive start of the time period to process (e.g., '
+                             '"2018-01-01T00"). Any label xarray accepts for '
+                             '.sel(time=slice(...)) works, including partial strings '
+                             '("2018-01", "2018"). Applies to whichever source is given '
+                             '-- the caller (e.g. the SLURM/driver scripts) decides '
+                             'which sources to pass this for. Default (None): use the '
+                             'full record.')
+    parser.add_argument('--end_time', type=str, default=None,
+                        help='Inclusive end of the time period to process (e.g., '
+                             '"2022-12-31T23"). A partial string extends to the end of '
+                             'the implied interval (e.g. "2022" includes all of 2022). '
+                             'Default (None): use the full record.')
+    parser.add_argument('--input_zarr', type=str, default=None,
+                        help='Explicit path to a local Zarr store, overriding the '
+                             'normal loading path for ANY source -- IMERG/GSMAP '
+                             '(default: the hardcoded multi-year file, falling back to '
+                             'a zoom-level glob if that is absent) as well as '
+                             'catalog-backed sources (default: the HEALPix catalog). '
+                             'Useful when a catalog product is broken or unavailable '
+                             'at a given --zoom but a correct local store exists (e.g. '
+                             'casesm2_10km_nocumulus\'s catalog entry is all-NaN at '
+                             'zoom 9). The store\'s actual HEALPix zoom must match '
+                             '--zoom (checked; mismatch raises an error), since --zoom '
+                             'still names the output file and its zoom_level attribute.')
     parser.add_argument('--percentiles', type=float, nargs='+', default=[95, 99],
                         help='Percentiles to compute (default: 95 99)')
     parser.add_argument('--time_durations', type=str, nargs='+', default=['1h'],
@@ -168,6 +195,73 @@ def prepare_precip(pr, time_duration='1h', min_precip_threshold=None, logger=Non
         pr_resampled = pr_filtered
 
     return pr_resampled
+
+
+def _time_to_isoformat(t):
+    """
+    Convert a single time coordinate value to an ISO-8601 string, regardless of
+    whether it uses a standard (numpy.datetime64) or a non-standard-calendar
+    (cftime, e.g. SCREAM's 'noleap'/365_day) representation.
+
+    pd.Timestamp() cannot represent non-standard calendars at all and raises
+    TypeError on cftime objects; those objects already provide their own working
+    isoformat(), so this only falls back to pd.Timestamp() for values that lack
+    one (e.g. numpy.datetime64, which has no isoformat() method of its own).
+    """
+    if hasattr(t, 'isoformat'):
+        return t.isoformat()
+    return pd.Timestamp(t).isoformat()
+
+
+def subset_time(ds_p, start_time=None, end_time=None, logger=None):
+    """
+    Restrict a dataset to an inclusive time period, if requested.
+
+    Args:
+        ds_p: xr.Dataset
+            Source dataset, as returned by the open step in load_precipitation_data()
+        start_time: str, optional
+            Inclusive start bound (any label xarray accepts for time slicing, e.g.
+            '2018-01-01T00', or a partial string like '2018'). None: no lower bound.
+        end_time: str, optional
+            Inclusive end bound. A partial string extends to the end of the implied
+            interval (e.g. '2022' includes all of 2022), matching xarray's own
+            partial-string slicing semantics. None: no upper bound.
+        logger: logging.Logger
+            Logger instance
+
+    Returns:
+        xr.Dataset: ds_p unchanged if both bounds are None or 'time' is not a
+            dimension; otherwise ds_p.sel(time=slice(start_time, end_time))
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    if start_time is None and end_time is None:
+        return ds_p
+
+    if 'time' not in ds_p.dims:
+        logger.warning("--start_time/--end_time given but dataset has no 'time' "
+                        "dimension; ignoring.")
+        return ds_p
+
+    n_before = ds_p.sizes['time']
+    logger.info(f"Subsetting time period: start_time={start_time}, end_time={end_time}")
+    ds_sub = ds_p.sel(time=slice(start_time, end_time))
+    n_after = ds_sub.sizes['time']
+
+    if n_after == 0:
+        avail_start = _time_to_isoformat(ds_p['time'].values[0])
+        avail_end = _time_to_isoformat(ds_p['time'].values[-1])
+        raise ValueError(f"Requested time period [{start_time}, {end_time}] does not "
+                         f"overlap the dataset's available range "
+                         f"[{avail_start}, {avail_end}].")
+
+    logger.info(f"Time steps: {n_before} -> {n_after} "
+                f"({_time_to_isoformat(ds_sub['time'].values[0])} to "
+                f"{_time_to_isoformat(ds_sub['time'].values[-1])})")
+
+    return ds_sub
 
 
 def determine_cell_chunk_size(pr_resampled, cell_chunk_size=None, available_memory_gb=None,
@@ -490,10 +584,16 @@ def calc_annual_precip_percentiles(pr_resampled, percentiles=[90, 95], time_dura
 
     # Determine data coverage (distinct calendar days present) for each calendar year.
     # Counting unique days (rather than time steps) keeps this independent of
-    # time_duration and tolerant of gaps in the record.
-    time_index = pd.DatetimeIndex(pr_resampled['time'].values)
-    days = pd.Series(time_index.normalize()).drop_duplicates()
-    coverage_days = days.groupby(days.dt.year).size()
+    # time_duration and tolerant of gaps in the record. Uses xarray's own .dt
+    # accessor on the coordinate directly, rather than building a pd.DatetimeIndex
+    # from the raw values -- pd.DatetimeIndex() cannot represent non-standard
+    # calendars (e.g. SCREAM's 'noleap') at all and raises TypeError on them,
+    # whereas .dt.year/.dt.dayofyear work correctly for both standard
+    # (numpy datetime64) and cftime-backed (CFTimeIndex) time coordinates alike.
+    time_da = pr_resampled['time']
+    day_keys = pd.DataFrame({'year': time_da.dt.year.values,
+                             'doy': time_da.dt.dayofyear.values}).drop_duplicates()
+    coverage_days = day_keys.groupby('year').size()
 
     qualifying_years = sorted(int(y) for y, n in coverage_days.items() if n >= min_year_coverage_days)
 
@@ -654,7 +754,8 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
                  start_datetime, end_datetime, time_duration, method,
                  min_precip_threshold=None, logger=None,
                  annual_results=None, iqr_results=None, years=None,
-                 min_year_coverage_days=None, snow_probability=None):
+                 min_year_coverage_days=None, snow_probability=None,
+                 subset_start_time=None, subset_end_time=None):
     """
     Write precipitation percentiles to a NetCDF file.
 
@@ -670,9 +771,10 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
         source_name: str
             Data source name
         start_datetime: str
-            Start date/time of data
+            Start date/time of the data actually loaded (derived from ds_p['time'],
+            not the config file -- reflects any --start_time/--end_time subsetting)
         end_datetime: str
-            End date/time of data
+            End date/time of the data actually loaded (see start_datetime)
         time_duration: str
             Time duration used for resampling
         method: str
@@ -697,6 +799,12 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
             Computed time-mean snow probability (dim: cell), as returned by
             calc_snow_probability_mean(). If None, no snow_probability variable is
             written (backward compatible for sources without the field).
+        subset_start_time: str, optional
+            The --start_time value requested on the command line (may differ from
+            start_datetime, e.g. a partial string like '2018'). Recorded as a global
+            attribute only when given. None (default): no time subset was requested.
+        subset_end_time: str, optional
+            The --end_time value requested on the command line; see subset_start_time.
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -750,6 +858,10 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
         'time_duration': time_duration,
         'quantile_method': method,
     }
+
+    if subset_start_time is not None or subset_end_time is not None:
+        gattr_dict['requested_start_time'] = subset_start_time if subset_start_time is not None else ''
+        gattr_dict['requested_end_time'] = subset_end_time if subset_end_time is not None else ''
 
     if min_precip_threshold is not None:
         gattr_dict['min_precip_threshold'] = f'{min_precip_threshold} mm/h'
@@ -823,7 +935,202 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
     return dsout
 
 
-def load_precipitation_data(config_file, catalog_source, zoom, logger=None):
+def _resolve_local_zarr(default_path=None, glob_pattern=None, input_zarr=None, logger=None):
+    """
+    Resolve a local Zarr store path -- either an explicit override (any source), or
+    (for IMERG/GSMAP) the historical default-path-then-glob resolution.
+
+    Args:
+        default_path: str, optional
+            The historical hardcoded path for this source (e.g. the 24-year IMERG
+            zoom-8 file). Used as-is when it exists, so behavior at zoom levels
+            already in use is completely unchanged. Ignored (may be omitted) when
+            input_zarr is given.
+        glob_pattern: str, optional
+            Fallback glob (e.g. matching any zoom-9 IMERG store) used when
+            default_path does not exist -- lets a new zoom level resolve
+            automatically once exactly one matching store is present. Ignored (may
+            be omitted) when input_zarr is given.
+        input_zarr: str, optional
+            Explicit override. Used as-is (after an existence check) when given;
+            takes priority over both of the above. This is the only argument a
+            catalog-backed source's caller passes -- it has no default_path/
+            glob_pattern of its own to fall back to.
+        logger: logging.Logger
+            Logger instance
+
+    Returns:
+        str: path to the Zarr store to open
+
+    Raises:
+        FileNotFoundError: if input_zarr is given but missing; if input_zarr is
+            absent and neither default_path nor glob_pattern was provided; or if
+            neither the default path nor exactly one glob match is found
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    if input_zarr is not None:
+        if not os.path.exists(input_zarr):
+            raise FileNotFoundError(f"--input_zarr does not exist: {input_zarr}")
+        logger.info(f"Using explicit --input_zarr: {input_zarr}")
+        return input_zarr
+
+    if default_path is None and glob_pattern is None:
+        raise FileNotFoundError("No --input_zarr given, and this source has no "
+                                "default path/glob to fall back to.")
+
+    if os.path.exists(default_path):
+        return default_path
+
+    matches = sorted(glob.glob(glob_pattern))
+    if len(matches) == 1:
+        logger.info(f"Default path not found ({default_path}); resolved via glob "
+                    f"'{glob_pattern}' -> {matches[0]}")
+        return matches[0]
+    elif len(matches) == 0:
+        raise FileNotFoundError(f"No Zarr store found: default path {default_path} "
+                                f"does not exist, and glob '{glob_pattern}' matched "
+                                f"nothing. Pass --input_zarr to specify one explicitly.")
+    else:
+        raise FileNotFoundError(f"Default path {default_path} does not exist, and "
+                                f"glob '{glob_pattern}' matched {len(matches)} stores "
+                                f"(ambiguous): {matches}. Pass --input_zarr to pick one.")
+
+
+def _validate_zoom(ds_p, zoom, source_desc, logger=None):
+    """
+    Confirm an explicitly-loaded Dataset's actual HEALPix zoom matches --zoom.
+
+    Only relevant for --input_zarr, where data no longer comes from --zoom (unlike
+    the catalog/IMERG/GSMAP paths, which select data BY zoom and so are consistent
+    by construction). --zoom still names the output file
+    (f"..._hp{zoom}_{version}.nc") and its zoom_level global attribute, so a
+    mismatch would silently mislabel the output -- or overwrite a good file at
+    another zoom -- rather than failing. HEALPix zoom and nside are related by
+    nside = 2**zoom (confirmed for this repo's stores: e.g. casesm2_10km_nocumulus's
+    healpix_nside=512 at zoom=9 -> log2(512)=9).
+
+    Args:
+        ds_p: xr.Dataset
+            Dataset just opened from the explicit store (before or after
+            egh.attach_coords() -- both leave the 'crs' variable's
+            healpix_nside attribute, which this reads, untouched)
+        zoom: int
+            The --zoom the caller requested
+        source_desc: str
+            Path or other description of the store, for the error message
+        logger: logging.Logger
+            Logger instance
+
+    Raises:
+        ValueError: if the store's zoom cannot be determined, or does not match
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    try:
+        nside = egh.get_nside(ds_p)
+        actual_zoom = int(round(math.log2(nside)))
+    except Exception as exc:
+        raise ValueError(f"Could not determine the HEALPix zoom of --input_zarr "
+                        f"'{source_desc}' to validate against --zoom {zoom}: {exc}")
+
+    if actual_zoom != zoom:
+        raise ValueError(f"--input_zarr '{source_desc}' is at HEALPix zoom "
+                        f"{actual_zoom} (nside={nside}), but --zoom {zoom} was "
+                        f"requested. --zoom names the output file and its "
+                        f"zoom_level attribute, so these must match -- pass "
+                        f"--zoom {actual_zoom} instead.")
+    logger.info(f"Confirmed --input_zarr matches requested zoom: {actual_zoom}")
+
+
+def _restore_lazy_chunking(ds_p, primary_var, logger=None):
+    """
+    Re-wrap a catalog-opened Dataset with dask chunking, if it isn't already.
+
+    Why this is necessary: the NERSC catalog's own entries declare `chunks: null`
+    in their intake args (confirmed directly for every catalog-backed source in
+    config_sources_1h.yaml). Per intake_xarray's ZarrSource, this is passed through
+    to xr.open_dataset(..., chunks=None) -- which does NOT mean "eager at open
+    time" (opening stays genuinely lazy and fast, confirmed empirically: ~1s
+    regardless of zoom level), but it DOES mean no dask array wraps the result. The
+    first arithmetic operation that touches a variable's real values -- the unit
+    conversion multiply, the ice-precip addition, or prepare_precip()'s threshold
+    .where() -- has no dask graph to defer to, so it materializes the FULL
+    variable into memory immediately, single-threaded, every time. This is what
+    OOM'd icon_d3hp003 and nicam_gl11 (right at the .where() call) at zoom 9, and
+    made um_glm_n2560_RAL3p3's initial load take 28 minutes with zero progress
+    visibility or memory bound. (icon_d3hp003's config declares a varname_precip_ice
+    of 'prs', but confirmed directly: the catalog entry has no 'prs' at any zoom, so
+    this was never actually a double materialization for that source -- just the
+    same single-variable eager-load pattern as the others.)
+
+    Confirmed directly (not assumed): even though the array isn't dask-wrapped,
+    xarray still records the true on-disk native chunk shape in
+    `var.encoding['preferred_chunks']` -- populated by the zarr backend
+    regardless of whether dask chunking was requested. Re-chunking to THAT shape
+    (rather than collapsing to one big chunk) matters beyond just restoring
+    laziness: native chunk widths vary a lot between these sources (e.g.
+    um_glm_n2560_RAL3p3 is chunked only 4 time steps wide, ~6x finer than IMERG/
+    GSMAP's 24 -- confirmed via direct zarr inspection), so preserving the real
+    alignment is what lets determine_cell_chunk_size() size blocks correctly
+    (rather than falling back to treating the whole domain as one native chunk)
+    and lets dask's scheduler fetch multiple native chunks concurrently instead
+    of the single-threaded sequential reads chunks=None produces.
+
+    Args:
+        ds_p: xr.Dataset
+            Dataset just returned by a catalog source's .to_dask() (and, ideally,
+            already passed through egh.attach_coords -- call order doesn't matter
+            for correctness, only that this runs before any arithmetic touches
+            the precipitation variable(s))
+        primary_var: str
+            Name of the main variable to inspect for native chunk shape (the
+            liquid-precip variable, e.g. varname_precip_liq -- guaranteed present,
+            unlike the optional ice-precip variable)
+        logger: logging.Logger
+            Logger instance
+
+    Returns:
+        xr.Dataset: ds_p unchanged if primary_var is absent or already dask-backed
+            (e.g. IMERG/GSMAP's plain xr.open_zarr() sources, which default to
+            genuinely lazy chunking and never need this); otherwise ds_p.chunk()'d
+            to primary_var's real native chunk shape (or, failing that, one whole
+            chunk per dimension -- still memory-safe, just without native
+            alignment's I/O efficiency benefit)
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    if primary_var not in ds_p:
+        return ds_p
+
+    var = ds_p[primary_var]
+    if var.chunks is not None:
+        # Already dask-backed -- nothing to fix.
+        return ds_p
+
+    preferred_chunks = var.encoding.get('preferred_chunks')
+    if not preferred_chunks:
+        logger.warning(f"'{primary_var}' has no dask chunks and no recoverable "
+                        f"'preferred_chunks' encoding; falling back to a single "
+                        f"whole-array chunk per dimension (memory-safe via the "
+                        f"per-block .load() loop downstream, but loses native "
+                        f"chunk alignment for I/O efficiency).")
+        preferred_chunks = {dim: -1 for dim in var.dims}
+
+    logger.info(f"'{primary_var}' has no dask chunking (catalog source declares "
+                f"chunks: null upstream); re-chunking to its native shape "
+                f"{preferred_chunks} so the unit-conversion/ice-addition/"
+                f"threshold steps stay lazy instead of eagerly materializing the "
+                f"full array before determine_cell_chunk_size() gets a chance to "
+                f"bound memory.")
+    return ds_p.chunk(preferred_chunks)
+
+
+def load_precipitation_data(config_file, catalog_source, zoom, start_time=None,
+                            end_time=None, input_zarr=None, logger=None):
     """
     Load 1-hourly precipitation data from catalog or direct Zarr file.
 
@@ -837,8 +1144,33 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None):
             Catalog source name
         zoom: int
             HEALPix zoom level
+        start_time: str, optional
+            Inclusive start of the time period to keep; see subset_time(). Applied
+            to whichever source is given -- restricting this to specific sources
+            (e.g. only multi-year IMERG/GSMAP) is the caller's responsibility.
+        end_time: str, optional
+            Inclusive end of the time period to keep; see subset_time().
+        input_zarr: str, optional
+            Explicit Zarr store path override for ANY source, catalog-backed ones
+            included; see _resolve_local_zarr() and _validate_zoom(). When given,
+            this takes priority over the source's normal loading path entirely
+            (its default local file for IMERG/GSMAP, or the HEALPix catalog for
+            everything else).
         logger: logging.Logger
             Logger instance
+
+    Note on config's optional 'catalog_source_name' field (catalog-backed sources
+    only): if present, this is the catalog entry actually opened, while
+    `catalog_source` itself (the CLI/config key) still governs output source_name,
+    output filename, and CLI usage. Lets a config entry redirect to a different
+    underlying catalog product without any of those user-facing names changing --
+    e.g. the "scream_ne120" entry redirects to the catalog's "scream2D_hrly" entry,
+    since scream_ne120's own data turned out to be 3-hourly averaged (confirmed via
+    its 'averaging_count_tracker' attribute and exact 3h time spacing), not
+    genuinely hourly, so it's unsuitable for this 1-hourly script despite being the
+    correct choice for the 6-hourly config_sources.yaml (3h aggregates cleanly into
+    6h bins). Absent for every other entry, which resolves to catalog_source itself
+    exactly as before.
 
     Returns:
         tuple: (pr DataArray, ds_p Dataset, config dict)
@@ -861,12 +1193,41 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None):
 
     # Catalog file
     catalog_file = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+    # catalog_file = "/global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml"
 
-    if catalog_source == "IMERG":
+    if input_zarr is not None:
+        # An explicit --input_zarr overrides the normal loading path for EVERY
+        # source, catalog-backed ones included -- needed because a catalog product
+        # can be broken or unavailable at a given zoom (e.g. the catalog's
+        # casesm2_10km_nocumulus 'pr' is all-NaN at zoom 9, confirmed directly,
+        # though fine at zoom 8) while a correct local store exists. Checked above
+        # the IMERG/GSMAP branches so it also takes priority for those two (their
+        # own default-path-then-glob resolution in _resolve_local_zarr() is
+        # unchanged when input_zarr is None, i.e. the normal case). The config
+        # still governs everything else: varname_precip_liq, pr_convert_factor,
+        # source_name, and the output filename are unaffected by this branch.
+        in_zarr = _resolve_local_zarr(input_zarr=input_zarr, logger=logger)
+        logger.info(f"Loading {catalog_source} from explicit --input_zarr "
+                    f"(NOT from catalog): {in_zarr}")
+        # consolidated=None is xr.open_zarr's own default (use consolidated
+        # metadata when present, scan the store otherwise) -- deliberately more
+        # lenient than the IMERG/GSMAP branches' consolidated=True below, since an
+        # arbitrary store passed here may not have been consolidated.
+        ds_p = xr.open_zarr(in_zarr, consolidated=None)
+        ds_p = ds_p.pipe(egh.attach_coords)
+        # Data no longer comes from --zoom here (unlike every other branch, which
+        # selects data BY zoom and so is consistent by construction) -- but --zoom
+        # still names the output file and its zoom_level attribute, so confirm the
+        # store actually matches rather than silently mislabeling the output.
+        _validate_zoom(ds_p, zoom, in_zarr, logger=logger)
+
+    elif catalog_source == "IMERG":
         # IMERG 1-hourly data is not in the catalog; use local Zarr files
         dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
         # in_zarr = f"{dir_healpix}IMERG_V7_1H_zoom{zoom}_20190101_20211231.zarr"
-        in_zarr = f"{dir_healpix}IMERG_V7_1H_zoom{zoom}_20010101_20241231.zarr"
+        default_zarr = f"{dir_healpix}IMERG_V7_1H_zoom{zoom}_20010101_20241231.zarr"
+        glob_pattern = f"{dir_healpix}IMERG_V7_1H_zoom{zoom}_*.zarr"
+        in_zarr = _resolve_local_zarr(default_zarr, glob_pattern, logger=logger)
         logger.info(f"Loading IMERG 1-hourly dataset (NOT from catalog): {in_zarr}")
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)
@@ -874,14 +1235,20 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None):
     elif catalog_source == "GSMAP":
         # GSMAP 1-hourly data is not in the catalog; use local Zarr files
         dir_healpix = "/pscratch/sd/w/wcmca1/GsMAP/healpix/"
-        in_zarr = f"{dir_healpix}GsMAPv8_1H_zoom{zoom}_20100101_20241231.zarr"
+        default_zarr = f"{dir_healpix}GsMAPv8_1H_zoom{zoom}_20100101_20241231.zarr"
         # in_zarr = f"{dir_healpix}GsMAPv8_1H_zoom{zoom}_20200101_20201231.zarr"
+        glob_pattern = f"{dir_healpix}GsMAPv8_1H_zoom{zoom}_*.zarr"
+        in_zarr = _resolve_local_zarr(default_zarr, glob_pattern, logger=logger)
         logger.info(f"Loading GSMAP 1-hourly dataset (NOT from catalog): {in_zarr}")
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)
 
     else:
-        # All other sources: load from the HEALPix catalog
+        # All other sources: load from the HEALPix catalog.
+        # catalog_source_name lets a config entry redirect to a different catalog
+        # entry than its own key (see docstring above); absent for every source
+        # except scream_ne120, so this is a no-op everywhere else.
+        actual_catalog_source = config.get('catalog_source_name', catalog_source)
         # Update the zoom level in catalog_params
         catalog_params['zoom'] = zoom
         logger.info(f"Loading HEALPix catalog: {catalog_file}")
@@ -889,23 +1256,48 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None):
         if catalog_location:
             in_catalog = in_catalog[catalog_location]
 
-        logger.info(f"Loading {catalog_source} from catalog with params: {catalog_params}")
-        ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
+        logger.info(f"Loading {catalog_source} (catalog entry: {actual_catalog_source}) "
+                    f"from catalog with params: {catalog_params}")
+        ds_p = in_catalog[actual_catalog_source](**catalog_params).to_dask()
         # Add lat/lon coordinates to the HEALPix DataSet
         ds_p = ds_p.pipe(egh.attach_coords)
+        # See _restore_lazy_chunking()'s docstring: catalog sources declare
+        # chunks: null upstream, so nothing here is actually dask-lazy yet despite
+        # .to_dask()'s name -- restore it before anything touches real values.
+        ds_p = _restore_lazy_chunking(ds_p, varname_precip_liq, logger=logger)
     # import pdb; pdb.set_trace()
 
-    # Check liquid precipitation variable
-    if varname_precip_liq in list(ds_p.keys()):
-        # Convert liquid precipitation to mm/h
-        pr = ds_p[varname_precip_liq] * pr_convert_factor
+    # Restrict to the requested time period, if any. Applied uniformly here (after
+    # loading, before variable extraction) so pr and any auxiliary time-dependent
+    # variable (e.g. snowProbability) stay on the same period automatically,
+    # regardless of source.
+    ds_p = subset_time(ds_p, start_time=start_time, end_time=end_time, logger=logger)
 
-    # Check if the ice precipitation variable exists in the dataset
-    if varname_precip_ice and varname_precip_ice in list(ds_p.keys()):
-        # Convert ice precipitation to liquid equivalent
-        prs = ds_p[varname_precip_ice] * pr_convert_factor
-        # Add ice precipitation to get total precipitation
-        pr = pr + prs
+    # Check liquid precipitation variable. Required -- fail loudly here (rather than
+    # leaving 'pr' unassigned and surfacing as a confusing UnboundLocalError further
+    # down) since an arbitrary --input_zarr store makes a name mismatch much easier
+    # to hit than with the fixed catalog/IMERG/GSMAP paths.
+    if varname_precip_liq not in list(ds_p.keys()):
+        raise KeyError(f"Configured varname_precip_liq='{varname_precip_liq}' not "
+                        f"found in the dataset for '{catalog_source}'. Available "
+                        f"variables: {sorted(ds_p.keys())}")
+    # Convert liquid precipitation to mm/h
+    pr = ds_p[varname_precip_liq] * pr_convert_factor
+
+    # Check if the ice precipitation variable exists in the dataset. Configured but
+    # absent is expected for some sources/stores (e.g. casesm2_10km_nocumulus
+    # declares 'prs' but neither its catalog entry nor its local store has it) --
+    # log rather than raise, so the pr-only fallback is visible, not silent.
+    if varname_precip_ice:
+        if varname_precip_ice in list(ds_p.keys()):
+            # Convert ice precipitation to liquid equivalent
+            prs = ds_p[varname_precip_ice] * pr_convert_factor
+            # Add ice precipitation to get total precipitation
+            pr = pr + prs
+        else:
+            logger.info(f"Configured varname_precip_ice='{varname_precip_ice}' not "
+                        f"found in the dataset for '{catalog_source}'; proceeding "
+                        f"with liquid precipitation only.")
 
     logger.info(f"Precipitation data loaded: {pr.shape}")
 
@@ -929,6 +1321,9 @@ def main():
     config_file = args_dict['config_file']
     catalog_source = args_dict['catalog_source']
     zoom = args_dict['zoom']
+    start_time = args_dict['start_time']
+    end_time = args_dict['end_time']
+    input_zarr = args_dict['input_zarr']
     percentiles = args_dict['percentiles']
     time_durations = args_dict['time_durations']
     method = args_dict['method']
@@ -945,11 +1340,17 @@ def main():
 
     # Load precipitation data
     logger.info(f"Loading 1-hourly precipitation data for {catalog_source}...")
-    pr, ds_p, config = load_precipitation_data(config_file, catalog_source, zoom, logger)
+    pr, ds_p, config = load_precipitation_data(config_file, catalog_source, zoom,
+                                               start_time=start_time, end_time=end_time,
+                                               input_zarr=input_zarr, logger=logger)
 
     source_name = config.get('source_name')
-    start_datetime = config.get('start_datetime')
-    end_datetime = config.get('end_datetime')
+    # Derive the actual loaded time range from the data itself, rather than the
+    # config's start_datetime/end_datetime -- those are easy to let go stale
+    # relative to whichever Zarr path/catalog params get opened (as happened for
+    # IMERG previously), and don't reflect --start_time/--end_time subsetting anyway.
+    start_datetime = _time_to_isoformat(ds_p['time'].values[0])
+    end_datetime = _time_to_isoformat(ds_p['time'].values[-1])
     varname_snow_probability = config.get('varname_snow_probability', 'snowProbability')
 
     # Calculate time-mean snow probability once (independent of time_duration).
@@ -1038,7 +1439,8 @@ def main():
                      min_precip_threshold, logger,
                      annual_results=annual_computed, iqr_results=iqr_computed,
                      years=years, min_year_coverage_days=min_year_coverage_days,
-                     snow_probability=snow_prob_computed)
+                     snow_probability=snow_prob_computed,
+                     subset_start_time=start_time, subset_end_time=end_time)
 
     logger.info("=" * 60)
     logger.info("Extreme precipitation percentile calculation complete!")

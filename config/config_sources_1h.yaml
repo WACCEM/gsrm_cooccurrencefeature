@@ -3,6 +3,7 @@
 # Note: not all catalog models support the 'time' or 'time_method' catalog_params.
 #       For models that do not support these parameters, they are omitted.
 catalog_file: "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
+# catalog_file: /global/homes/f/feng045/program/hackathon/catalog/NERSC/main.yaml
 
 # IMERG configuration (IMERG data is not in the catalog; using local 1-hourly Zarr files)
 IMERG:
@@ -32,16 +33,28 @@ GSMAP:
 
 # SCREAM model configuration
 # Note: scream_ne120 does not support 'time' or 'time_method' in catalog_params
+# IMPORTANT: the catalog's own "scream_ne120" entry is 3-HOURLY AVERAGED data
+# (confirmed: its 'pr' carries an 'averaging_count_tracker' attribute, and its
+# measured time spacing is exactly 3h) -- correct for the 6-hourly
+# config_sources.yaml (3h aggregates cleanly into 6h bins), but not genuinely
+# hourly, so unsuitable for this _1h script. catalog_source_name below redirects
+# the actual data load to the catalog's "scream2D_hrly" entry instead -- genuinely
+# 1-hourly INSTANTANEOUS (confirmed: exact 1h spacing, no averaging attribute),
+# same units, no separate ice-precip term (pr is already total), and supports zoom
+# 0-10 (vs. scream_ne120's 0-8). The config key/source_name/CLI usage/output
+# filename here are unchanged -- see load_precipitation_data()'s docstring for how
+# catalog_source_name works.
 scream_ne120:
   source_name: scream
   catalog_location: NERSC
+  catalog_source_name: scream2D_hrly
   catalog_params:
     zoom: 8
   varname_precip_liq: pr
-  varname_precip_ice: prs
+  varname_precip_ice:
   pr_convert_factor: 3600000.0  # Convert from [m/s] to [mm/h]
   start_datetime: 2019-08-01T00:00
-  end_datetime: 2020-08-31T23:59
+  end_datetime: 2020-09-01T00:00
   dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/screamv2_ne120_tracking/
   source_te: screamv2_ne120
   source_res: hp8_hp8
@@ -96,6 +109,18 @@ um_glm_n2560_RAL3p3:
   source_res: hp8_PT1H
 
 # CASESM2 model configuration
+# WARNING: the catalog's own casesm2_10km_nocumulus 'pr' is ALL-NaN at zoom 9
+# (confirmed directly: 0% finite in a sampled slice; zoom 8 is fine, 100% finite).
+# A plain catalog run at zoom 9 "succeeds" but silently writes P95/P99=nan (as
+# happened for the v1 hp9 output before this was caught). A correct local store
+# exists instead -- run zoom 9 with an explicit --input_zarr override:
+#   /global/cfs/cdirs/wcm_shr/hk25/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_hourly_pr_and_rlut_hp9.zarr
+# (1 year, native chunks (24, 262144) -- same good shape as IMERG/GSMAP; has pr but
+# not prs, same as the catalog entry, so varname_precip_ice below is already a
+# no-op for this source at either zoom). This is a manual, per-run override, not an
+# automatic redirect (unlike scream_ne120's catalog_source_name above) -- a bulk
+# "submit all sources" run at zoom 9 will still rebuild the all-NaN file unless run
+# individually with --input_zarr; see the slurm script's header for the command.
 casesm2_10km_nocumulus:
   source_name: casesm2_10km_nocumulus
   catalog_location: NERSC

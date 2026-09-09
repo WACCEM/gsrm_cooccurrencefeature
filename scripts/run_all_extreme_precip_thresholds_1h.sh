@@ -1,9 +1,14 @@
-    #!/bin/bash
+#!/bin/bash
 #
 # Bash script to calculate extreme precipitation percentiles for all data sources
 # defined in config_sources_1h.yaml (1-hourly input data)
 #
 # Usage: bash run_all_extreme_precip_thresholds_1h.sh
+#
+# Note: this is a serial, foreground driver -- fine for the ~1-year model sources
+# (minutes each), but IMERG/GSMAP at zoom 9 take ~3 hours each (see
+# slurm/slurm_extreme_precip_thresholds_1h.sh's sizing comment); run those through
+# that SLURM script instead of this one.
 #
 # Author: Zhe Feng, zhe.feng@pnnl.gov
 # Date: March 2026
@@ -17,6 +22,7 @@ CONFIG_FILE="/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/con
 # Update this list if you add/remove sources in the config file
 SOURCES=(
     "IMERG"
+    "GSMAP"
     "scream_ne120"
     "icon_d3hp003"
     "nicam_gl11"
@@ -25,9 +31,15 @@ SOURCES=(
     "ifs_tco3999_rcbmf"
 )
 
+# Sources with multi-year records -- the only ones subset to START_TIME/END_TIME below.
+# The ~1-year model sources are always run over their full record.
+LONG_SOURCES="IMERG GSMAP"
+START_TIME="2018-01-01T00"
+END_TIME="2022-12-31T23"
+
 # Optional: Customize these parameters as needed
 # Uncomment and modify if you want different values than the defaults
-# ZOOM=8
+ZOOM=8
 # PERCENTILES="90 95"
 # TIME_DURATIONS="1h 6h 1D"
 # METHOD="linear"
@@ -55,9 +67,9 @@ for SOURCE in "${SOURCES[@]}"; do
     CMD="python ${PYTHON_SCRIPT} --catalog_source ${SOURCE} --config_file ${CONFIG_FILE}"
 
     # Optional: Add custom parameters if defined above
-    # if [ ! -z "${ZOOM}" ]; then
-    #     CMD="${CMD} --zoom ${ZOOM}"
-    # fi
+    if [ ! -z "${ZOOM}" ]; then
+        CMD="${CMD} --zoom ${ZOOM}"
+    fi
     # if [ ! -z "${PERCENTILES}" ]; then
     #     CMD="${CMD} --percentiles ${PERCENTILES}"
     # fi
@@ -76,6 +88,12 @@ for SOURCE in "${SOURCES[@]}"; do
     # if [ ! -z "${VERSION}" ]; then
     #     CMD="${CMD} --version ${VERSION}"
     # fi
+
+    # Time subset applies only to the multi-year sources (IMERG/GSMAP); model
+    # sources always run over their full ~1-year record.
+    if [[ " ${LONG_SOURCES} " == *" ${SOURCE} "* ]]; then
+        CMD="${CMD} --start_time ${START_TIME} --end_time ${END_TIME}"
+    fi
 
     echo "Command: ${CMD}"
     echo ""
