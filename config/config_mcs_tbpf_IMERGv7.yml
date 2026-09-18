@@ -40,6 +40,25 @@ catalog_params:
   zoom: 9
   time: 1H
 
+# TC track data, for excluding MCS tracks that significantly overlap a TC (see
+# src/mcs_tc_filter.py). IMERGv7 is observational precipitation with no dynamical
+# fields of its own to run TempestExtremes on, so its TC/AR/ETC tracks come from ERA5
+# instead. IMPORTANT: the raw TC_test_tracks_era5_*.nc files (dir_te below, per
+# remap_era5_masks_healpix.py) are still on ERA5's native 0.25deg lat-lon grid, NOT
+# HEALPix - pointing add_tc_mask_to_dataset at them directly crashes with a
+# "3 vs 2 dims" error. Use the already-HEALPix-remapped output of that script instead
+# (tc_source_zarr) via combine_era5_imerg_tracking_masks.py's
+# hackathon/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr - EXCEPT that pscratch copy's chunk
+# data is itself gone (all array subdirectories empty, unlike a metadata-only issue),
+# so this points straight at the CFS backup instead of pscratch. CFS is durable and
+# each Step-1 chunk only reads one small per-window slice of it, matching how Tb/pr are
+# already read from a remote/network source (the intake catalog) per chunk.
+# dir_te/tc_glob_pattern (raw ERA5 lat-lon files) no longer used for this source; left
+# here for reference only, not read by add_tc_mask_to_dataset when tc_source_zarr is set.
+# dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking_etc_nocoldcoreonly/
+# tc_glob_pattern: "TC_test_tracks_era5_*.nc"
+tc_source_zarr: /global/cfs/cdirs/wcm_shr/hk25/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr
+
 # Specify tracking input data date/time string format
 # This is the preprocessed file that contains Tb & rainrate
 # E.g., databasename20181101.011503.nc --> yyyymodd.hhmmss

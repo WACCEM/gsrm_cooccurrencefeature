@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import setup_dask_client, initialize_zarr_store, append_chunk_to_zarr
 from src.utilities import convert_cftime_to_standard_calendar
+from src.mcs_tc_filter import filter_mcs_tc_overlaps, MCS_TC_FILTER_THRESHOLD
 from pyflextrkr.ft_utilities import load_config
 from pyflextrkr.ftfunctions import olr_to_tb
 
@@ -443,7 +444,121 @@ def add_tb_pr_to_dataset(_ds, config):
     _ds = _ds.sel(time=common_times)
     _ds["pr"] = pr
     _ds["tb"] = tb
-    
+
+    return _ds
+
+#--------------------------------------------------------------------------------------------------
+def add_tc_mask_to_dataset(_ds, config):
+    """
+    Add a TC track mask ('tc_mask') variable to a dataset chunk, already aligned to
+    _ds's native time coordinate and HEALPix cell grid.
+
+    This is needed so process_timechunk_swath() can exclude TC-contaminated MCS tracks
+    (via the shared filter_mcs_tc_overlaps(), see src/mcs_tc_filter.py) *before* running
+    cloud-type classification, instead of Step 3 (make_cooccurrence_masks.py) discovering
+    the same overlap after this script has already zeroed cloud_types/dc_pr/st_pr/nd_pr/
+    dz_pr for the (soon to be partly invalid) MCS swath. See src/mcs_tc_filter.py's
+    docstring for the full explanation of why this matters.
+
+    Two loading modes, selected by which config keys are present (checked in this order):
+      - config['tc_source_zarr']: a single zarr store already on the target grid with a
+        'tc_mask' or 'TC_int_tag' variable (e.g. the ERA5-derived tracking used for the
+        observational IMERGv7 source, which has no per-source TempestExtremes output of
+        its own - see scripts/remap_era5_masks_healpix.py).
+      - config['dir_te'] + config['source_te'] + config['source_res']: one or more
+        per-source TempestExtremes NetCDF track files, following the same
+        TC_test_tracks_{source_te}_{source_res}.*.nc convention combine_tracking_masks.py
+        (Step 2) already uses. config['tc_glob_pattern'] may override the filename
+        template entirely (glued onto dir_te) for sources that don't follow it (e.g. the
+        bare "TC_test_tracks_era5_*.nc" pattern used for the ERA5 tracking files).
+
+    Missing TC data for a given native timestep defaults tc_mask to 0 ("no TC") rather
+    than dropping the timestep - unlike Tb/pr, a missing TC file must not shrink this
+    chunk, and "assume no TC" is the conservative, already-status-quo behavior for any
+    time/source this function cannot resolve.
+
+    Parameters:
+    -----------
+    _ds : xarray.Dataset
+        Input dataset chunk with a time coordinate and 'cell' dimension (same grid as
+        mcs_mask/tb/pr).
+    config : dict
+        See loading modes above.
+
+    Returns:
+    --------
+    _ds : xarray.Dataset
+        Dataset with an added 'tc_mask' variable, shape (time, cell) matching _ds.
+    """
+    tc_source_zarr = config.get('tc_source_zarr')
+    dir_te = config.get('dir_te')
+    source_te = config.get('source_te')
+    source_res = config.get('source_res')
+    tc_glob_pattern = config.get('tc_glob_pattern')
+
+    if tc_source_zarr:
+        ds_tc = xr.open_dataset(tc_source_zarr, engine='zarr', chunks={}, mask_and_scale=False)
+    elif dir_te and (tc_glob_pattern or (source_te and source_res)):
+        pattern = tc_glob_pattern if tc_glob_pattern else f"TC_test_tracks_{source_te}_{source_res}.*.nc"
+        files_tc = sorted(glob.glob(os.path.join(dir_te, pattern)))
+        if not files_tc:
+            raise FileNotFoundError(f"No TC track files found: {os.path.join(dir_te, pattern)}")
+        datasets = []
+        for f in files_tc:
+            try:
+                datasets.append(xr.open_dataset(f, chunks={}, mask_and_scale=False))
+            except Exception as e:
+                print(f"  Warning: could not open TC file {f}: {e}")
+        if not datasets:
+            raise ValueError("Could not open any TC track files")
+        ds_tc = xr.concat(datasets, dim='time').sortby('time')
+        _, index = np.unique(ds_tc['time'].values, return_index=True)
+        if len(index) < len(ds_tc['time']):
+            ds_tc = ds_tc.isel(time=sorted(index))
+    else:
+        raise ValueError(
+            "add_tc_mask_to_dataset requires either config['tc_source_zarr'], or "
+            "config['dir_te'] plus config['tc_glob_pattern'] (or config['source_te'] and "
+            "config['source_res']) to locate this source's TC track data."
+        )
+
+    # Standardize dims/variable name to match the MCS mask grid
+    if 'ncol' in ds_tc.dims:
+        ds_tc = ds_tc.rename({'ncol': 'cell'})
+    if 'TC_int_tag' in ds_tc.variables:
+        ds_tc = ds_tc.rename({'TC_int_tag': 'tc_mask'})
+    for v in ['lat', 'lon']:
+        if v in ds_tc.variables:
+            ds_tc = ds_tc.drop_vars(v)
+    if 'tc_mask' not in ds_tc.variables:
+        raise KeyError(
+            f"TC dataset has neither 'tc_mask' nor 'TC_int_tag' variable; found: "
+            f"{list(ds_tc.data_vars)}"
+        )
+
+    # Calendar alignment, same approach as add_tb_pr_to_dataset above
+    tc_calendar_type = type(ds_tc.time.values[0]).__name__
+    ds_calendar_type = type(_ds.time.values[0]).__name__
+    if tc_calendar_type != ds_calendar_type:
+        converted_times = convert_cftime_to_standard_calendar(ds_tc.time.values)
+        ds_tc = ds_tc.assign_coords(time=converted_times)
+
+    # Reindex (not intersect) onto _ds's native time steps. TC track data is only
+    # available 6-hourly for every source (confirmed: all 5 GSRM TempestExtremes outputs
+    # and the ERA5-derived IMERGv7 tracks), coarser than the hourly-or-finer native
+    # cadence _ds is at here. A plain reindex with a zero fill_value would leave every
+    # native hour that doesn't exactly match a 6-hourly label at "no TC" by default,
+    # making the whole MCS-TC exclusion nearly a no-op. Forward-fill instead: each native
+    # hour picks up the most recent (<=) 6-hourly TC snapshot, i.e. "TC was present in
+    # this cell for the 6-h window this hour falls in" - matching the granularity the TC
+    # data actually has. tolerance caps the fill at just under one 6-h step so a genuine
+    # gap in TC data (a missing window) still falls through to NaN -> 0 ("no TC") below,
+    # rather than incorrectly stretching a stale value across a real gap.
+    tc_mask = ds_tc['tc_mask'].reindex(
+        time=_ds['time'].values, method='ffill', tolerance=pd.Timedelta(hours=5, minutes=59)
+    ).load()
+    _ds = _ds.assign(tc_mask=tc_mask)
+
     return _ds
 
 #--------------------------------------------------------------------------------------------------
@@ -476,13 +591,42 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
     mcs_mask = _ds['mcs_mask'].values  # shape (time, cell)
     # Replace NaN with 0 (when mask_and_scale=True, fill_value becomes NaN)
     mcs_mask = np.nan_to_num(mcs_mask, nan=0.0).astype(int)
-    
+
+    # ===== MCS-TC exclusion (must happen BEFORE cloud-type classification below) =====
+    # Exclude MCS tracks that significantly overlap a TC in this window, using the same
+    # test (src/mcs_tc_filter.filter_mcs_tc_overlaps, MCS_TC_FILTER_THRESHOLD) that Step 3
+    # (make_cooccurrence_masks.py) applies downstream. Doing this here, before
+    # classify_cloud_types() runs on each native timestep, is what lets pixels freed by
+    # the exclusion get real DC/ND/ST/DZ classification from Tb/pr instead of being stuck
+    # at the zero values Step 3's later, isolated exclusion could not undo. See
+    # src/mcs_tc_filter.py's module docstring for the full explanation.
+    # 'tc_mask' is only present when the caller has provided TC track data (see
+    # add_tc_mask_to_dataset); skip gracefully (old behavior) if it hasn't, e.g. small
+    # manual/test invocations of this function.
+    if 'tc_mask' in _ds.variables:
+        tc_mask_arr = np.nan_to_num(_ds['tc_mask'].values, nan=0.0).astype(int)
+        mcs_tc_filter_result = filter_mcs_tc_overlaps(
+            mcs_mask=xr.DataArray(mcs_mask, dims=['time', 'cell']),
+            tc_mask=xr.DataArray(tc_mask_arr, dims=['time', 'cell']),
+            overlap_threshold=MCS_TC_FILTER_THRESHOLD,
+            verbose=verbose,
+        )
+        mcs_mask = mcs_tc_filter_result['mcs_filtered'].values.astype(int)
+        # Write the TC-filtered mask back so every later read of _ds['mcs_mask'] in this
+        # function (the per-native-hour classify_cloud_types loop below) sees the same,
+        # already-excluded mask rather than the pre-filter one.
+        _ds = _ds.assign(mcs_mask=(_ds['mcs_mask'].dims, mcs_mask))
+    elif verbose:
+        print("  No 'tc_mask' found on this chunk; skipping MCS-TC exclusion "
+              "(cloud_types/dc_pr/etc. may undercount precip from MCS tracks that "
+              "overlap a TC - see src/mcs_tc_filter.py).")
+
     # # Sum CCS mask over time and convert to binary
     # # First replace NaN with 0, then sum
     # ccs_mask_values = _ds['ccs_mask'].values
     # ccs_mask_values = np.nan_to_num(ccs_mask_values, nan=0.0)
     # ccs_mask_sum = ((ccs_mask_values > 0).sum(axis=0) > 0).astype(int)  # shape (cell)
-    
+
     # Create swaths and coverage for MCS
     mcs_swaths_dict, mcs_coverage_dict = create_track_swaths_and_coverage(mcs_mask)
     if not mcs_swaths_dict:
@@ -631,6 +775,13 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
         
         # Add tb and pr variables to the dataset chunk
         _ds = add_tb_pr_to_dataset(_ds, config)
+        # Add the TC track mask so process_timechunk_swath can exclude TC-contaminated
+        # MCS tracks before cloud-type classification (see add_tc_mask_to_dataset's
+        # docstring and src/mcs_tc_filter.py). Config controls this per-source; a source
+        # with no TC config keys set simply skips exclusion (logged inside
+        # process_timechunk_swath), matching pre-fix behavior for that source only.
+        if config.get('tc_source_zarr') or config.get('dir_te'):
+            _ds = add_tc_mask_to_dataset(_ds, config)
         # Eagerly load tb/pr into numpy to release the catalog's dask task graphs.
         # Without this, each .values call in process_timechunk_swath triggers a
         # separate catalog read and keeps the full task graph alive in worker memory.
@@ -650,6 +801,52 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
         print(f"Error processing time chunk {start_idx}-{end_idx}: {e}")
         traceback.print_exc()
         return None, None
+
+#--------------------------------------------------------------------------------------------------
+def is_result_degenerate(result):
+    """
+    Detect a "silently failed" chunk result: mcs_mask AND cloud_types both entirely
+    zero across every cell.
+
+    This is a defensive, symptom-level check rather than a root-cause fix. Audit found
+    that a small, non-deterministic fraction of chunks in a full parallel production run
+    come back from process_timechunk_wrapper_zarr() as a "successful" future (no
+    exception, no None result - future.result() returns cleanly) but with every array
+    zeroed out, even though the exact same computation, re-run standalone outside the
+    live Dask cluster, always produces correct, real coverage for the same inputs. Two
+    distinct failure signatures were observed empirically: a confirmed Dask worker
+    restart (distributed.nanny "Restarting worker") correlating with a large *contiguous*
+    block of bad frames in one run, and, in a separate rerun with zero worker restarts,
+    two isolated bad frames (including the very first chunk processed, ruling out any
+    "accumulated over a long run" explanation on its own) - i.e. more than one underlying
+    trigger can produce this same symptom. Rather than chase every possible transient
+    cause individually, this check catches the shared symptom directly: real precipitation
+    covers the globe somewhere in any genuine 6-hourly window, so mcs_mask and
+    cloud_types both being zero at every one of the ~786k cells (in dc_pr/st_pr/nd_pr/
+    dz_pr terms: the whole globe classified as having had literally zero precipitation
+    for the entire window) is not a physically plausible result - it is the fingerprint
+    of a lost/corrupted task, not real data.
+
+    Parameters:
+    -----------
+    result : dict
+        A results dict as returned by process_timechunk_swath() / the second element of
+        process_timechunk_wrapper_zarr()'s return tuple. Expected keys include 'mcs_mask'
+        and 'cloud_types' (numpy arrays).
+
+    Returns:
+    --------
+    bool : True if the result looks like a lost/corrupted chunk (retry-worthy), False if
+        it looks like genuine data (including a legitimate rare case with no MCS/cloud-
+        type coverage in just one of the two fields, which alone is not suspicious).
+    """
+    if not result:
+        return False
+    mcs_mask = result.get('mcs_mask')
+    cloud_types = result.get('cloud_types')
+    if mcs_mask is None or cloud_types is None:
+        return False
+    return bool(np.all(mcs_mask == 0) and np.all(cloud_types == 0))
 
 #--------------------------------------------------------------------------------------------------
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
@@ -771,7 +968,39 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                 try:
                     time_str, result = future.result()
                     if result is not None and time_str is not None:
-                        chunk_results[time_str] = result
+                        # Guard against a small, non-deterministic fraction of chunks
+                        # that come back "successful" (no exception) but with every
+                        # array zeroed out - see is_result_degenerate()'s docstring for
+                        # the full audit trail. Retry a bounded number of times before
+                        # giving up loudly, rather than silently writing zeros.
+                        max_retries = 3
+                        attempt = 0
+                        while is_result_degenerate(result) and attempt < max_retries:
+                            attempt += 1
+                            logger.warning(
+                                f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) "
+                                f"came back with mcs_mask and cloud_types both entirely zero - "
+                                f"not physically plausible for a real 6-h window. Retrying "
+                                f"({attempt}/{max_retries})..."
+                            )
+                            retry_future = client.submit(
+                                process_timechunk_wrapper_zarr,
+                                start_idx, end_idx, input_zarr_path, config,
+                                verbose=False, store_offsets=store_offsets,
+                            )
+                            time_str, result = retry_future.result()
+                        if result is not None and time_str is not None:
+                            if is_result_degenerate(result):
+                                logger.error(
+                                    f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) "
+                                    f"still all-zero after {max_retries} retries - leaving unwritten "
+                                    f"(zarr keeps its zero fill there) rather than accepting a result "
+                                    f"that's almost certainly wrong. This needs manual follow-up."
+                                )
+                            else:
+                                chunk_results[time_str] = result
+                        else:
+                            logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
                     else:
                         logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
                 except Exception as e:
@@ -835,8 +1064,32 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                 start_idx, end_idx, input_zarr_path, config,
                 verbose=False, store_offsets=store_offsets
             )
+            # Same defensive retry as the parallel path - see is_result_degenerate()'s
+            # docstring. Not observed in serial mode during the audit, but cheap to guard
+            # consistently rather than assume serial is immune to every possible cause.
+            max_retries = 3
+            attempt = 0
+            while result is not None and time_str is not None and is_result_degenerate(result) and attempt < max_retries:
+                attempt += 1
+                logger.warning(
+                    f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) came back with "
+                    f"mcs_mask and cloud_types both entirely zero - not physically plausible for "
+                    f"a real 6-h window. Retrying ({attempt}/{max_retries})..."
+                )
+                time_str, result = process_timechunk_wrapper_zarr(
+                    start_idx, end_idx, input_zarr_path, config,
+                    verbose=False, store_offsets=store_offsets
+                )
             if result is not None and time_str is not None:
-                chunk_results[time_str] = result
+                if is_result_degenerate(result):
+                    logger.error(
+                        f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) still "
+                        f"all-zero after {max_retries} retries - leaving unwritten (zarr keeps "
+                        f"its zero fill there) rather than accepting a result that's almost "
+                        f"certainly wrong. This needs manual follow-up."
+                    )
+                else:
+                    chunk_results[time_str] = result
             else:
                 logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
             
@@ -1024,6 +1277,16 @@ def main():
         'varname_precip_liq': varname_precip_liq,
         'varname_precip_ice': varname_precip_ice,
         'pcp_convert_factor': pr_convert_factor,
+        # TC track location for MCS-TC exclusion (see add_tc_mask_to_dataset). These keys
+        # mirror combine_tracking_masks.py's (Step 2) config so both steps read the same
+        # TC data for a given source. Sources without any of these set (e.g. not yet
+        # backfilled into config_mcs_tbpf_*.yml) simply skip MCS-TC exclusion here and
+        # fall back to Step 3's safety net, same as pre-fix behavior for that source only.
+        'tc_source_zarr': config.get('tc_source_zarr'),
+        'dir_te': config.get('dir_te'),
+        'source_te': config.get('source_te'),
+        'source_res': config.get('source_res'),
+        'tc_glob_pattern': config.get('tc_glob_pattern'),
     }
 
     print("="*80)

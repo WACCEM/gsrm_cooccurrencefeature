@@ -43,6 +43,13 @@ pcp_varname: pr   # Precipitation variable name
 pcp_convert_factor: 3600.  # Convert precipitation flux from [m/s] to [mm/h]
 input_format: zarr  # zarr or netcdf
 
+# TC track data, for excluding MCS tracks that significantly overlap a TC (see
+# src/mcs_tc_filter.py). Same values as this source's block in config_sources.yaml,
+# used by combine_tracking_masks.py (Step 2) and make_cooccurrence_masks.py (Step 3).
+dir_te: /pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/icon_d3hp003_1year_tracking_etc_nocoldcoreonly/
+source_te: icon_d3hp003
+source_res: hp8_PT6H
+
 # Specify tracking input data date/time string format
 # This is the preprocessed file that contains Tb & rainrate
 # E.g., databasename20181101.011503.nc --> yyyymodd.hhmmss

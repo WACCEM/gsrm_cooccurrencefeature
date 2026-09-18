@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH -A m1867
+#SBATCH -A m1657
 #SBATCH -J make_cooccurrence_masks
-#SBATCH -t 00:15:00
+#SBATCH -t 00:20:00
 #SBATCH -q regular
 #SBATCH -C cpu
 #SBATCH --nodes=1
@@ -10,11 +10,11 @@
 #SBATCH --output=/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/log/log_make_cooccurrence_masks_%A_%a.log
 #SBATCH --mail-type=END
 #SBATCH --mail-user=zhe.feng@pnnl.gov
-#SBATCH --array=1-5
+#SBATCH --array=1-6
 
 date
 # Activate Python environment
-source activate /global/common/software/m1867/python/pyflex-dev
+source activate /global/common/software/m1867/python/hackathon
 
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 

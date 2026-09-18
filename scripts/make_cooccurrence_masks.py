@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_dask_client
+from src.mcs_tc_filter import filter_mcs_tc_overlaps, MCS_TC_FILTER_THRESHOLD
 
 warnings.filterwarnings('ignore')
 
@@ -40,7 +41,9 @@ ETC_THREEWAY_THRESHOLD = 0.00
 MCS_AR_AR_THRESHOLD = 0.00
 AR_ETC_ETC_THRESHOLD = 0.01
 MCS_ETC_ETC_THRESHOLD = 0.00
-MCS_TC_FILTER_THRESHOLD = 0.10
+# MCS_TC_FILTER_THRESHOLD now lives in src/mcs_tc_filter.py, shared with
+# make_mcs_swath_masks.py (Step 1), which applies this same test *before* cloud-type
+# classification. See that module's docstring for why the two steps must agree.
 # Cloud types, AR, and ETC are filtered for TC overlap at the pixel level (any direct overlap
 # with the TC mask is removed), not via a class/track overlap-fraction threshold like MCS. See
 # Step 1 in process_single_timestep_overlaps(). AR/ETC filtering here is an explicit, defensive
@@ -355,207 +358,12 @@ def find_true_3way_overlaps(mcs_mask, ar_mask, etc_mask, binary_sum_mask,
     }
 
 
-def filter_mcs_tc_overlaps(mcs_mask, tc_mask, overlap_threshold=0.15, verbose=True):
-    """
-    Filter MCS tracks that significantly overlap with tropical cyclones using vectorized operations.
-    
-    This function follows the efficient approach from find_overlapping_tracks_and_pairs:
-    - Creates binary masks and sums them to find overlap regions
-    - Extracts MCS track IDs from overlap regions using vectorized operations
-    - Calculates overlap fractions efficiently without loops
-    - Returns filtered MCS mask with TC-overlapping tracks removed
-    
-    Parameters:
-    -----------
-    mcs_mask : xarray.DataArray
-        Original MCS mask with track IDs (values > 0 indicate tracks)
-    tc_mask : xarray.DataArray  
-        TC mask with track IDs (values > 0 indicate tracks)
-    overlap_threshold : float, default=0.15
-        Fractional overlap threshold (0.15 = 15%). MCS tracks with overlap 
-        fraction >= threshold will be identified for removal
-    verbose : bool, default=True
-        Whether to print progress information
-        
-    Returns:
-    --------
-    dict : Results containing:
-        - 'mcs_filtered': Filtered MCS mask with TC-overlapping tracks removed
-        - 'removed_tracks': Boolean mask of pixels belonging to removed tracks
-        - 'summary': Summary statistics
-    """
-
-    # Create binary masks (1 where feature exists, 0 elsewhere)
-    mcs_binary = xr.where(mcs_mask > 0, 1, 0)
-    tc_binary = xr.where(tc_mask > 0, 1, 0)
-    # Sum binary masks to identify overlap regions
-    binary_sum_mask = mcs_binary + tc_binary
-
-    # Find overlap condition: pixels where both features exist AND no NaN values
-    overlap_condition = (
-        (binary_sum_mask >= 2) &  # Both features present
-        ~np.isnan(binary_sum_mask) &  # No NaN in sum
-        ~np.isnan(mcs_mask) &  # No NaN in MCS mask
-        ~np.isnan(tc_mask)  # No NaN in TC mask
-    )
-
-    # Check if any overlaps exist
-    total_overlap_pixels = overlap_condition.sum().compute().item()
-    if total_overlap_pixels == 0:
-        if verbose:
-            print("No MCS-TC overlaps found, returning original mask")
-        return {
-            'mcs_filtered': mcs_mask,
-            'removed_tracks': xr.zeros_like(mcs_mask, dtype=bool),
-            'summary': {
-                'initial_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'removed_count': 0,
-                'final_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'retention_rate': 1.0
-            }
-        }
-    
-    if verbose:
-        print(f"Found {total_overlap_pixels} overlap pixels")
-
-    # Extract MCS track IDs that appear in overlap regions (vectorized operation)
-    tracks_in_overlap, overlap_counts = np.unique(
-        mcs_mask.where(overlap_condition), return_counts=True
-    )
-
-    # Remove NaN values from the results
-    valid_mask = ~np.isnan(tracks_in_overlap)
-    tracks_in_overlap = tracks_in_overlap[valid_mask]
-    overlap_counts = overlap_counts[valid_mask]
-    
-    # Edge case: No valid tracks found in overlap regions
-    if len(tracks_in_overlap) == 0:
-        if verbose:
-            print("No valid MCS tracks found in overlap regions, returning original mask")
-        return {
-            'mcs_filtered': mcs_mask,
-            'removed_tracks': xr.zeros_like(mcs_mask, dtype=bool),
-            'summary': {
-                'initial_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'removed_count': 0,
-                'final_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'retention_rate': 1.0
-            }
-        }
-    
-    if verbose:
-        print(f"Found {len(tracks_in_overlap)} MCS tracks with TC overlap")
-
-    # Get total pixel counts for ALL MCS tracks (not just overlapping ones)
-    unique_tracks, total_counts = np.unique(mcs_mask, return_counts=True)
-    
-    # Create lookup dictionary for efficient access
-    track_counts_dict = {}
-    for track_id, count in zip(unique_tracks, total_counts):
-        if not np.isnan(track_id):
-            track_counts_dict[track_id] = count
-
-    # Get total pixel counts for tracks that have overlaps (vectorized lookup)
-    total_pixel_counts = np.array([
-        track_counts_dict.get(track, 0) for track in tracks_in_overlap
-    ])
-
-    # Check for zero-sized tracks (should not happen but safety check)
-    if np.any(total_pixel_counts == 0):
-        if verbose:
-            print("Warning: Found tracks with zero pixels, filtering them out")
-        valid_indices = total_pixel_counts > 0
-        tracks_in_overlap = tracks_in_overlap[valid_indices]
-        overlap_counts = overlap_counts[valid_indices]
-        total_pixel_counts = total_pixel_counts[valid_indices]
-        
-        if len(tracks_in_overlap) == 0:
-            if verbose:
-                print("No valid tracks remaining after filtering, returning original mask")
-            return {
-                'mcs_filtered': mcs_mask,
-                'removed_tracks': xr.zeros_like(mcs_mask, dtype=bool),
-                'summary': {
-                    'initial_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                    'removed_count': 0,
-                    'final_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                    'retention_rate': 1.0
-                }
-            }
-    
-    # Calculate overlap fractions for all tracks at once (vectorized)
-    overlap_fractions = overlap_counts / total_pixel_counts
-
-    # Find tracks that exceed the overlap threshold (vectorized comparison)
-    threshold_mask = overlap_fractions >= overlap_threshold
-    tracks_exceeding = tracks_in_overlap[threshold_mask]
-    
-    if verbose:
-        n_exceeding = len(tracks_exceeding)
-        n_total = len(tracks_in_overlap)
-        print(f"Tracks exceeding {overlap_threshold:.1%} threshold: {n_exceeding}/{n_total}")
-        
-        if n_exceeding > 0 and n_exceeding <= 10:  # Show details for small numbers
-            exceeding_fractions = overlap_fractions[threshold_mask]
-            for track_id, fraction in zip(tracks_exceeding, exceeding_fractions):
-                print(f"  Track {int(track_id)}: {fraction:.0%} overlap")
-    
-    # Edge case: No tracks exceed threshold
-    if len(tracks_exceeding) == 0:
-        if verbose:
-            print("No tracks exceed overlap threshold, returning original mask")
-        return {
-            'mcs_filtered': mcs_mask,
-            'removed_tracks': xr.zeros_like(mcs_mask, dtype=bool),
-            'summary': {
-                'initial_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'removed_count': 0,
-                'final_count': len(np.unique(mcs_mask.values[mcs_mask.values > 0])),
-                'retention_rate': 1.0
-            }
-        }
-
-    # Create filtered mask using vectorized operations
-    mcs_filtered = mcs_mask.copy()
-    
-    # Remove tracks that exceed the overlap threshold (vectorized operation)
-    tracks_to_remove_mask = np.isin(mcs_mask, tracks_exceeding)
-    
-    # Set pixels belonging to tracks that exceed threshold to 0
-    mcs_filtered = xr.where(tracks_to_remove_mask, 0, mcs_filtered)
-    
-    # Compile detailed overlap statistics
-    original_tracks = np.unique(mcs_mask.values[mcs_mask.values > 0])
-    remaining_tracks = np.unique(mcs_filtered.values[mcs_filtered.values > 0])
-
-    n_mcs_original = len(original_tracks)
-    n_mcs_final = len(remaining_tracks)
-    n_removed = n_mcs_original - n_mcs_final
-    retention_rate = n_mcs_final / n_mcs_original if n_mcs_original > 0 else 0.0
-    
-    if verbose:
-        print(f"\nTC Filtering Results:")
-        print(f"  Original MCS tracks: {n_mcs_original}")
-        print(f"  MCS tracks removed due to TC overlap: {n_removed}")
-        print(f"  Remaining tracks: {n_mcs_final}")
-        print(f"  Retention rate: {retention_rate:.1%}")
-    
-    # Prepare summary
-    summary = {
-        'initial_count': n_mcs_original,
-        'removed_count': n_removed,
-        'final_count': n_mcs_final,
-        'retention_rate': retention_rate
-    }
-    
-    return {
-        'mcs_filtered': mcs_filtered,
-        'removed_tracks': tracks_to_remove_mask,
-        'summary': summary
-    }
+# filter_mcs_tc_overlaps() and MCS_TC_FILTER_THRESHOLD moved to src/mcs_tc_filter.py
+# (imported above) so Step 1 (make_mcs_swath_masks.py) can apply the identical test
+# before cloud-type classification. See that module's docstring for why.
 
 
-def promote_dual_etc_overlaps_to_3way(mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_pairs_2way, 
+def promote_dual_etc_overlaps_to_3way(mcs_ar_pairs_2way, ar_etc_pairs_2way, mcs_etc_pairs_2way,
                                      existing_3way_tracks=None, verbose=True):
     """
     Identifies ETC tracks with dual 2-way overlaps and promotes them to 3-way,
@@ -1029,6 +837,12 @@ def process_single_timestep_overlaps(_ds, verbose=True):
 
     # Filter MCS masks that significantly overlap with TCs (track-level, threshold-based:
     # an MCS track is dropped entirely if its overlap fraction with TC pixels is too high).
+    # This is now a defensive safety net: make_mcs_swath_masks.py (Step 1) already applies
+    # this identical test (imported from src.mcs_tc_filter) before cloud-type classification,
+    # so any pixels this removes here have already had their precipitation correctly
+    # reattributed to DC/ND/ST/DZ upstream. A nonzero removed_count below means Step 1's
+    # filtering and this one disagree (e.g. a config/data mismatch) - the precipitation
+    # for those specific pixels would still be lost to Residual, same as before this fix.
     mcs_filtering_results = filter_mcs_tc_overlaps(
         mcs_mask=_ds.mcs_mask,
         tc_mask=_ds.tc_mask,
@@ -1036,6 +850,14 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         verbose=verbose
     )
     mcs_filtered = mcs_filtering_results['mcs_filtered']
+    if mcs_filtering_results['summary']['removed_count'] > 0:
+        logging.getLogger(__name__).warning(
+            "filter_mcs_tc_overlaps (Step 3 safety net) removed %d MCS track(s) that Step 1 "
+            "did not already exclude - their precipitation will be unattributed (Residual) "
+            "for this window. Check that make_mcs_swath_masks.py ran with TC track data for "
+            "this source.",
+            mcs_filtering_results['summary']['removed_count']
+        )
 
     # Filter cloud_types, AR, and ETC pixels that directly overlap TC pixels (pixel-level, not
     # threshold-based). Cloud types are per-pixel class labels (1-4), not object/track IDs, so

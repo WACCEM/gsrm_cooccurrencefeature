@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A m1867
+#SBATCH -A m1657
 #SBATCH -J combine_tracking_masks
 #SBATCH -t 00:05:00
 #SBATCH -q regular
@@ -14,7 +14,7 @@
 
 date
 # Activate Python environment
-source activate /global/common/software/m1867/python/pyflex-dev
+source activate /global/common/software/m1867/python/hackathon
 
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 

@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH -A m1867
+#SBATCH -A m1657
 #SBATCH -J calc_monthly_rainmap_by_cof
-#SBATCH -t 00:10:00
+#SBATCH -t 00:15:00
 #SBATCH -q regular
 #SBATCH -C cpu
 #SBATCH --nodes=1
@@ -14,7 +14,7 @@
 
 date
 # Activate Python environment
-source activate /global/common/software/m1867/python/pyflex-dev
+source activate /global/common/software/m1867/python/hackathon
 
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 
