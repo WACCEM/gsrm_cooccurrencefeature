@@ -994,7 +994,7 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                                 logger.error(
                                     f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) "
                                     f"still all-zero after {max_retries} retries - leaving unwritten "
-                                    f"(zarr keeps its zero fill there) rather than accepting a result "
+                                    f"(zarr keeps its NaN fill there) rather than accepting a result "
                                     f"that's almost certainly wrong. This needs manual follow-up."
                                 )
                             else:
@@ -1016,15 +1016,18 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                         output_time = np.array([meta['output_time']], dtype='datetime64[ns]')
                         
                         logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
+                        # output_time holds exactly this chunk's single aggregated timestamp,
+                        # so its index into the store is chunk_idx itself (one chunk -> one
+                        # output frame here, unlike Step 3's multi-frame chunks).
                         append_chunk_to_zarr(
                             chunk_results=chunk_results,
                             chunk_times=output_time,
-                            chunk_idx=chunk_idx,
+                            time_start=chunk_idx,
                             mask_variables=mask_variables,
                             output_path=output_path,
                             logger=logger
                         )
-                        
+
                         # Update progress
                         processed_this_chunk = len(chunk_results)
                         total_processed += processed_this_chunk
@@ -1085,7 +1088,7 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                     logger.error(
                         f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) still "
                         f"all-zero after {max_retries} retries - leaving unwritten (zarr keeps "
-                        f"its zero fill there) rather than accepting a result that's almost "
+                        f"its NaN fill there) rather than accepting a result that's almost "
                         f"certainly wrong. This needs manual follow-up."
                     )
                 else:
@@ -1100,10 +1103,13 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                     output_time = np.array([output_time_val], dtype='datetime64[ns]')
                     
                     logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
+                    # output_time holds exactly this chunk's single aggregated timestamp,
+                    # so its index into the store is chunk_idx itself (one chunk -> one
+                    # output frame here, unlike Step 3's multi-frame chunks).
                     append_chunk_to_zarr(
                         chunk_results=chunk_results,
                         chunk_times=output_time,
-                        chunk_idx=chunk_idx,
+                        time_start=chunk_idx,
                         mask_variables=mask_variables,
                         output_path=output_path,
                         logger=logger

@@ -259,22 +259,25 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
     # Create data variables dictionary
     data_vars = {}
     for var_name in mask_variables:
-        # Start with default attributes
-        default_attrs = {'grid_mapping': 'crs', '_FillValue': 0.0}
-        
+        # Start with default attributes. Fill with NaN (not 0.0) so that a legitimate
+        # zero value and "this index was never written" remain distinguishable on
+        # read-back - with 0.0 as the fill value, every real zero also decodes as NaN,
+        # which silently hid a writer bug that left whole frames unwritten.
+        default_attrs = {'grid_mapping': 'crs', '_FillValue': np.nan}
+
         # Add user-specified attributes if provided
         if var_attrs and var_name in var_attrs:
             default_attrs.update(var_attrs[var_name])
-        
-        # Initialize with lazy dask zeros so the full array is never materialized
-        # in memory. np.zeros would allocate all time × cells × n_vars at once:
+
+        # Initialize with lazy dask nan-fill so the full array is never materialized
+        # in memory. np.full would allocate all time × cells × n_vars at once:
         # e.g. 21 vars × 4384 steps × 786432 cells × 4 bytes = 290 GB for 3-year
-        # hp8 data. dask.array.zeros writes chunk-by-chunk (~150 MB per chunk).
+        # hp8 data. dask.array writes chunk-by-chunk (~150 MB per chunk).
         if DASK_ARRAY_AVAILABLE:
-            data = da.zeros((len(time_coords), n_cells), dtype=np.float32,
+            data = da.full((len(time_coords), n_cells), np.nan, dtype=np.float32,
                             chunks=(chunk_size_time, chunksize_cell))
         else:
-            data = np.zeros((len(time_coords), n_cells), dtype=np.float32)
+            data = np.full((len(time_coords), n_cells), np.nan, dtype=np.float32)
         data_vars[var_name] = (['time', 'cell'], data, default_attrs)
     
     # Create coordinates dictionary (only the actual coordinates)
@@ -312,40 +315,49 @@ def initialize_zarr_store(output_path, time_coords, mask_variables, template_coo
     ds.close()
 
 
-def append_chunk_to_zarr(chunk_results, chunk_times, chunk_idx, mask_variables, output_path, logger=None):
+def append_chunk_to_zarr(chunk_results, chunk_times, time_start, mask_variables, output_path, logger=None):
     """
     Append a chunk of processed results to the existing zarr store.
-    
+
     Parameters:
     -----------
     chunk_results : dict
         Dictionary mapping time strings to result dictionaries
     chunk_times : numpy.ndarray
         Time coordinates for this chunk
-    chunk_idx : int
-        Index of this chunk (for determining time slice)
+    time_start : int
+        Index into the store's time axis where this chunk's data begins. Must be supplied
+        by the caller (e.g. `chunk_idx * chunk_size_time`) rather than re-derived from
+        `len(chunk_times)`, since that only equals the store offset for full-size chunks -
+        a final partial chunk would otherwise be written to the wrong offset, both leaving
+        the true tail unwritten and clobbering an earlier, already-correct block.
     mask_variables : list
         List of mask variable names to write
     output_path : str
         Path to zarr store
     logger : logging.Logger, optional
         Logger for status messages
+
+    Returns:
+    --------
+    list of str
+        Timestamps (as strings) that had no data in chunk_results and were left as NaN
+        (the store's fill value - see initialize_zarr_store) rather than a computed value.
     """
-    
+
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     # Open existing zarr store
     zarr_store = zarr.open(output_path, mode='r+')
-    
-    # Calculate time indices for this chunk
-    time_start = chunk_idx * len(chunk_times)  # Assumes uniform chunk sizes
+
     time_end = time_start + len(chunk_times)
-    
+    missing_times = []
+
     # Write each mask variable
     for var_name in mask_variables:
         var_data = []
-        
+
         # Collect data for this variable across all time steps in chunk
         for time_val in chunk_times:
             time_str = str(time_val)
@@ -356,16 +368,20 @@ def append_chunk_to_zarr(chunk_results, chunk_times, chunk_idx, mask_variables, 
                     mask_data = mask_data.values
                 var_data.append(mask_data)
             else:
-                # Fill with zeros if data missing
+                # No result for this timestep - leave as NaN (the store's fill value)
+                # rather than 0.0, so it stays distinguishable from a real computed zero.
                 n_cells = zarr_store[var_name].shape[1]
-                var_data.append(np.zeros(n_cells, dtype=np.float32))
-        
+                var_data.append(np.full(n_cells, np.nan, dtype=np.float32))
+                if time_str not in missing_times:
+                    missing_times.append(time_str)
+
         # Convert to numpy array and write to zarr
         if var_data:
             var_array = np.stack(var_data, axis=0)
             zarr_store[var_name][time_start:time_end, :] = var_array
-    
-    logger.info(f"Appended chunk {chunk_idx + 1} data to zarr store")
+
+    logger.info(f"Appended {len(chunk_times)} time step(s) at store index [{time_start}:{time_end}] to zarr store")
+    return missing_times
 
 
 def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, template_coords, attrs,
@@ -412,7 +428,11 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     total_processed = 0
     total_chunks = (len(time_coords) + chunk_size_time - 1) // chunk_size_time
     all_etc_records = []  # Collect ETC overlap records from all timesteps
-    
+    # Tracks which store indices actually received a real (non-NaN-filled) write, so a
+    # wrong write offset or a lost chunk shows up as an explicit gap instead of silently
+    # leaving NaN (unwritten) data in place.
+    written = np.zeros(len(time_coords), dtype=bool)
+
     logger.info(f"Processing {len(time_coords)} time steps in {total_chunks} chunks of {chunk_size_time}")
     
     for chunk_idx in range(total_chunks):
@@ -505,23 +525,29 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         # Write this chunk to zarr immediately
         try:
             logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
-            append_chunk_to_zarr(
+            missing_times = append_chunk_to_zarr(
                 chunk_results=chunk_results,
                 chunk_times=chunk_times,
-                chunk_idx=chunk_idx,
+                time_start=start_idx,
                 mask_variables=mask_variables,
                 output_path=output_path,
                 logger=logger
             )
-            
+            written[start_idx:end_idx] = True
+
             # Update progress
             processed_this_chunk = len(chunk_results)
             total_processed += processed_this_chunk
             logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk}/{len(chunk_times)} time steps written")
-            
+            if missing_times:
+                logger.warning(
+                    f"Chunk {chunk_idx + 1}: {len(missing_times)} time step(s) had no result and "
+                    f"were left as NaN at store index [{start_idx}:{end_idx}]: {missing_times}"
+                )
+
             # Free memory by explicitly deleting chunk results
             del chunk_results
-            
+
         except Exception as e:
             logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
             continue
@@ -541,9 +567,31 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         logger.info("Consolidated zarr metadata")
     except Exception as e:
         logger.warning(f"Could not consolidate zarr metadata: {e}")
-    
+
     logger.info(f"Streaming processing complete: {total_processed}/{len(time_coords)} time steps successful")
     logger.info(f"Collected {len(all_etc_records)} ETC overlap records")
+
+    # Every store index should have received a write covering its own chunk. A gap here
+    # means some index range was never targeted by any chunk's [time_start:time_end] slice -
+    # e.g. a wrong offset computation - and would otherwise surface downstream only as
+    # silently unattributed (all-NaN/zero) precipitation.
+    unwritten_idx = np.where(~written)[0]
+    if len(unwritten_idx) > 0:
+        gaps = []
+        start = unwritten_idx[0]
+        prev = start
+        for idx in unwritten_idx[1:]:
+            if idx != prev + 1:
+                gaps.append((start, prev))
+                start = idx
+            prev = idx
+        gaps.append((start, prev))
+        gap_str = ", ".join(f"[{a},{b}]" for a, b in gaps)
+        logger.error(
+            f"{len(unwritten_idx)}/{len(time_coords)} store index(es) were never written by any "
+            f"chunk: {gap_str}. These will read back as NaN (unwritten) data."
+        )
+
     return total_processed, all_etc_records
 
 
