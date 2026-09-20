@@ -1099,7 +1099,8 @@ def process_single_timestep_overlaps(_ds, verbose=True):
         'st_pr': _ds.st_pr,
         'nd_pr': _ds.nd_pr,
         'dz_pr': _ds.dz_pr,
-        
+        'tot_pr': _ds.tot_pr,   # window-mean total precipitation from Step 1 (same hourly pr as dc_pr..dz_pr)
+
         # Isolated masks
         'mcs_isolated_mask': mcs_isolated_mask,
         'ar_isolated_mask': ar_isolated_mask,
@@ -1213,7 +1214,12 @@ def main():
         except Exception as e:
             print(f"  ❌ Error loading dataset: {e}")
             return
-        
+
+        if 'tot_pr' not in ds.data_vars:
+            print("  ❌ Input has no 'tot_pr' (window-mean total precipitation). Rerun make_mcs_swath_masks.py "
+                  "(Step 1) and combine_tracking_masks.py (Step 2) with the current scripts first.")
+            return
+
         # Limit time steps for testing if requested
         if args.test_steps is not None:
             ds = ds.isel(time=slice(0, args.test_steps))
@@ -1226,7 +1232,7 @@ def main():
         # Define all output variables
         mask_variables = [
             'mcs_mask', 'ar_mask', 'etc_mask', 'tc_mask', 'cloud_types',
-            'dc_pr', 'st_pr', 'nd_pr', 'dz_pr',
+            'dc_pr', 'st_pr', 'nd_pr', 'dz_pr', 'tot_pr',
             'mcs_isolated_mask', 'ar_isolated_mask', 'etc_isolated_mask',
             'mcs_ar_overlap_mask', 'ar_mcs_overlap_mask',
             'ar_etc_overlap_mask', 'etc_ar_overlap_mask', 

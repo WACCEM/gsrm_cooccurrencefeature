@@ -11,7 +11,6 @@ import time
 import psutil
 import argparse
 import cftime
-import intake
 import gc
 import logging
 import easygems.healpix as egh
@@ -298,8 +297,9 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
             chunk_ds['etc_mcs_ar_overlap_mask'],
         ])
 
-        precipitation = chunk_ds['pr']
-        
+        # Total precipitation is Step 1's window-mean tot_pr, from the same hourly data as the cloud types
+        precipitation = chunk_ds['tot_pr']
+
         # Compute total precipitation - multiply by time interval to get mm
         chunk_totprecip = (precipitation * time_interval).sum(dim='time')
 
@@ -797,6 +797,10 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
         'zoom_level': zoom,
         'time_interval': time_interval,
         'precipitation_threshold': pcp_thresh,
+        'precipitation_source': (
+            "tot_pr from Step 1 (make_mcs_swath_masks.py): window-mean of the hourly precipitation the cloud types "
+            "were classified with; each source's own pr field only, frozen precipitation ignored"
+        ),
     }
 
     # Create output dataset
@@ -1105,16 +1109,8 @@ def main():
     
     # Extract configuration variables
     source_name = config.get('source_name')
-    catalog_location = config.get('catalog_location', 'NERSC')
-    catalog_params = config.get('catalog_params', {}).copy()
-    varname_precip_liq = config.get('varname_precip_liq')
-    varname_precip_ice = config.get('varname_precip_ice')
-    pr_convert_factor = config.get('pr_convert_factor')
     start_datetime = config.get('start_datetime')
     end_datetime = config.get('end_datetime')
-
-    # Catalog parameters
-    catalog_file = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
 
     # Input combined mask file
     in_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
@@ -1139,129 +1135,12 @@ def main():
         ds = xr.open_zarr(in_zarr, consolidated=True)
         ds = ds.pipe(egh.attach_coords)
         
-        # Special treatment for certain datasets not in the catalog
-        if catalog_source == "IR_IMERG":
-            # Special case for IMERG data (not in catalog yet)
-            dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
-            in_basename = f"IMERG_V7_"
-            time_res = "6H"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
-            # Read IMERG dataset
-            print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "scream_ne120":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
-            in_basename = f"scream_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read SCREAM dataset
-            print(f"Loading SCREAM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "nicam_gl11":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
-            in_basename = f"NICAM_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read NICAM dataset
-            print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "um_glm_n2560_RAL3p3":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
-            in_basename = f"um_glm_n2560_RAL3p3_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read UM dataset
-            print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "casesm2_10km_nocumulus":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/"
-            in_basename = f"casesm2_10km_nocumulus_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read CASESM2 dataset
-            print(f"Loading CASESM2 dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        else:
-            # Load the HEALPix catalog
-            print(f"Loading HEALPix catalog: {catalog_file}")
-            in_catalog = intake.open_catalog(catalog_file)
-            if catalog_location:
-                in_catalog = in_catalog[catalog_location]
-            
-            # Get the DataSet from the catalog
-            ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
-            # Add lat/lon coordinates to the HEALPix DataSet
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        # Check liquid precipitaiton variable
-        if varname_precip_liq in list(ds_p.keys()):
-            # Convert liquid precipitation to mm/h
-            pr = ds_p[varname_precip_liq] * pr_convert_factor
-        # Check if the ice precipitation variable exist in the dataset
-        if varname_precip_ice in list(ds_p.keys()):
-            # Convert ice precipitation to liquid equivalent
-            prs = ds_p[varname_precip_ice] * pr_convert_factor
-            # Add ice precipitation to get total precipitation
-            pr = pr + prs
-
-        # Calendar conversion - check and convert calendars to match
-        logger.info("Checking time coordinate calendars...")
-        
-        # Determine calendar types
-        ds_p_calendar_type = type(ds_p.time.values[0]).__name__
-        ds_calendar_type = type(ds.time.values[0]).__name__
-        
-        logger.info(f"Dataset calendars: ds_p uses {ds_p_calendar_type}, ds uses {ds_calendar_type}")
-        
-        # Convert ds time to match ds_p if they differ
-        if ds_calendar_type != ds_p_calendar_type:
-            logger.info(f"Converting ds time from {ds_calendar_type} to {ds_p_calendar_type}")
-            
-            # Get the calendar details from ds_p
-            has_year_zero = True
-            if hasattr(ds_p.time.values[0], 'has_year_zero'):
-                has_year_zero = ds_p.time.values[0].has_year_zero
-            
-            # Convert datetime64 values to cftime DatetimeNoLeap objects
-            new_times = []
-            for t in ds.time.values:
-                # Convert numpy datetime64 to pandas Timestamp to get date components
-                pd_time = pd.Timestamp(t)
-                # Create a matching cftime object
-                dt_cftime = cftime.DatetimeNoLeap(
-                    pd_time.year, pd_time.month, pd_time.day,
-                    pd_time.hour, pd_time.minute, pd_time.second,
-                    has_year_zero=has_year_zero
-                )
-                new_times.append(dt_cftime)
-            
-            # Create a new dataset with the converted time coordinate
-            ds = ds.assign_coords(time=new_times)
-            logger.info("Calendar conversion complete")
-
-        # Find common time range across all datasets
-        common_times = sorted(set(ds_p['time'].values)
-                             .intersection(set(ds['time'].values)))
-        if not common_times:
-            logger.warning("No common time values between all datasets!")
+        # Total precipitation comes from the same store (tot_pr, written by Step 1 from the hourly
+        # precipitation the cloud types were classified with), so no separate product is loaded.
+        if 'tot_pr' not in ds:
+            logger.error("The COF store has no 'tot_pr'. Rerun make_mcs_swath_masks.py, "
+                         "combine_tracking_masks.py and make_cooccurrence_masks.py with the current scripts first.")
             return None
-        else:
-            # Select only the common times in all datasets
-            pr = pr.sel(time=common_times)
-            ds = ds.sel(time=common_times)
-            # Add precipitation to the dataset
-            ds["pr"] = pr
-            logger.info(f"Successfully merged datasets with {len(common_times)} common time points")
 
         # Subset to the specified time range using robust method
         if start_datetime and end_datetime:

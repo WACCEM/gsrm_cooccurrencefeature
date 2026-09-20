@@ -23,7 +23,6 @@ from pathlib import Path
 import warnings
 import logging
 import easygems.healpix as egh
-import intake
 from dask.distributed import Client, progress
 import dask
 from dask.diagnostics import ProgressBar
@@ -52,96 +51,6 @@ def load_config(config_file, catalog_source):
                         f"Available sources: {list(config.keys())}")
     
     return config[catalog_source]
-
-
-def load_precipitation_data(catalog_file, catalog_source, config):
-    """
-    Load precipitation data from catalog or direct zarr path.
-    
-    Args:
-        catalog_file: str
-            URL to the catalog file
-        catalog_source: str
-            Source name in the catalog
-        config: dict
-            Configuration dictionary
-    
-    Returns:
-        xr.DataArray: Precipitation data (mm/h)
-    """
-    catalog_location = config.get('catalog_location', 'NERSC')
-    catalog_params = config.get('catalog_params', {}).copy()
-    varname_precip_liq = config.get('varname_precip_liq')
-    varname_precip_ice = config.get('varname_precip_ice')
-    pr_convert_factor = config.get('pr_convert_factor')
-    zoom = 8
-    
-    # Special treatment for certain datasets not in catalog
-    if catalog_source == "IR_IMERG":
-        dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
-        in_basename = f"IMERG_V7_"
-        time_res = "6H"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
-        print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    elif catalog_source == "scream_ne120":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
-        in_basename = f"scream_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        print(f"Loading SCREAM dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    elif catalog_source == "nicam_gl11":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
-        in_basename = f"NICAM_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    elif catalog_source == "um_glm_n2560_RAL3p3":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
-        in_basename = f"um_glm_n2560_RAL3p3_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    elif catalog_source == "casesm2_10km_nocumulus":
-        dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/"
-        in_basename = f"casesm2_10km_nocumulus_pr"
-        time_res = "6h"
-        in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-        print(f"Loading CASESM2 dataset (NOT from catalog): {in_zarr}")
-        ds_p = xr.open_zarr(in_zarr, consolidated=True)
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    else:
-        # Load from catalog
-        print(f"Loading HEALPix catalog: {catalog_file}")
-        in_catalog = intake.open_catalog(catalog_file)
-        if catalog_location:
-            in_catalog = in_catalog[catalog_location]
-        
-        ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
-        ds_p = ds_p.pipe(egh.attach_coords)
-    
-    # Get precipitation variable
-    if varname_precip_liq in list(ds_p.keys()):
-        pr = ds_p[varname_precip_liq] * pr_convert_factor
-    
-    # Add ice precipitation if available
-    if varname_precip_ice in list(ds_p.keys()):
-        prs = ds_p[varname_precip_ice] * pr_convert_factor
-        pr = pr + prs
-    
-    return pr
 
 
 def create_union_mask(mask_list):
@@ -174,103 +83,6 @@ def setup_logging():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
         level=logging.INFO
     )
-
-
-def standardize_calendar_type(ds, reference_time_values, logger=None):
-    """
-    Convert dataset time coordinate to match a reference calendar type.
-    
-    This function handles conversion between different calendar types (e.g., cftime, 
-    datetime64, pandas Timestamp) to ensure compatibility between datasets.
-    
-    Parameters:
-    -----------
-    ds : xr.Dataset or xr.DataArray
-        Dataset whose time coordinate needs conversion
-    reference_time_values : np.ndarray
-        Reference time values whose calendar type should be matched
-    logger : logging.Logger, optional
-        Logger instance for status messages
-    
-    Returns:
-    --------
-    xr.Dataset or xr.DataArray : Dataset with converted time coordinate
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-    
-    # Determine calendar types
-    ref_calendar_type = type(reference_time_values[0]).__name__
-    ds_calendar_type = type(ds.time.values[0]).__name__
-    
-    logger.info(f"Reference calendar: {ref_calendar_type}")
-    logger.info(f"Dataset calendar: {ds_calendar_type}")
-    
-    # Convert ds time to match reference if they differ
-    if ds_calendar_type != ref_calendar_type:
-        logger.info(f"⚠️  Calendar mismatch detected! Converting dataset calendar to match reference...")
-        logger.info(f"   Converting from {ds_calendar_type} to {ref_calendar_type}")
-        
-        # Get the calendar details from reference
-        has_year_zero = True
-        if hasattr(reference_time_values[0], 'has_year_zero'):
-            has_year_zero = reference_time_values[0].has_year_zero
-        
-        # Convert datetime64 values to cftime objects or vice versa
-        new_times = []
-        for t in ds.time.values:
-            if 'datetime64' in ref_calendar_type or ref_calendar_type == 'Timestamp':
-                # Convert to datetime64/Timestamp
-                if hasattr(t, 'year'):
-                    # From cftime to datetime64
-                    pd_time = pd.Timestamp(t.year, t.month, t.day, 
-                                         getattr(t, 'hour', 0), 
-                                         getattr(t, 'minute', 0), 
-                                         getattr(t, 'second', 0))
-                else:
-                    # Already datetime64
-                    pd_time = pd.Timestamp(t)
-                new_times.append(pd_time)
-            else:
-                # Convert to cftime (same type as reference)
-                if hasattr(t, 'year'):
-                    # Already cftime, convert to pandas then to target cftime
-                    pd_time = pd.Timestamp(t.year, t.month, t.day,
-                                         getattr(t, 'hour', 0),
-                                         getattr(t, 'minute', 0), 
-                                         getattr(t, 'second', 0))
-                else:
-                    # From datetime64 to cftime
-                    pd_time = pd.Timestamp(t)
-                
-                # Create matching cftime object
-                if 'NoLeap' in ref_calendar_type or ref_calendar_type == 'DatetimeNoLeap':
-                    dt_cftime = cftime.DatetimeNoLeap(
-                        pd_time.year, pd_time.month, pd_time.day,
-                        pd_time.hour, pd_time.minute, pd_time.second,
-                        has_year_zero=has_year_zero
-                    )
-                elif '360' in ref_calendar_type or ref_calendar_type == 'Datetime360Day':
-                    dt_cftime = cftime.Datetime360Day(
-                        pd_time.year, pd_time.month, pd_time.day,
-                        pd_time.hour, pd_time.minute, pd_time.second,
-                        has_year_zero=has_year_zero
-                    )
-                else:
-                    # Default to standard calendar
-                    dt_cftime = cftime.datetime(
-                        pd_time.year, pd_time.month, pd_time.day,
-                        pd_time.hour, pd_time.minute, pd_time.second
-                    )
-                new_times.append(dt_cftime)
-        
-        # Create a new dataset with the converted time coordinate
-        ds = ds.assign_coords(time=new_times)
-        logger.info("✅ Calendar conversion complete")
-    else:
-        logger.info("✅ Calendars match, no conversion needed")
-    
-    return ds
 
 
 def subset_time_range(ds, start_datetime_str, end_datetime_str, logger=None):
@@ -882,6 +694,11 @@ def main():
     print(f"\n📂 Loading storm masks from: {mask_dir}")
     ds = xr.open_zarr(mask_dir, mask_and_scale=False, consolidated=True)
     ds = ds.pipe(egh.attach_coords)
+    # mask_and_scale=False exposes zarr's NaN fill value of the tiny `crs` coordinate as a `_FillValue` attribute.
+    # The count/precipitation arrays inherit `crs` from tot_pr, and netCDF cannot store a NaN fill for an integer
+    # variable, so writing the results would fail.
+    if 'crs' in ds.coords:
+        ds['crs'].attrs.pop('_FillValue', None)
     logger.info(f"Loaded mask dataset with {len(ds.time)} time steps")
     
     # Load extreme precipitation thresholds
@@ -889,43 +706,15 @@ def main():
     print(f"📂 Loading extreme precipitation thresholds from: {extreme_file}")
     dsx = xr.open_dataset(extreme_file)
     
-    # Load precipitation data
-    catalog_file = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
-    print(f"\n📂 Loading precipitation data...")
-    pr = load_precipitation_data(catalog_file, args.catalog_source, config)
-    logger.info(f"Loaded precipitation data with {len(pr.time)} time steps")
-    
-    # ========================================================================
-    # CRITICAL: Align calendars and match time coordinates
-    # ========================================================================
-    logger.info("\n" + "="*60)
-    logger.info("Checking and aligning time coordinates...")
-    logger.info("="*60)
-    
-    # Standardize mask dataset calendar to match precipitation
-    ds = standardize_calendar_type(ds, pr.time.values, logger)
-    
-    # Find common time range across datasets
-    logger.info("\nFinding common time values between precipitation and mask datasets...")
-    pr_times_set = set(pr.time.values)
-    ds_times_set = set(ds.time.values)
-    common_times = sorted(pr_times_set.intersection(ds_times_set))
-    
-    if not common_times:
-        logger.error("❌ ERROR: No common time values between datasets!")
-        logger.error(f"   Precipitation time range: {pr.time.values[0]} to {pr.time.values[-1]}")
-        logger.error(f"   Mask time range: {ds.time.values[0]} to {ds.time.values[-1]}")
+    # Total precipitation is Step 1's window-mean tot_pr, stored in the COF mask store next to the masks:
+    # one time axis and one precipitation definition for the masks and the precipitation, so no separate
+    # product has to be loaded or calendar-aligned.
+    if 'tot_pr' not in ds:
+        logger.error("❌ The COF store has no 'tot_pr'. Rerun make_mcs_swath_masks.py, combine_tracking_masks.py "
+                     "and make_cooccurrence_masks.py with the current scripts first.")
         return None
-    
-    logger.info(f"✅ Found {len(common_times)} common time points")
-    logger.info(f"   Precipitation dataset: {len(pr.time)} time steps")
-    logger.info(f"   Mask dataset: {len(ds.time)} time steps")
-    logger.info(f"   Common times: {len(common_times)} time steps")
-    
-    # Select only the common times in both datasets
-    pr = pr.sel(time=common_times)
-    ds = ds.sel(time=common_times)
-    logger.info("✅ Datasets aligned to common time values")
+    pr = ds['tot_pr']
+    logger.info(f"Using tot_pr from the COF store: {len(pr.time)} time steps")
     
     # Apply time selection if specified
     if args.start_date and args.end_date:

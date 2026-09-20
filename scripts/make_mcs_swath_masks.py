@@ -350,8 +350,10 @@ def add_tb_pr_to_dataset(_ds, config):
         - catalog_location: Location within the catalog
         - catalog_source: Source name within the catalog
         - catalog_params: Parameters for the catalog source
-        - varname_precip_liq: Variable name for liquid precipitation
-        - varname_precip_ice: Variable name for ice precipitation
+        - varname_precip_liq: Variable name of the precipitation field used as 'pr'
+        - varname_precip_ice: Optional variable name of a separate frozen-precipitation field to add to
+          'pr'. main() passes None: frozen precipitation is deliberately ignored so every source uses its
+          own 'pr' field only.
         - pcp_convert_factor: Conversion factor for precipitation (e.g., to convert to mm/h)
     
     Returns:
@@ -581,8 +583,9 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
     --------
     dict : Dictionary containing:
         'mcs_mask': MCS swath mask (1D array, cell dimension)
-        'ccs_mask': Non-MCS CCS mask (1D array, cell dimension)
         'cloud_types': Aggregated cloud type classification (1D array, cell dimension)
+        'dc_pr', 'st_pr', 'nd_pr', 'dz_pr': Frequency-weighted mean precipitation by cloud type (mm/h)
+        'tot_pr': Window-mean total precipitation (mm/h), from the same hourly pr, not masked by the swath
     """
     if verbose:
         print(f"Processing time chunk with {len(_ds.time)} time steps...")
@@ -667,7 +670,12 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
     
     # Compute frequency-weighted mean precipitation for each cloud type
     dc_pr, st_pr, nd_pr, dz_pr = compute_mean_precip_by_cloud_type(cloud_types_timeseries, pr_timeseries)
-    
+
+    # Window-mean total precipitation from the same hourly pr as the classification above (not masked by
+    # the swath). Missing steps count as zero and the denominator is n_steps, exactly as for dc_pr..dz_pr,
+    # so those four sum to tot_pr outside the swath and any unclassified rain stays visible as residual.
+    tot_pr = np.nan_to_num(pr_timeseries, nan=0.0).sum(axis=0) / pr_timeseries.shape[0]
+
     # Find cloud type based on priority ranking (1 > 2 > 3 > 4)
     cloud_types_aggregated = find_priority_based_cloud_type(cloud_types_timeseries)
     
@@ -706,6 +714,7 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         'st_pr': st_pr,
         'nd_pr': nd_pr,
         'dz_pr': dz_pr,
+        'tot_pr': tot_pr,
     }
 
 def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbose=False,
@@ -1174,7 +1183,7 @@ def main():
     zarr_chunk_size_time = 28
     
     # Define output variables
-    mask_variables = ['mcs_mask', 'cloud_types', 'dc_pr', 'st_pr', 'nd_pr', 'dz_pr']
+    mask_variables = ['mcs_mask', 'cloud_types', 'dc_pr', 'st_pr', 'nd_pr', 'dz_pr', 'tot_pr']
     
     # Define attributes for each variable
     var_attrs = {
@@ -1217,6 +1226,15 @@ def main():
             'description': 'Frequency-weighted mean precipitation for drizzle',
             'units': 'mm h-1',
             'comment': 'Mean precipitation when cell is classified as drizzle (type 4), weighted by frequency. Mutually exclusive with MCS swath.'
+        },
+        'tot_pr': {
+            'long_name': 'Window-mean total precipitation',
+            'description': 'Mean over the aggregation window of the hourly precipitation used for the cloud-type classification',
+            'units': 'mm h-1',
+            'comment': ('Same variable, units and time alignment as dc_pr/st_pr/nd_pr/dz_pr; not masked by the MCS swath. '
+                        'Each source uses its own pr field only (frozen precipitation is ignored). Missing hourly values count as zero. '
+                        'dc_pr+st_pr+nd_pr+dz_pr equals tot_pr outside the MCS swath when every hourly step is classified. '
+                        'Downstream steps (monthly and extreme-precipitation analyses) use this as the total precipitation.')
         }
     }
     
@@ -1258,7 +1276,9 @@ def main():
     catalog_params.update({'zoom': zoom})
     # Precipitation, OLR variable names and conversion factor
     varname_precip_liq = 'pr'
-    varname_precip_ice = 'prs'
+    # Frozen precipitation is ignored for all sources (each model's 'pr' only, as in the 1-hourly
+    # extreme-precipitation configs), so no separate snow field such as UM's 'prs' is added.
+    varname_precip_ice = None
     varname_olr = 'rlut'
     pr_convert_factor = config.get('pcp_convert_factor')
 
