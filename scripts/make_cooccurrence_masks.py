@@ -835,28 +835,24 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     if verbose:
         print("  Step 1: Filtering MCS-TC overlaps...")
 
-    # Filter MCS masks that significantly overlap with TCs (track-level, threshold-based:
-    # an MCS track is dropped entirely if its overlap fraction with TC pixels is too high).
-    # This is now a defensive safety net: make_mcs_swath_masks.py (Step 1) already applies
-    # this identical test (imported from src.mcs_tc_filter) before cloud-type classification,
-    # so any pixels this removes here have already had their precipitation correctly
-    # reattributed to DC/ND/ST/DZ upstream. A nonzero removed_count below means Step 1's
-    # filtering and this one disagree (e.g. a config/data mismatch) - the precipitation
-    # for those specific pixels would still be lost to Residual, same as before this fix.
+    # MCS-TC exclusion is applied once, in make_mcs_swath_masks.py (Step 1), on the hourly masks
+    # before they are aggregated into this 6-hourly swath. The same test on the aggregated swath
+    # (union footprint, coverage-priority pixel loss) is a different mask and removes borderline
+    # tracks whose cloud-type precipitation Step 1 has already zeroed over their swath, which
+    # leaves that rain in no category. So the test is only counted and logged here; nothing is removed.
     mcs_filtering_results = filter_mcs_tc_overlaps(
         mcs_mask=_ds.mcs_mask,
         tc_mask=_ds.tc_mask,
         overlap_threshold=MCS_TC_FILTER_THRESHOLD,
         verbose=verbose
     )
-    mcs_filtered = mcs_filtering_results['mcs_filtered']
+    mcs_filtered = _ds.mcs_mask
     if mcs_filtering_results['summary']['removed_count'] > 0:
         logging.getLogger(__name__).warning(
-            "filter_mcs_tc_overlaps (Step 3 safety net) removed %d MCS track(s) that Step 1 "
-            "did not already exclude - their precipitation will be unattributed (Residual) "
-            "for this window. Check that make_mcs_swath_masks.py ran with TC track data for "
-            "this source.",
-            mcs_filtering_results['summary']['removed_count']
+            "Step 3 MCS-TC check (informational, nothing removed): %d MCS track(s) exceed the %.0f%% "
+            "TC-overlap threshold on the aggregated 6-hourly swath and are kept; Step 1's hourly test "
+            "is the only MCS-TC exclusion.",
+            mcs_filtering_results['summary']['removed_count'], 100 * MCS_TC_FILTER_THRESHOLD
         )
 
     # Filter cloud_types, AR, and ETC pixels that directly overlap TC pixels (pixel-level, not
@@ -1254,7 +1250,8 @@ def main():
                 f"ETC 3-way: {_format_percent(ETC_THREEWAY_THRESHOLD)}"
             ),
             'tc_filtering_threshold': (
-                f"MCS-TC: {_format_percent(MCS_TC_FILTER_THRESHOLD)} (track-level), "
+                f"MCS-TC: {_format_percent(MCS_TC_FILTER_THRESHOLD)} (track-level, applied in Step 1 on hourly masks "
+                f"pooled over each aggregation window; not re-applied in Step 3), "
                 f"cloud type-TC: pixel-level (any overlap), "
                 f"AR-TC: pixel-level (any overlap), "
                 f"ETC-TC: pixel-level (any overlap)"

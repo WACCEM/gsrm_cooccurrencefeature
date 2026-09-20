@@ -1,27 +1,25 @@
 """
 Shared MCS-TC track-overlap filter.
 
-This is the single source of truth for deciding which MCS tracks are "TC-contaminated"
-and should be excluded from the MCS mask. It is used by two pipeline steps that must
-agree on this decision:
+This is the single definition of which MCS tracks are "TC-contaminated". It is used by two
+pipeline steps, but only one of them excludes anything:
 
 - scripts/make_mcs_swath_masks.py (Step 1): applies the exclusion to the native-cadence
-  MCS mask *before* cloud-type classification (classify_cloud_types), so pixels freed by
-  the exclusion get properly classified into DC/ND/ST/DZ from Tb/pr instead of being left
-  at the zero cloud-type/cloud-precip values Step 1 previously assigned on the assumption
-  "this is MCS, its rain is attributed elsewhere."
-- scripts/make_cooccurrence_masks.py (Step 3): re-applies the same test as a defensive
-  safety net (it should find ~0 additional pixels to remove once Step 1 has already
-  excluded them).
+  hourly MCS mask (overlap pooled over each aggregation window) *before* cloud-type
+  classification (classify_cloud_types), so pixels freed by the exclusion get properly
+  classified into DC/ND/ST/DZ from Tb/pr instead of being left at the zero cloud-type/
+  cloud-precip values Step 1 assigns inside the MCS swath.
+- scripts/make_cooccurrence_masks.py (Step 3): runs the same test on the aggregated 6-hourly
+  swath for information only and removes nothing. The swath is a different mask from the
+  hourly ones Step 1 tested (union footprint, coverage-priority pixel loss), so it flags
+  borderline tracks (7-16% of 6-hourly frames in the September 2026 reprocessing) that Step 1
+  correctly kept; removing them there would leave their precipitation in no category.
 
-Historical context: before this module existed, filter_mcs_tc_overlaps() was defined only
-in make_cooccurrence_masks.py (Step 3) and ran *after* Step 1 had already zeroed
-cloud_types/dc_pr/st_pr/nd_pr/dz_pr for the full (pre-TC-filter) MCS swath. Any track this
-filter removed therefore had its precipitation attributed nowhere: not MCS (removed), not
-TC (only the *track's* overlap fraction had to cross the threshold, not every one of its
-pixels), and not any cloud type (already zeroed upstream). That precipitation fell through
-to "Residual" in the downstream COF precipitation budget. Running the same test upstream,
-before the cloud-type zeroing happens, closes that gap.
+Historical context: this filter used to run only in Step 3, *after* Step 1 had already
+zeroed cloud_types/dc_pr/st_pr/nd_pr/dz_pr for the full (pre-TC-filter) MCS swath, so any
+track it removed had its precipitation attributed nowhere and fell through to "Residual" in
+the downstream COF precipitation budget. Running it in Step 1, before the cloud-type
+zeroing, closes that gap; keeping Step 3 informational avoids reopening it.
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """
@@ -31,7 +29,7 @@ import xarray as xr
 
 # MCS tracks with an overlap fraction against TC pixels at or above this threshold
 # (within a single aggregation window) are excluded from the MCS mask entirely for that
-# window. Must stay identical between Step 1 and Step 3 - import this constant rather
+# window by Step 1; Step 3 only uses it to count and log. Import this constant rather
 # than hardcoding it.
 MCS_TC_FILTER_THRESHOLD = 0.10
 
