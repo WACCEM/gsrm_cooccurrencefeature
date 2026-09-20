@@ -586,6 +586,7 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         'cloud_types': Aggregated cloud type classification (1D array, cell dimension)
         'dc_pr', 'st_pr', 'nd_pr', 'dz_pr': Frequency-weighted mean precipitation by cloud type (mm/h)
         'tot_pr': Window-mean total precipitation (mm/h), from the same hourly pr, not masked by the swath
+        'input_all_nan': True when the window has no valid pr and no valid Tb (not written to the store)
     """
     if verbose:
         print(f"Processing time chunk with {len(_ds.time)} time steps...")
@@ -648,6 +649,11 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         lat_values = _ds['lat'].values
         tb_thresh = create_latitude_dependent_tb_threshold(lat_values)
     
+    # A window with no valid pr and no valid Tb at all (e.g. the first steps of a model run that are
+    # missing because of spin-up, depending on how the data were post-processed) has nothing to classify.
+    # Flag it so the caller can tell it apart from a failed task: all-NaN input is expected, not an error.
+    input_all_nan = not (np.isfinite(_ds['tb'].values).any() or np.isfinite(_ds['pr'].values).any())
+
     # Classify cloud types for each time step
     cloud_types_timeseries = []
     for t in range(len(_ds.time)):
@@ -715,6 +721,9 @@ def process_timechunk_swath(_ds, tb_thresh=None, verbose=False):
         'nd_pr': nd_pr,
         'dz_pr': dz_pr,
         'tot_pr': tot_pr,
+        # Not a mask variable (the zarr writer only takes the names in mask_variables): tells the caller that
+        # the input window had no valid pr or Tb, so an all-zero result is expected rather than a failure.
+        'input_all_nan': input_all_nan,
     }
 
 def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbose=False,
@@ -739,7 +748,8 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
             requested time range instead of opening and concatenating all stores.
         
     Returns:
-        tuple: (time_str, results_dict) or (time_str, None) if error
+        tuple: (time_str, results_dict) on success, or (None, {'error': 'ExcType: message'}) if the
+        chunk raised, so the caller can report why (stream_process_to_zarr / resolve_chunk_result)
     """
     try:
         # Open only the zarr store(s) needed for this time slice.
@@ -809,7 +819,7 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
     except Exception as e:
         print(f"Error processing time chunk {start_idx}-{end_idx}: {e}")
         traceback.print_exc()
-        return None, None
+        return None, {'error': f"{type(e).__name__}: {e}"}
 
 #--------------------------------------------------------------------------------------------------
 def is_result_degenerate(result):
@@ -857,19 +867,78 @@ def is_result_degenerate(result):
         return False
     return bool(np.all(mcs_mask == 0) and np.all(cloud_types == 0))
 
+# Retries after the first attempt at a window, and the wait before retry n (n * this many seconds).
+CHUNK_MAX_RETRIES = 3
+CHUNK_RETRY_BACKOFF_SECONDS = 2.0
+
+def resolve_chunk_result(first_attempt, run_again, label, logger,
+                         max_retries=CHUNK_MAX_RETRIES, backoff_seconds=CHUNK_RETRY_BACKOFF_SECONDS):
+    """
+    Get a usable result for one aggregation window, retrying failures that may be transient.
+
+    A window can fail in several ways: the task raises (unreadable zarr chunk, a netCDF/HDF5 handle
+    error while reading the TC tracks, out of memory), the worker is killed, or the task "succeeds" with
+    every array zero (see is_result_degenerate). A window whose input has no valid pr and no valid Tb at
+    all is not a failure: model output can be missing at the start of a run (spin-up), depending on how
+    it was post-processed, so it is reported as 'empty' without retries.
+
+    Parameters:
+    -----------
+    first_attempt : callable
+        Returns (time_str, result) for the attempt already under way (in parallel mode: waits on that
+        task's future). May raise, e.g. when the worker died.
+    run_again : callable
+        Starts a fresh attempt and returns (time_str, result). It must really recompute. With Dask that
+        means client.submit(..., pure=False): the default pure=True gives an identical call the same key,
+        so the scheduler hands back the first attempt's cached result or exception and nothing is retried.
+    label : str
+        Names the window in log messages.
+    logger : logging.Logger
+
+    Returns:
+    --------
+    (result, status, detail) with status
+        'ok'     : result is usable; detail says how many attempts it took when more than one
+        'empty'  : the window has no valid pr or Tb; nothing to write, not a failure
+        'failed' : every attempt raised, returned nothing, or stayed all-zero although the input has
+                   data; result is None and detail gives the last reason
+    """
+    reason = "no attempt was made"
+    for attempt in range(1 + max_retries):
+        try:
+            time_str, result = first_attempt() if attempt == 0 else run_again()
+        except Exception as exc:
+            result, reason = None, f"{type(exc).__name__}: {exc}"
+        else:
+            if result is None or time_str is None:
+                reason = (result or {}).get('error') or "the task returned no result"
+            elif result.get('input_all_nan'):
+                return result, 'empty', "no valid pr or Tb in this window"
+            elif is_result_degenerate(result):
+                reason = "mcs_mask and cloud_types both entirely zero although the input has valid data"
+            else:
+                return result, 'ok', (f"needed {attempt + 1} attempts" if attempt else "")
+        if attempt < max_retries:
+            logger.warning(f"{label}: attempt {attempt + 1} failed ({reason}); retrying ({attempt + 1}/{max_retries})...")
+            time.sleep(backoff_seconds * (attempt + 1))
+    return None, 'failed', reason
+
 #--------------------------------------------------------------------------------------------------
 def stream_process_to_zarr(time_coords, mask_variables, output_path,
                           time_groups, output_time_coords,
-                          client=None, logger=None, parallel=True, 
+                          client=None, logger=None, parallel=True,
                           input_zarr_path=None, batch_size=100,
                           config=None, store_offsets=None):
     """
     Stream process time chunks and write results to zarr with optional parallel processing.
-    
+
     Uses a batched submission approach to avoid overwhelming the Dask scheduler with
     too many tasks at once. Instead of submitting all chunks at once, submits them
     in batches (super-chunks), waits for each batch to complete, then moves to the next.
-    
+
+    Each window is resolved by resolve_chunk_result(): failures that may be transient are retried,
+    and every window ends up in exactly one of written / empty / failed, which is reported at the end.
+
     Parameters:
     -----------
     time_coords : array-like
@@ -894,254 +963,181 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         Number of output chunks to submit per batch (default: 100)
     config : dict
         Configuration dictionary with catalog and variable information
-        
+
     Returns:
     --------
-    int : Number of successfully processed chunks
+    dict : Summary of the run, with
+        'written' : number of output frames written
+        'total'   : number of output frames
+        'failed'  : list of {'chunk', 'time', 'n_steps', 'reason'} for frames that could not be computed
+                    or written even after retries; these read back as NaN and need a rerun
+        'empty'   : same records for windows with no valid pr or Tb (expected, e.g. model spin-up);
+                    they are left as NaN
+        'partial' : same records for windows written from fewer hourly steps than a full window
+                    (the mean is over the steps present)
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     # Time-aligned processing using time groups
     total_chunks = len(output_time_coords)
     output_times_list = list(output_time_coords)
     chunk_indices = list(range(total_chunks))
-    
+    full_steps = max(len(v) for v in time_groups.values())  # hourly steps in a complete window
+
     logger.info(f"Processing {len(time_coords)} input time steps into {total_chunks} aligned time groups")
     logger.info(f"Each chunk aggregates multiple hourly time steps into 1 swath mask at standard hours")
-    
-    # Process and write time steps in chunks
-    total_processed = 0
-    
+
+    written = np.zeros(total_chunks, dtype=bool)
+    failed, empty, partial = [], [], []
+
+    def chunk_meta(chunk_idx):
+        aligned_time = output_times_list[chunk_idx]
+        # Convert numpy datetime64 to pandas Timestamp for dictionary lookup
+        time_indices = time_groups[pd.Timestamp(aligned_time)]
+        return {
+            'chunk_idx': chunk_idx,
+            'start_idx': int(time_indices[0]),
+            'end_idx': int(time_indices[-1]) + 1,
+            'n_steps': len(time_indices),
+            'output_time': aligned_time,
+        }
+
+    def finish_chunk(meta, first_attempt, run_again):
+        """Resolve one window (retrying transient failures), write it, and record what happened."""
+        chunk_idx = meta['chunk_idx']
+        label = f"Chunk {chunk_idx + 1} (time steps {meta['start_idx']}-{meta['end_idx'] - 1})"
+        when = str(pd.Timestamp(meta['output_time']))[:16]
+        record = {'chunk': chunk_idx, 'time': when, 'n_steps': meta['n_steps']}
+
+        result, status, detail = resolve_chunk_result(first_attempt, run_again, label, logger)
+        if status == 'empty':
+            empty.append({**record, 'reason': detail})
+            logger.info(f"{label} at {when}: {detail}; left as NaN (expected, e.g. model spin-up or missing input)")
+            return
+        if status == 'failed':
+            failed.append({**record, 'reason': detail})
+            logger.error(f"{label} at {when}: FAILED after {1 + CHUNK_MAX_RETRIES} attempts ({detail}); "
+                         f"the frame stays NaN")
+            return
+
+        # The store's frame for this window is identified by the aligned output time, not by the first
+        # hourly step the worker saw: a partial window (missing or late first hour) has a different first
+        # step, and a result keyed by it would not be found by the writer and would be dropped as "missing".
+        output_time = np.array([meta['output_time']], dtype='datetime64[ns]')
+        try:
+            logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
+            # output_time holds exactly this chunk's single aggregated timestamp,
+            # so its index into the store is chunk_idx itself (one chunk -> one
+            # output frame here, unlike Step 3's multi-frame chunks).
+            missing = append_chunk_to_zarr(
+                chunk_results={str(output_time[0]): result},
+                chunk_times=output_time,
+                time_start=chunk_idx,
+                mask_variables=mask_variables,
+                output_path=output_path,
+                logger=logger
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            failed.append({**record, 'reason': f"write error: {type(exc).__name__}: {exc}"})
+            logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {exc}")
+            return
+        if missing:
+            failed.append({**record, 'reason': "result was not found by the writer"})
+            logger.error(f"{label} at {when}: the writer found no result for {missing}")
+            return
+
+        written[chunk_idx] = True
+        if meta['n_steps'] < full_steps:
+            partial.append(record)
+        logger.info(f"Chunk {chunk_idx + 1} complete: 1 swath mask(s) written" + (f" ({detail})" if detail else ""))
+
     if parallel and client is not None:
         # PARALLEL MODE: Submit chunks in batches to avoid overwhelming scheduler
         total_batches = (len(chunk_indices) + batch_size - 1) // batch_size
         logger.info(f"Using batched submission: {total_batches} batches of up to {batch_size} chunks each")
-        
+
         # Prepare chunk metadata for chunks we're actually processing
-        chunk_metadata = []
-        for chunk_idx in chunk_indices:
-            # Time-aligned processing: get indices from time groups
-            aligned_time = output_times_list[chunk_idx]
-            # Convert numpy datetime64 to pandas Timestamp for dictionary lookup
-            aligned_time_pd = pd.Timestamp(aligned_time)
-            time_indices = time_groups[aligned_time_pd]
-            start_idx = int(time_indices[0])
-            end_idx = int(time_indices[-1]) + 1
-            output_time = aligned_time
-            
-            chunk_metadata.append({
-                'chunk_idx': chunk_idx,
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'output_time': output_time
-            })
-        
+        chunk_metadata = [chunk_meta(chunk_idx) for chunk_idx in chunk_indices]
+
+        def submit(meta, **kwargs):
+            return client.submit(
+                process_timechunk_wrapper_zarr,
+                meta['start_idx'],
+                meta['end_idx'],
+                input_zarr_path,
+                config,
+                verbose=False,
+                store_offsets=store_offsets,
+                **kwargs
+            )
+
         # Process chunks in batches
         for batch_idx in range(total_batches):
             batch_start = batch_idx * batch_size
             batch_end = min((batch_idx + 1) * batch_size, len(chunk_metadata))
             batch_chunks = chunk_metadata[batch_start:batch_end]
-            
+
             logger.info(f"")
             logger.info(f"{'='*80}")
             logger.info(f"BATCH {batch_idx + 1}/{total_batches}: Processing {len(batch_chunks)} chunks")
             logger.info(f"{'='*80}")
-            
+
             # Submit all chunks in this batch to Dask workers (using indices only)
             futures = {}
             for meta in batch_chunks:
-                future = client.submit(
-                    process_timechunk_wrapper_zarr,
-                    meta['start_idx'],
-                    meta['end_idx'],
-                    input_zarr_path,
-                    config,
-                    verbose=False,
-                    store_offsets=store_offsets
-                )
-                futures[future] = meta
-            
+                futures[submit(meta)] = meta
+
             logger.info(f"Submitted {len(futures)} chunks to workers for this batch...")
-            
+
             # Process results as they complete within this batch
             for future in as_completed(futures):
                 meta = futures[future]
-                chunk_idx = meta['chunk_idx']
-                start_idx = meta['start_idx']
-                end_idx = meta['end_idx']
-                
-                logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
-                
-                chunk_results = {}
-                try:
-                    time_str, result = future.result()
-                    if result is not None and time_str is not None:
-                        # Guard against a small, non-deterministic fraction of chunks
-                        # that come back "successful" (no exception) but with every
-                        # array zeroed out - see is_result_degenerate()'s docstring for
-                        # the full audit trail. Retry a bounded number of times before
-                        # giving up loudly, rather than silently writing zeros.
-                        max_retries = 3
-                        attempt = 0
-                        while is_result_degenerate(result) and attempt < max_retries:
-                            attempt += 1
-                            logger.warning(
-                                f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) "
-                                f"came back with mcs_mask and cloud_types both entirely zero - "
-                                f"not physically plausible for a real 6-h window. Retrying "
-                                f"({attempt}/{max_retries})..."
-                            )
-                            retry_future = client.submit(
-                                process_timechunk_wrapper_zarr,
-                                start_idx, end_idx, input_zarr_path, config,
-                                verbose=False, store_offsets=store_offsets,
-                            )
-                            time_str, result = retry_future.result()
-                        if result is not None and time_str is not None:
-                            if is_result_degenerate(result):
-                                logger.error(
-                                    f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) "
-                                    f"still all-zero after {max_retries} retries - leaving unwritten "
-                                    f"(zarr keeps its NaN fill there) rather than accepting a result "
-                                    f"that's almost certainly wrong. This needs manual follow-up."
-                                )
-                            else:
-                                chunk_results[time_str] = result
-                        else:
-                            logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
-                    else:
-                        logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
-                except Exception as e:
-                    logger.error(f"Error in Dask task for chunk {chunk_idx + 1}: {e}")
-                    traceback.print_exc()
-                    continue
-                
-                # Write this chunk to zarr immediately
-                if len(chunk_results) > 0:
-                    try:
-                        # Get the output time for this chunk
-                        # Use aligned time from metadata (already computed)
-                        output_time = np.array([meta['output_time']], dtype='datetime64[ns]')
-                        
-                        logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
-                        # output_time holds exactly this chunk's single aggregated timestamp,
-                        # so its index into the store is chunk_idx itself (one chunk -> one
-                        # output frame here, unlike Step 3's multi-frame chunks).
-                        append_chunk_to_zarr(
-                            chunk_results=chunk_results,
-                            chunk_times=output_time,
-                            time_start=chunk_idx,
-                            mask_variables=mask_variables,
-                            output_path=output_path,
-                            logger=logger
-                        )
+                logger.info(f"Processing chunk {meta['chunk_idx'] + 1}/{total_chunks}: "
+                            f"time steps {meta['start_idx']}-{meta['end_idx'] - 1}")
+                finish_chunk(
+                    meta,
+                    first_attempt=future.result,
+                    # pure=False so a retry is a new task: with the default pure=True an identical
+                    # submit() returns the first attempt's cached result or exception (see
+                    # resolve_chunk_result).
+                    run_again=lambda meta=meta: submit(meta, pure=False).result(),
+                )
 
-                        # Update progress
-                        processed_this_chunk = len(chunk_results)
-                        total_processed += processed_this_chunk
-                        logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk} swath mask(s) written")
-                        
-                        # Free memory
-                        del chunk_results
-                        gc.collect()
-                        
-                    except Exception as e:
-                        logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
-                        traceback.print_exc()
-                        continue
-                else:
-                    logger.warning(f"No valid results for chunk {chunk_idx + 1}, skipping write")
-            
-            logger.info(f"Batch {batch_idx + 1}/{total_batches} complete: {total_processed}/{len(chunk_indices)} total chunks processed")
-    
+            logger.info(f"Batch {batch_idx + 1}/{total_batches} complete: "
+                        f"{int(written.sum())}/{len(chunk_indices)} frames written so far")
+
     else:
         # SERIAL MODE: Process chunks one at a time
         logger.info("Processing chunks in serial mode...")
-        
+
         for chunk_idx in chunk_indices:
-            # Time-aligned processing: get indices from time groups
-            aligned_time = output_times_list[chunk_idx]
-            # Convert numpy datetime64 to pandas Timestamp for dictionary lookup
-            aligned_time_pd = pd.Timestamp(aligned_time)
-            time_indices = time_groups[aligned_time_pd]
-            start_idx = int(time_indices[0])
-            end_idx = int(time_indices[-1]) + 1
-            output_time_val = aligned_time
-            
-            logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: time steps {start_idx}-{end_idx-1}")
-            
-            chunk_results = {}
-            time_str, result = process_timechunk_wrapper_zarr(
-                start_idx, end_idx, input_zarr_path, config,
-                verbose=False, store_offsets=store_offsets
-            )
-            # Same defensive retry as the parallel path - see is_result_degenerate()'s
-            # docstring. Not observed in serial mode during the audit, but cheap to guard
-            # consistently rather than assume serial is immune to every possible cause.
-            max_retries = 3
-            attempt = 0
-            while result is not None and time_str is not None and is_result_degenerate(result) and attempt < max_retries:
-                attempt += 1
-                logger.warning(
-                    f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) came back with "
-                    f"mcs_mask and cloud_types both entirely zero - not physically plausible for "
-                    f"a real 6-h window. Retrying ({attempt}/{max_retries})..."
-                )
-                time_str, result = process_timechunk_wrapper_zarr(
-                    start_idx, end_idx, input_zarr_path, config,
+            meta = chunk_meta(chunk_idx)
+            logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks}: "
+                        f"time steps {meta['start_idx']}-{meta['end_idx'] - 1}")
+
+            def run(meta=meta):
+                return process_timechunk_wrapper_zarr(
+                    meta['start_idx'], meta['end_idx'], input_zarr_path, config,
                     verbose=False, store_offsets=store_offsets
                 )
-            if result is not None and time_str is not None:
-                if is_result_degenerate(result):
-                    logger.error(
-                        f"Chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) still "
-                        f"all-zero after {max_retries} retries - leaving unwritten (zarr keeps "
-                        f"its NaN fill there) rather than accepting a result that's almost "
-                        f"certainly wrong. This needs manual follow-up."
-                    )
-                else:
-                    chunk_results[time_str] = result
-            else:
-                logger.warning(f"Skipping chunk {chunk_idx + 1} (time steps {start_idx}-{end_idx-1}) due to processing error")
-            
-            # Write this chunk to zarr immediately
-            if len(chunk_results) > 0:
-                try:
-                    # Get the output time for this chunk (aligned time)
-                    output_time = np.array([output_time_val], dtype='datetime64[ns]')
-                    
-                    logger.info(f"Writing chunk {chunk_idx + 1} to zarr...")
-                    # output_time holds exactly this chunk's single aggregated timestamp,
-                    # so its index into the store is chunk_idx itself (one chunk -> one
-                    # output frame here, unlike Step 3's multi-frame chunks).
-                    append_chunk_to_zarr(
-                        chunk_results=chunk_results,
-                        chunk_times=output_time,
-                        time_start=chunk_idx,
-                        mask_variables=mask_variables,
-                        output_path=output_path,
-                        logger=logger
-                    )
-                    
-                    # Update progress
-                    processed_this_chunk = len(chunk_results)
-                    total_processed += processed_this_chunk
-                    logger.info(f"Chunk {chunk_idx + 1} complete: {processed_this_chunk} swath mask(s) written")
-                    
-                    # Free memory
-                    del chunk_results
-                    gc.collect()
-                    
-                except Exception as e:
-                    logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
-                    traceback.print_exc()
-                    continue
-            else:
-                logger.warning(f"No valid results for chunk {chunk_idx + 1}, skipping write")
+            finish_chunk(meta, first_attempt=run, run_again=run)
 
-    logger.info(f"Stream processing complete: {total_processed}/{len(chunk_indices)} chunks written successfully")
-    return total_processed
+    n_written = int(written.sum())
+    logger.info(f"Stream processing complete: {n_written}/{len(chunk_indices)} chunks written successfully")
+    if empty:
+        logger.info(f"{len(empty)} window(s) had no valid pr or Tb and were left as NaN (expected, e.g. model "
+                    f"spin-up): {', '.join(r['time'] for r in empty[:10])}" + (" ..." if len(empty) > 10 else ""))
+    if partial:
+        logger.info(f"{len(partial)} window(s) had fewer than {full_steps} hourly steps and were averaged over "
+                    f"the steps present: {', '.join(r['time'] + ' (' + str(r['n_steps']) + ')' for r in partial[:10])}"
+                    + (" ..." if len(partial) > 10 else ""))
+    if failed:
+        logger.error(f"{len(failed)}/{len(chunk_indices)} frame(s) were NOT written and read back as NaN: "
+                     + "; ".join(f"{r['time']} [{r['reason']}]" for r in failed[:10]) + (" ..." if len(failed) > 10 else "")
+                     + ". Rerun Step 1 (or those windows) before using this store.")
+    return {'written': n_written, 'total': len(chunk_indices), 'failed': failed, 'empty': empty, 'partial': partial}
 
 #--------------------------------------------------------------------------------------------------
 def main():
@@ -1339,6 +1335,7 @@ def main():
         logger=logger,
     )
 
+    failed_frames = []  # windows that could not be computed or written; decides the exit status
     try:
         # Load the full dataset
         print(f"\nLoading full dataset...")
@@ -1368,7 +1365,7 @@ def main():
         
         except Exception as e:
             print(f"  ❌ Error loading dataset: {e}")
-            return
+            sys.exit(1)
         # Limit time steps for testing if requested
         if args.test_steps is not None:
             ds = ds.isel(time=slice(0, args.test_steps))
@@ -1427,7 +1424,7 @@ def main():
             )
 
             # Stream process with chunked zarr writing
-            total_processed = stream_process_to_zarr(
+            summary = stream_process_to_zarr(
                 time_coords=time_coords,  # Pass input time coords for processing
                 mask_variables=mask_variables,
                 output_path=out_zarr,
@@ -1442,13 +1439,16 @@ def main():
                 store_offsets=store_offsets,  # Per-store offset table for targeted reads
             )
             
-            logger.info(f"✅ Processing complete: {total_processed} chunks written to {out_zarr}")
+            total_processed = summary['written']
+            failed_frames = summary['failed']
+            logger.info(f"Processing finished: {total_processed}/{summary['total']} frames written to {out_zarr}"
+                        + (f", {len(failed_frames)} NOT written" if failed_frames else ""))
 
         except Exception as e:
             logger.error(f"Error writing chunked zarr: {e}")
             traceback.print_exc()
             print(f"  ❌ Error writing zarr: {e}")
-            return
+            sys.exit(1)
 
         # Calculate total processing time
         end_time = time.time()
@@ -1458,7 +1458,9 @@ def main():
         success_info = {
             'elapsed_time': elapsed_time,
             'out_zarr': out_zarr,
-            'total_processed': total_processed
+            'total_processed': total_processed,
+            'n_failed': len(failed_frames),
+            'n_empty': len(summary['empty']),
         }
 
 
@@ -1476,12 +1478,21 @@ def main():
         if 'success_info' in locals():
             elapsed = success_info['elapsed_time']
             print(f"\n{'='*80}")
-            print(f"✅ PROCESSING COMPLETE!")
+            if success_info['n_failed']:
+                print(f"❌ PROCESSING FINISHED WITH {success_info['n_failed']} FRAME(S) NOT WRITTEN (they read back as NaN)")
+            else:
+                print(f"✅ PROCESSING COMPLETE!")
             print(f"{'='*80}")
             print(f"Output: {success_info['out_zarr']}")
             print(f"Chunks processed: {success_info['total_processed']}")
+            if success_info['n_empty']:
+                print(f"Windows with no valid pr or Tb (left as NaN, expected): {success_info['n_empty']}")
             print(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
             print(f"{'='*80}\n")
+
+    # Non-zero exit status if any frame is missing, so a job script or a chained pipeline notices.
+    if failed_frames:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
