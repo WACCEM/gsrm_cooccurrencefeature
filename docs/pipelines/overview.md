@@ -27,11 +27,14 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Script: scripts/make_mcs_swath_masks.py
   └─ Input:  hourly MCS pixel masks + Tb + Precipitation (HEALPix zarr, catalog)
   └─ Output: /hackathon/mcs_masks/{source}_mcs_masks_hp8.zarr
-             (mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr)
+             (mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr, tot_pr)
+  └─ tot_pr is the window-mean total precipitation; every later step reads it
+     instead of a separate precipitation product
          |
          v
 [Step 2] Combined Tracking Mask Creation
   └─ Script: scripts/combine_tracking_masks.py
+     (IMERG: scripts/combine_era5_imerg_tracking_masks.py, AR/TC/ETC masks from ERA5)
   └─ Input:  Step 1 zarr  +  AR/TC/ETC NetCDF tracking files
   └─ Output: /hackathon/all_masks/{source}_allmasks_hp8_v1.zarr
              (mcs_mask, ar_mask, tc_mask, etc_mask)
@@ -41,7 +44,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Script: scripts/make_cooccurrence_masks.py
   └─ Input:  Step 2 zarr
   └─ Output: /hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr
-             (isolated masks, 2-way and 3-way overlap masks, cloud type precipitation)
+             (isolated masks, 2-way and 3-way overlap masks, cloud type precipitation, tot_pr)
 ```
 
 ---
@@ -54,7 +57,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          v
 [Step 4] Monthly Precipitation Statistics
   └─ Script: scripts/calc_monthly_rainmap_by_cof.py
-  └─ Input:  Step 3 zarr  +  precipitation (catalog or local zarr)
+  └─ Input:  Step 3 zarr (masks and tot_pr)
   └─ Output: /hackathon/cof_masks/stats/monthly/
              {source}_monthly_rainmap_cof_hp8_v1.nc
              (monthly precipitation, count, precipitating-hour maps
@@ -84,7 +87,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
 
 [Step 4b] Extreme Precipitation Attribution
   └─ Script: scripts/calc_stormtype_extreme_precip_spatial.py
-  └─ Input:  Step 3 zarr  +  Step 4a NetCDF  +  precipitation
+  └─ Input:  Step 3 zarr (masks and tot_pr)  +  Step 4a NetCDF
   └─ Output: /hackathon/extreme_precip/
              {source}_stormtype_spatial_{pxx}{date_suffix}.nc
              (per-cell counts, precipitation sums, and fractions
@@ -245,7 +248,7 @@ This pipeline uses the COF masks zarr (Step 3 of the shared upstream pipeline) t
 ── COF ANALYSES (1 & 2) ──────────────────────────────────────────────────────
 
 Hourly MCS pixel masks
-AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
+AR / TC / ETC NetCDF files          6-h precip. product (2a only)
           │                                       │
           ▼                                       │
    [Step 1] make_mcs_swath_masks.py               │

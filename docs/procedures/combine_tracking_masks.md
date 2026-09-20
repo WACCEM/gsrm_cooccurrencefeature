@@ -78,7 +78,7 @@ Output: zarr file with mcs_mask, ar_mask, tc_mask, etc_mask on common time grid
 The four feature datasets are loaded separately before any harmonization:
 
 **MCS dataset** is stored as a zarr store and opened directly:
-- Contains `mcs_mask` and cloud type variables from `make_mcs_swath_masks.py`
+- Contains `mcs_mask`, the cloud type variables and the total precipitation `tot_pr` from `make_mcs_swath_masks.py`
 - Opened with `mask_and_scale=False` to preserve integer track numbers
 
 **AR, TC, and ETC datasets** are stored as collections of NetCDF files (one per month or year) and are loaded by:
@@ -130,7 +130,7 @@ After merging, variables are renamed and cleaned up:
 | `AR_count_index` | `ar_mask` | AR track identification number |
 | `TC_count_index` | `tc_mask` | TC track identification number |
 | `ETC_int_tag` | `etc_mask` | ETC track identification number |
-| `pr` | *(dropped)* | Precipitation not needed in combined mask |
+| `pr` | *(dropped)* | Precipitation of the AR/TC/ETC files is not needed in the combined mask. The total precipitation from the MCS swath zarr is named `tot_pr` so that this rule does not drop it |
 | `ETC_binary_tag` | *(dropped)* | Superseded by `etc_mask` |
 | `sfcWind` | *(dropped)* | Not needed for co-occurrence analysis |
 
@@ -159,5 +159,8 @@ All variables are on the HEALPix `cell` dimension with a common 6-hourly time co
 | `ar_mask` | AR NetCDF | AR mask; pixel value = AR track/count index (0 = no AR) |
 | `tc_mask` | TC NetCDF | TC mask; pixel value = TC track number (0 = no TC) |
 | `etc_mask` | ETC NetCDF | ETC mask; pixel value = ETC integer tag (0 = no ETC) |
+| `cloud_types`, `dc_pr`, `st_pr`, `nd_pr`, `dz_pr`, `tot_pr` | MCS swath zarr | Cloud types, cloud-type precipitation and total precipitation, carried through unchanged (see [mcs_swath_cloud_type.md](mcs_swath_cloud_type.md)) |
+
+For IMERG the AR, TC and ETC masks come from ERA5 rather than from the model tracking files, and this step is done by `scripts/combine_era5_imerg_tracking_masks.py`, which has no command-line options and carries the same variables through.
 
 This combined dataset is the direct input to the co-occurrence feature (COF) identification procedure described in [cof_identification.md](cof_identification.md).

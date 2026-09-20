@@ -15,12 +15,13 @@ These two scripts together produce spatial maps of extreme precipitation attribu
 
 1. **Threshold computation** (`calc_extreme_precip_thresholds.py`): for each HEALPix cell, compute the $N$th-percentile precipitation over the full analysis period. This yields a spatially varying threshold $\tau_p(x)$ that defines what counts as "extreme" locally.
 
-2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to the storm type category it belongs to. The underlying COF masks are constructed so that each grid cell belongs to at most one category in the large majority of cases (see the note under Step 4), so this assignment is usually unambiguous; a priority order is applied as a deterministic tie-break for the residual cases where a cell could otherwise match more than one category. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file.
+2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to the storm type category it belongs to. The underlying COF masks are constructed so that each grid cell belongs to at most one category in the large majority of cases (see the note under Step 4), so this assignment is usually unambiguous; a priority order is applied as a deterministic tie-break for the residual cases where a cell could otherwise match more than one category. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file. The precipitation used in this stage is `tot_pr`, stored in the COF mask zarr next to the masks and the cloud types (see [monthly_precip_by_cof.md](monthly_precip_by_cof.md)); `calc_monthly_rainmap_by_cof.py` applies the same priority order, so its categories add up to the total precipitation.
 
-The analysis uses three independent input datasets:
-- **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`
-- **Percentile threshold file** (`{source_name}_precip_percentiles_6h_hp8_v1.nc`): output of `calc_extreme_precip_thresholds.py`
-- **Precipitation dataset**: intake catalog or pre-regridded local zarr (same sources as the monthly precipitation script)
+The attribution uses two input datasets:
+- **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`, which also carries the total precipitation `tot_pr` (mm h⁻¹, written by `make_mcs_swath_masks.py`)
+- **Percentile threshold file** (`{source_name}_precip_percentiles_6h_hp8_v1.nc`): output of `calc_extreme_precip_thresholds.py`, computed from a 6-hourly precipitation product (intake catalog or pre-regridded local zarr)
+
+**Status of the two precipitation definitions (September 2026).** The attribution takes the precipitation from the COF store (`tot_pr`), while the threshold script still computes thresholds from each source's own 6-hourly product. In a one-month comparison the two definitions give the same thresholds for UM, IMERG and CASESM2 (median ratio 1.000). They differ for ICON (`tot_pr`-based thresholds are 0.56-0.88 times the product-based ones at high and northern mid-latitudes, where the ICON product counted snow twice) and for SCREAM (`tot_pr`-based thresholds are 21-25% higher at the median, and more in the tropics and at high latitudes). The SCREAM 6-hourly product is built from a different, smoother 3-hourly data stream than Step 1's hourly one, is liquid only, and its windows are offset by about 3 h from Step 1's. A full-record comparison decides whether the thresholds of all sources are recomputed from `tot_pr`.
 
 ---
 
@@ -47,11 +48,11 @@ Output: {source}_precip_percentiles_6h_hp8_v1.nc
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STAGE 2: calc_stormtype_extreme_precip_spatial.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Input: COF mask zarr  +  percentile threshold file  +  precipitation
+Input: COF mask zarr (masks, cloud types, tot_pr)  +  percentile threshold file
          |
          v
-[Step 1] Load COF masks, percentile thresholds, precipitation
-[Step 2] Align calendars; select common time steps; optional date range subset
+[Step 1] Load COF masks with tot_pr and percentile thresholds (stop if tot_pr is missing)
+[Step 2] Optional date range subset
          |
          v
 [Step 3] For each percentile (P90, P95, ...):
@@ -85,7 +86,7 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 - **Stage 1, Steps 3–4 — Percentile Computation:** Precipitation is optionally resampled to a target time duration (default: retain 6-hourly resolution), then the $N$th percentile is computed independently at each HEALPix cell across all time steps using `xarray.quantile` with NaN-skipping. The result is a spatially varying threshold map.
 
-- **Stage 2, Steps 1–2 — Data Loading and Alignment:** The COF mask zarr, threshold file, and precipitation dataset are loaded and aligned to a common time coordinate, handling calendar differences between model outputs and applying an optional analysis date range.
+- **Stage 2, Steps 1–2 — Data Loading:** The COF mask zarr (with `tot_pr`) and the threshold file are loaded and an optional analysis date range is applied. Masks and precipitation share one time axis, so no calendar conversion or time intersection with a separate precipitation product is needed.
 
 - **Stage 2, Steps 3–4 — Time-Step Attribution:** For each time step, cells where precipitation exceeds the local percentile threshold are identified, then each extreme cell is assigned to the storm type category it belongs to. Because the COF masks are constructed to be mutually exclusive at each grid cell in the large majority of cases, this assignment is usually determined directly by which category's mask the cell falls in, not by the order categories are checked; a priority order (highest-order COF first) is applied only to deterministically resolve the residual cases where a cell could match more than one category, ensuring every extreme event is still counted exactly once.
 
@@ -129,14 +130,13 @@ NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95
 
 ### Step 1 — Data Loading
 
-Three datasets are loaded:
-- **COF masks**: `{source_name}_cofmasks_hp8_v1.zarr` from `/pscratch/sd/w/wcmca1/hackathon/cof_masks/`
+Two datasets are loaded:
+- **COF masks and precipitation**: `{source_name}_cofmasks_hp8_v1.zarr` from `/pscratch/sd/w/wcmca1/hackathon/cof_masks/`. The precipitation is the variable `tot_pr`; the script stops with a message if the store has none (rerun Steps 1-3 with the current scripts).
 - **Percentile thresholds**: `{source_name}_precip_percentiles_6h_hp8_v1.nc` from `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`
-- **Precipitation**: same catalog/local zarr sources as `calc_monthly_rainmap_by_cof.py`
 
-### Step 2 — Calendar and Time Alignment
+### Step 2 — Time Range
 
-The mask dataset calendar is converted to match the precipitation dataset if they differ, then a common time intersection is taken. An optional analysis date range is applied, consistent with the `start_datetime`/`end_datetime` values in `config_sources.yaml`.
+An optional analysis date range is applied, consistent with the `start_datetime`/`end_datetime` values in `config_sources.yaml`. The masks and `tot_pr` are already on the same time axis.
 
 ### Step 3 — Extreme Cell Identification
 
@@ -154,7 +154,7 @@ This mutual exclusivity is not, however, a mathematically guaranteed invariant o
 
 - A feature track can independently satisfy co-occurrence criteria with two different partner feature types without those two partners themselves being linked (three-way promotion currently only triggers when an ETC track bridges an AR pairing and an MCS pairing; the same check is not made for an MCS or AR track bridging two other pairings).
 - Two tracks of different feature types can physically share pixels while their *mutual* overlap fraction stays below the threshold needed to register a co-occurrence pair, leaving both classified as isolated despite the spatial overlap.
-- An MCS track with tropical cyclone (TC) overlap below the MCS-TC removal threshold retains all of its pixels, including any that coincide with TC pixels (AR and ETC do not have this gap, since they are excluded from TC pixels unconditionally at the pixel level, not by an overlap-fraction threshold).
+- An MCS track with tropical cyclone (TC) overlap below the MCS-TC removal threshold retains all of its pixels, including any that coincide with TC pixels; the MCS-TC test is applied once, in Step 1, and Step 3 only logs it (AR and ETC do not have this gap, since they are excluded from TC pixels unconditionally at the pixel level, not by an overlap-fraction threshold).
 
 For the residual cells affected by these situations, the priority order below acts as a deterministic tie-break — it does not represent a scientific ranking of storm-type importance, only a fixed convention (favoring three-way, then two-way, then isolated co-occurrence structure) that ensures every extreme event is still counted exactly once. Cloud types (priorities 9–12) are unaffected by any of this: they are unconditionally excluded from all eight tracked-feature categories, so the priority order between a tracked feature and a cloud type is always inert. As an optional diagnostic, the fraction of extreme cells affected by the three situations above (cells where more than one candidate category's mask is true before priority resolution) can be quantified directly from the intermediate masks in `process_single_timestep()`, to report a concrete rate rather than a qualitative "rare."
 
@@ -185,6 +185,8 @@ For each storm type $c$, counts and precipitation amounts are summed over all $N
 $$\text{count}_c(x) = \sum_{t=1}^{N_t} \mathbf{1}[E(t,x) \text{ and assigned to } c]$$
 $$\text{precip}_c(x) = \sum_{t=1}^{N_t} P(t,x) \cdot \mathbf{1}[E(t,x) \text{ and assigned to } c]$$
 
+where $P(t,x)$ is `tot_pr`.
+
 ### Step 6 — Precipitation Fraction
 
 The fraction of extreme precipitation attributed to storm type $c$ at cell $x$ is:
@@ -192,6 +194,8 @@ The fraction of extreme precipitation attributed to storm type $c$ at cell $x$ i
 $$f_c(x) = \frac{\text{precip}_c(x)}{\text{precip}_{\text{total}}(x)}$$
 
 where $\text{precip}_{\text{total}}(x) = \sum_c \text{precip}_c(x)$ is the total extreme precipitation at that cell. Cells with zero total extreme precipitation are assigned a fraction value of 0.0 in the output — including `unassigned_frac`. Downstream consumers that need a true residual/unassigned category should read `unassigned_frac` directly (rather than re-deriving it as `1 - sum(other fractions)`) and mask cells where `total_extreme_count == 0`, since at those cells every `{type}_frac` is 0.0, not undefined.
+
+Because `tot_pr` is the precipitation the cloud types were classified with, `unassigned` is close to zero: 0.000% of the 60°S-60°N extreme precipitation for the five model sources in the test months, and 0.05% for IMERG, where some windows have no IR brightness temperature and therefore no cloud type. In the earlier production files, which took the precipitation from a separate product, it was 0.1-0.3%.
 
 ---
 
@@ -219,6 +223,6 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | HEALPix zoom | 8 | Spatial resolution |
 | Percentiles | P90 | One output file per percentile |
 | Time duration | 6h | Time resolution for threshold calculation |
-| Min precipitation filter | 0.01 mm h⁻¹ | Exclude near-zero values from threshold computation |
+| Min precipitation filter | 0.01 mm h⁻¹ (script default) | Exclude near-zero values from threshold computation. `run_all_extreme_precip_thresholds.sh` passes 0.1 mm h⁻¹, which is what the existing threshold files record |
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |
