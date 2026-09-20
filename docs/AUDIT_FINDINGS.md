@@ -85,10 +85,11 @@ directory.
    (`mcs_iso` + `mcs_ar_etc`) is at least 45% of E; an AR in both the MCS-AR and AR-ETC lists at least 15%; an MCS in both MCS-AR and MCS-ETC 8%; MCS-ETC plus 3-way 9%.
    At track level (per 6-h frame): an AR is in both MCS-AR and AR-ETC lists at 0.26 per frame (4.4% of AR track-frames, 367 of 1577 frames); an MCS in both
    MCS-AR and MCS-ETC at 0.18 per frame (0.13% of MCS track-frames); an ETC bridging MCS-ETC and AR-ETC never (the existing promotion to 3-way works);
-   an MCS in a 2-way and a 3-way list never. Options, none applied (they change definitions or per-category counts, so they need your decision):
+   an MCS in a 2-way and a 3-way list never. Options (they change definitions or per-category counts, so they need a decision):
    (A) also promote to 3-way when an AR or an MCS, not only an ETC, bridges two pairings, which removes the AR and MCS double-membership cases (about a quarter of E);
    (B) make "isolated" exclusive of 3-way footprints in Step 3, so that the per-category counts agree with what the priority order already does to the totals
    (targets the largest piece, 45% of E, and is not ambiguous); (C) leave Step 3 and keep the priority order in the consumers, as now.
+   **Decision (2026-09-19): option C.** Step 3 is left unchanged for this round and the priority order stays in the consumers. To be followed up after this round, with A and B still open.
 2. **Extreme thresholds.** `calc_extreme_precip_thresholds.py` still uses each source's 6-hourly product while the attribution uses `tot_pr`.
    One-month comparison (thresholds from `tot_pr` / from the product): UM, IMERG and CASESM2 identical (median ratio 1.000); NICAM same mean, per-cell
    correlation 0.94; ICON 0.56-0.88 at high and northern mid-latitudes (snow counted twice in the product); SCREAM 1.21-1.25 at the median.
