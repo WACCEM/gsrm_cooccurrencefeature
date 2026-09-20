@@ -50,7 +50,7 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def load_dataset(catalog_path, location, source, catalog_params, vars_to_include):
+def load_dataset(catalog_path, location, source, catalog_params, vars_to_include, time_label='start'):
     """
     Load dataset from intake catalog.
     
@@ -64,6 +64,18 @@ def load_dataset(catalog_path, location, source, catalog_params, vars_to_include
         Source identifier (e.g., 'nicam_gl11')
     catalog_params : dict
         Parameters to pass to the catalog source (e.g., zoom, time)
+    vars_to_include : list
+        Variables to keep
+    time_label : str
+        How the time stamps relate to the interval they represent.
+        'start' (default): the stamp is at the start of the interval, or the field is instantaneous; nothing is changed.
+        'end': the stamp is at the END of an averaging interval, e.g. the SCREAM scream_ne120 3-hourly means (the first
+        stamp is 2019-08-01 03:00, the mean of 00-03). The stamps are moved to the middle of their interval, in the
+        model's own calendar and before any conversion to standard dates. Binning the centres by 6-h windows then puts
+        every mean in the window it belongs to: the window labelled T covers [T, T+6h), the window Step 1
+        (make_mcs_swath_masks.py) aggregates over. Without this, the window labelled T holds the means stamped T and T+3h and
+        covers [T-3h, T+3h). Doing the shift before the calendar conversion keeps the two means that straddle a
+        calendar gap (a missing Feb 29 in a noleap calendar) in the same window.
     
     Returns:
     --------
@@ -83,6 +95,13 @@ def load_dataset(catalog_path, location, source, catalog_params, vars_to_include
 
     # Select only the variables of interest
     ds = ds[vars_to_include]
+
+    if time_label == 'end':
+        half_interval = (ds.time.values[1] - ds.time.values[0]) / 2
+        logger.info(f"  Time stamps are at the END of their interval: moving them back by {half_interval} to the interval centres")
+        ds = ds.assign_coords(time=ds.time.values - half_interval)
+    elif time_label != 'start':
+        raise ValueError(f"time_label must be 'start' or 'end', got {time_label!r}")
 
     # Determine calendar types and convert if needed
     # ds_calendar_type = type(ds.time.values[0]).__name__
@@ -186,6 +205,15 @@ def coarsen_data(ds, output_freq='6h', target_hours=[0, 6, 12, 18], rechunk_afte
     #         ds_resampled = ds_resampled.chunk(chunk_dict)
     
     # Get sample times for logging (this only loads coordinate metadata, not data)
+    # Completeness of the windows, from the time stamps alone: xarray's mean() silently averages whatever stamps a bin
+    # holds and returns all-NaN for an empty bin (e.g. a calendar gap such as a missing Feb 29).
+    if len(times) > 1:
+        n_expected = int(round(pd.Timedelta(output_freq) / (times[1] - times[0])))
+        counts = pd.Series(1, index=times).resample(output_freq, offset=offset_str, label='left', closed='left').count()
+        n_partial = int(((counts > 0) & (counts < n_expected)).sum())
+        n_empty = int((counts == 0).sum())
+        logger.info(f"   Stamps per output window: expected {n_expected}; {n_partial} partial window(s), {n_empty} empty window(s) of {len(counts)}")
+
     sample_times = pd.DatetimeIndex(ds_resampled.time.values)
     logger.info(f"   First few times: {sample_times[:min(6, len(sample_times))].strftime('%Y-%m-%d %H:%M').tolist()}")
     logger.info(f"   Last few times: {sample_times[-min(4, len(sample_times)):].strftime('%Y-%m-%d %H:%M').tolist()}")
@@ -249,13 +277,18 @@ def main():
     # Temporal aggregation settings
     output_freq = '6h'  # Target frequency: 6-hourly
     target_hours = [0, 6, 12, 18]  # Align to these hours
+    # scream_ne120 is a 3-hourly MEAN stamped at the END of each interval, so 'end' makes the window labelled T
+    # cover [T, T+6h) like Step 1's windows (see load_dataset). Use 'start' for instantaneous or start-stamped input.
+    time_label = 'end'
     
     # Output configuration
     zoom = catalog_params['zoom']
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/NICAM_pr6h_z{zoom}.zarr"
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/um_glm_n2560_RAL3p3_pr6h_z{zoom}.zarr"
     # output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_pr6h_z{zoom}.zarr"
-    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/scream/scream_pr6h_z{zoom}.zarr"
+    # New name on purpose: scream_pr6h_z{zoom}.zarr is the earlier product, whose window labelled T covers
+    # [T-3h, T+3h), and it is still read by other scripts.
+    output_zarr = f"/pscratch/sd/w/wcmca1/hackathon/healpix/scream/scream_pr6h_z{zoom}_aligned.zarr"
     
     # Dask configuration
     use_parallel = True
@@ -291,7 +324,7 @@ def main():
     logger.info("\n" + "="*80)
     logger.info("Step 2: Loading dataset")
     logger.info("="*80)
-    ds = load_dataset(catalog_path, location, source, catalog_params, vars_to_include)
+    ds = load_dataset(catalog_path, location, source, catalog_params, vars_to_include, time_label=time_label)
     logger.info(f"   Dataset loaded lazily (Dask-backed): {type(ds.pr.data)}")
 
     # Get the HEALPix zoom level to calculate proper cell chunk size
