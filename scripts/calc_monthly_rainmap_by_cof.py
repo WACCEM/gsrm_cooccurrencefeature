@@ -300,6 +300,26 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         # Total precipitation is Step 1's window-mean tot_pr, from the same hourly data as the cloud types
         precipitation = chunk_ds['tot_pr']
 
+        # Priority-exclusive category assignment, in the same order as calc_stormtype_extreme_precip_spatial.py:
+        # 3-way > 2-way (mcs_ar, mcs_etc, ar_etc) > isolated (mcs, ar, etc) > TC. Each pixel and time step is counted
+        # in at most one of these eight categories. Needed because the Step 3 category masks are not disjoint: a
+        # track can sit in two pair lists, and an "isolated" object can lie inside a 3-way category's whole
+        # footprint, so summing the masks as they are counts some precipitation twice.
+        assigned = xr.zeros_like(mcs_mask, dtype=bool)
+        sel = {}
+        for name, flag in [
+            ('mcs_ar_etc', mcs_ar_etc_3way_mask > 0),
+            ('mcs_ar', mcs_ar_2way_mask > 0),
+            ('mcs_etc', mcs_etc_2way_mask > 0),
+            ('ar_etc', ar_etc_2way_mask > 0),
+            ('mcs_iso', mcs_isolated_mask > 0),
+            ('ar_iso', ar_isolated_mask > 0),
+            ('etc_iso', etc_isolated_mask > 0),
+            ('tc', tc_mask > 0),
+        ]:
+            sel[name] = flag & ~assigned
+            assigned = assigned | sel[name]
+
         # Compute total precipitation - multiply by time interval to get mm
         chunk_totprecip = (precipitation * time_interval).sum(dim='time')
 
@@ -316,43 +336,43 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         chunk_etc_count_sum = (etc_mask > 0).sum(dim='time')
         chunk_etc_pcp_count_sum = (precipitation.where(etc_mask > 0) > pcp_thresh).sum(dim='time')
 
-        # Co-occurrence features
-        chunk_mcs_ar_pcp_sum = (precipitation.where(mcs_ar_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_ar_count_sum = (mcs_ar_2way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_pcp_count_sum = (precipitation.where(mcs_ar_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        # Co-occurrence features (priority-exclusive, see sel above)
+        chunk_mcs_ar_pcp_sum = (precipitation.where(sel['mcs_ar']) * time_interval).sum(dim='time')
+        chunk_mcs_ar_count_sum = sel['mcs_ar'].sum(dim='time')
+        chunk_mcs_ar_pcp_count_sum = (precipitation.where(sel['mcs_ar']) > pcp_thresh).sum(dim='time')
 
-        chunk_mcs_etc_pcp_sum = (precipitation.where(mcs_etc_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_etc_count_sum = (mcs_etc_2way_mask > 0).sum(dim='time')
-        chunk_mcs_etc_pcp_count_sum = (precipitation.where(mcs_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_etc_pcp_sum = (precipitation.where(sel['mcs_etc']) * time_interval).sum(dim='time')
+        chunk_mcs_etc_count_sum = sel['mcs_etc'].sum(dim='time')
+        chunk_mcs_etc_pcp_count_sum = (precipitation.where(sel['mcs_etc']) > pcp_thresh).sum(dim='time')
 
-        chunk_ar_etc_pcp_sum = (precipitation.where(ar_etc_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_ar_etc_count_sum = (ar_etc_2way_mask > 0).sum(dim='time')
-        chunk_ar_etc_pcp_count_sum = (precipitation.where(ar_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_ar_etc_pcp_sum = (precipitation.where(sel['ar_etc']) * time_interval).sum(dim='time')
+        chunk_ar_etc_count_sum = sel['ar_etc'].sum(dim='time')
+        chunk_ar_etc_pcp_count_sum = (precipitation.where(sel['ar_etc']) > pcp_thresh).sum(dim='time')
 
-        chunk_mcs_ar_etc_pcp_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_ar_etc_count_sum = (mcs_ar_etc_3way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_etc_pcp_count_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_ar_etc_pcp_sum = (precipitation.where(sel['mcs_ar_etc']) * time_interval).sum(dim='time')
+        chunk_mcs_ar_etc_count_sum = sel['mcs_ar_etc'].sum(dim='time')
+        chunk_mcs_ar_etc_pcp_count_sum = (precipitation.where(sel['mcs_ar_etc']) > pcp_thresh).sum(dim='time')
 
-        # Isolated features
+        # Isolated features (priority-exclusive)
         # Compute statistics for MCS - multiply by time interval to get mm
-        chunk_mcs_iso_pcp_sum = (precipitation.where(mcs_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_iso_count_sum = (mcs_isolated_mask > 0).sum(dim='time')
-        chunk_mcs_iso_pcp_count_sum = (precipitation.where(mcs_isolated_mask > 0) > pcp_thresh).sum(dim='time')
-        
-        # Compute statistics for AR - multiply by time interval to get mm
-        chunk_ar_iso_pcp_sum = (precipitation.where(ar_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_ar_iso_count_sum = (ar_isolated_mask > 0).sum(dim='time')
-        chunk_ar_iso_pcp_count_sum = (precipitation.where(ar_isolated_mask > 0) > pcp_thresh).sum(dim='time')
-        
-        # Compute statistics for ETC - multiply by time interval to get mm
-        chunk_etc_iso_pcp_sum = (precipitation.where(etc_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_etc_iso_count_sum = (etc_isolated_mask > 0).sum(dim='time')
-        chunk_etc_iso_pcp_count_sum = (precipitation.where(etc_isolated_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_iso_pcp_sum = (precipitation.where(sel['mcs_iso']) * time_interval).sum(dim='time')
+        chunk_mcs_iso_count_sum = sel['mcs_iso'].sum(dim='time')
+        chunk_mcs_iso_pcp_count_sum = (precipitation.where(sel['mcs_iso']) > pcp_thresh).sum(dim='time')
 
-        # Compute statistics for TC - multiply by time interval to get mm
-        chunk_tc_pcp_sum = (precipitation.where(tc_mask > 0) * time_interval).sum(dim='time')
-        chunk_tc_count_sum = (tc_mask > 0).sum(dim='time')
-        chunk_tc_pcp_count_sum = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
+        # Compute statistics for AR - multiply by time interval to get mm
+        chunk_ar_iso_pcp_sum = (precipitation.where(sel['ar_iso']) * time_interval).sum(dim='time')
+        chunk_ar_iso_count_sum = sel['ar_iso'].sum(dim='time')
+        chunk_ar_iso_pcp_count_sum = (precipitation.where(sel['ar_iso']) > pcp_thresh).sum(dim='time')
+
+        # Compute statistics for ETC - multiply by time interval to get mm
+        chunk_etc_iso_pcp_sum = (precipitation.where(sel['etc_iso']) * time_interval).sum(dim='time')
+        chunk_etc_iso_count_sum = sel['etc_iso'].sum(dim='time')
+        chunk_etc_iso_pcp_count_sum = (precipitation.where(sel['etc_iso']) > pcp_thresh).sum(dim='time')
+
+        # Compute statistics for TC (priority-exclusive: TC pixels not already assigned to a category above)
+        chunk_tc_pcp_sum = (precipitation.where(sel['tc']) * time_interval).sum(dim='time')
+        chunk_tc_count_sum = sel['tc'].sum(dim='time')
+        chunk_tc_pcp_count_sum = (precipitation.where(sel['tc']) > pcp_thresh).sum(dim='time')
         
         # Cloud types (exclude all feature masks)
         # Create combined feature mask (binary: 1 if any feature present, 0 otherwise)
@@ -527,6 +547,7 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         del chunk_etc_pcp_sum, chunk_etc_count_sum, chunk_etc_pcp_count_sum
         del chunk_tc_pcp_sum, chunk_tc_count_sum, chunk_tc_pcp_count_sum
         del chunk_ds, mcs_isolated_mask, ar_isolated_mask, etc_isolated_mask, tc_mask, precipitation
+        del sel, assigned
         del chunk_mcs_iso_pcp_sum, chunk_mcs_iso_count_sum, chunk_mcs_iso_pcp_count_sum
         del chunk_ar_iso_pcp_sum, chunk_ar_iso_count_sum, chunk_ar_iso_pcp_count_sum
         del chunk_etc_iso_pcp_sum, chunk_etc_iso_count_sum, chunk_etc_iso_pcp_count_sum
@@ -801,6 +822,11 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
             "tot_pr from Step 1 (make_mcs_swath_masks.py): window-mean of the hourly precipitation the cloud types "
             "were classified with; each source's own pr field only, frozen precipitation ignored"
         ),
+        'category_assignment': (
+            "Priority-exclusive per grid cell and time step: mcs_ar_etc > mcs_ar > mcs_etc > ar_etc > mcs_iso > "
+            "ar_iso > etc_iso > tc; cloud types (dc, nd, st, dz) lie outside all features. These twelve categories "
+            "add up to the total precipitation. mcs/ar/etc_precipitation are all-instances totals and overlap them."
+        ),
     }
 
     # Create output dataset
@@ -842,7 +868,7 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['etc_precipitation_count'].attrs['units'] = 'count'
 
     # TC attributes
-    dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation'
+    dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation (not already assigned to a higher-priority category)'
     dsout['tc_precipitation'].attrs['units'] = 'mm'
     dsout['tc_count'].attrs['long_name'] = 'Number of time steps TC is present'
     dsout['tc_count'].attrs['units'] = 'count'
@@ -936,6 +962,11 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['dz_count'].attrs['long_name'] = 'Number of time steps drizzle cloud is present'
     dsout['dz_count'].attrs['units'] = 'count'
     dsout['dz_count'].attrs['cloud_type_value'] = 4
+
+    # Mark the priority-exclusive categories (see process_month_chunked)
+    for name in ['mcs_ar_etc', 'mcs_ar', 'mcs_etc', 'ar_etc', 'mcs_iso', 'ar_iso', 'etc_iso', 'tc']:
+        for suffix in ['precipitation', 'count', 'precipitation_count']:
+            dsout[f'{name}_{suffix}'].attrs['assignment'] = 'priority-exclusive'
 
     # Save the output file
     fillvalue = np.nan
@@ -1076,6 +1107,23 @@ def subset_time_range(ds, start_datetime_str, end_datetime_str, logger=None):
     
     return ds_subset
 
+def check_budget_closure(results, logger, tol=1e-3):
+    """Warn if the twelve categories do not add up to the total precipitation in any wet cell of a month."""
+    keys = ['mcs_iso', 'ar_iso', 'etc_iso', 'tc', 'mcs_ar', 'mcs_etc', 'ar_etc', 'mcs_ar_etc', 'dc', 'nd', 'st', 'dz']
+    for r in results:
+        total = np.nan_to_num(r['totprecip'].values.astype('float64'))
+        cats = sum(np.nan_to_num(r[f'{k}_precip'].values.astype('float64')) for k in keys)
+        wet = total > 1.0  # mm per month; skip essentially dry cells
+        rel = np.abs(total - cats)[wet] / total[wet]
+        worst = float(rel.max()) if rel.size else 0.0
+        # Domain total shows how much precipitation is unattributed overall; the worst cell can be large from a single
+        # window without a cloud type (e.g. missing IR brightness temperature in observations).
+        resid = 100 * float(total[wet].sum() - cats[wet].sum()) / max(float(total[wet].sum()), 1e-12)
+        log = logger.warning if worst > tol else logger.info
+        log(f"{r['time']:%Y-%m}: categories vs total precipitation, worst wet cell differs by {100 * worst:.4f}%, "
+            f"domain total differs by {resid:.4f}%" + (" - budget does not close" if worst > tol else ""))
+
+
 def main():
     # Set up logging
     setup_logging()
@@ -1185,6 +1233,9 @@ def main():
                 # Process directly without Dask
                 result = process_month_chunked(month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
                 results.append(result)
+
+        # Confirm the categories add up to the total precipitation
+        check_budget_closure(results, logger)
 
         # Write output to NetCDF file
         write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger)
