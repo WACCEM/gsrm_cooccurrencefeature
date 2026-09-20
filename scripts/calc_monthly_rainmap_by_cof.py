@@ -4,6 +4,7 @@ from pathlib import Path
 # Add src directory to path for zarr_tools import
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 from zarr_tools import setup_dask_client
+from cof_paths import data_root
 import yaml
 import xarray as xr
 import pandas as pd
@@ -1160,12 +1161,13 @@ def main():
     start_datetime = config.get('start_datetime')
     end_datetime = config.get('end_datetime')
 
-    # Input combined mask file
-    in_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
+    # Input combined mask file (under the pipeline data root, see src/cof_paths.py)
+    data_dir = data_root(logger)
+    in_dir = f"{data_dir}cof_masks/"
     in_basename = f"{source_name}_cofmasks_hp{zoom}_{version}.zarr"
     in_zarr = f"{in_dir}{in_basename}"
 
-    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/stats/monthly/"
+    output_dir = f"{data_dir}cof_masks/stats/monthly/"
     os.makedirs(output_dir, exist_ok=True)
     output_filename = f"{output_dir}{source_name}_monthly_rainmap_cof_hp{zoom}_{version}.nc"
 

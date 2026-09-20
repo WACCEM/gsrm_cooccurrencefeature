@@ -16,6 +16,7 @@ import easygems.healpix as egh
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import setup_dask_client, initialize_zarr_store, append_chunk_to_zarr
+from src.cof_paths import data_root
 from src.utilities import convert_cftime_to_standard_calendar
 from src.mcs_tc_filter import filter_mcs_tc_overlaps, MCS_TC_FILTER_THRESHOLD
 from pyflextrkr.ft_utilities import load_config
@@ -1283,8 +1284,8 @@ def main():
     # Strip trailing year-range suffix (e.g., IMERGv7_2019_2021 -> IMERGv7)
     source_name = re.sub(r'_20\d{2}_20\d{2}$', '', source_name)
 
-    # Output paths
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/mcs_masks/"
+    # Output paths (under the pipeline data root, see src/cof_paths.py)
+    out_dir = f"{data_root(logger)}mcs_masks/"
     out_basename = f"{source_name}_mcs_masks_hp{zoom}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)

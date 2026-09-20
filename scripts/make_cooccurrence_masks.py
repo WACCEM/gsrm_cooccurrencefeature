@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import stream_process_to_zarr, initialize_zarr_store, setup_dask_client
+from src.cof_paths import data_root
 from src.mcs_tc_filter import filter_mcs_tc_overlaps, MCS_TC_FILTER_THRESHOLD
 
 warnings.filterwarnings('ignore')
@@ -1166,10 +1167,12 @@ def main():
     source_name = config.get("source_name")
     # source_name = args.source
 
-    root_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
+    # Input and output paths (under the pipeline data root, see src/cof_paths.py)
+    data_dir = data_root(logger)
+    root_dir = f"{data_dir}all_masks/"
     in_dir = f"{root_dir}/{source_name}_allmasks_hp8_v1.zarr"
     # Output co-occurrence feature masks path
-    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
+    output_dir = f"{data_dir}cof_masks/"
     output_path = f"{output_dir}/{source_name}_cofmasks_hp8_v1.zarr"
     # Output ETC statistics output path
     output_stats_path = f"{output_dir}/stats/"

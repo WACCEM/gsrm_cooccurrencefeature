@@ -26,6 +26,8 @@ import easygems.healpix as egh
 from dask.distributed import Client, progress
 import dask
 from dask.diagnostics import ProgressBar
+sys.path.append(str(Path(__file__).parent.parent))
+from src.cof_paths import data_root
 
 warnings.filterwarnings('ignore')
 
@@ -644,8 +646,9 @@ def parse_args():
                        help='End date (YYYY-MM-DD). If not specified, uses full dataset')
     
     parser.add_argument('--output_dir', type=str,
-                       default='/pscratch/sd/w/wcmca1/hackathon/extreme_precip',
-                       help='Output directory for NetCDF files')
+                       default=None,
+                       help='Output directory for NetCDF files (default: extreme_precip/ under the pipeline data root, '
+                            'see src/cof_paths.py; production unless COF_DATA_ROOT is set)')
     
     parser.add_argument('--n_workers', type=int, default=8,
                        help='Number of Dask workers for parallel processing')
@@ -670,6 +673,11 @@ def main():
     # Setup logging
     setup_logging()
     logger = logging.getLogger(__name__)
+
+    # The masks and thresholds are read from, and the results written to, the pipeline data root (src/cof_paths.py)
+    root_dir = data_root(logger)
+    if args.output_dir is None:
+        args.output_dir = f"{root_dir}extreme_precip"
     
     print("="*80)
     print("SPATIAL STORM TYPE ATTRIBUTION FOR EXTREME PRECIPITATION")
@@ -688,7 +696,6 @@ def main():
     source_name = config.get('source_name')
     
     # Load storm masks
-    root_dir = "/pscratch/sd/w/wcmca1/hackathon/"
     mask_dir = f"{root_dir}/cof_masks/{source_name}_cofmasks_hp8_v1.zarr"
     
     print(f"\n📂 Loading storm masks from: {mask_dir}")

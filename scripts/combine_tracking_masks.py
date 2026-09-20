@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from src.zarr_tools import zoom_level_from_nside, write_zarr, setup_dask_client
+from src.cof_paths import data_root
 from src.utilities import convert_to_matching_calendar
 
 #-------------------------------------------------------------------
@@ -260,14 +261,15 @@ def main():
     n_workers = 16
     threads_per_worker = 4
     
-    # Input/output paths
-    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
+    # Input/output paths (under the pipeline data root, see src/cof_paths.py)
+    root_dir = data_root(logger)
+    dir_mcs = f"{root_dir}mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
     basename_ar = f"AR_tracks_{source_te}_{source_res}."
     basename_tc = f"TC_test_tracks_{source_te}_{source_res}."
     basename_etc = f"ETC_test_tracks_{source_te}_{source_res}."
 
     # Output paths
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
+    out_dir = f"{root_dir}all_masks/"
     out_basename = f"{source_name}_allmasks_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)
