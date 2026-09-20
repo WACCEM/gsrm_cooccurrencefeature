@@ -186,9 +186,19 @@ in all five sources. The IMERG frames are the same in the old and new run at eve
 **IMERG does not close to zero.** The domain residual over the 36 months is +0.14% at 60S-60N (production -2.28%), +0.05% to +0.60% per month (largest in 2019-01 to 2019-05), and single wet cells reach
 up to 100% in the worst month. The notebook fractions are +0.16% land / +0.14% ocean at 60S-60N. The cause is in Step 1, not in Steps 2-3 or the monthly script: the Step 1 store is identical to production, and
 at cells that have a cloud type outside the MCS swath `dc+st+nd+dz` differs from `tot_pr` by up to 16.7 mm/h in single frames, with 472,591 pixel-frames (0.014% of all) that have rain but no cloud type.
-By the classification code, an hour with rain and no cloud type outside an MCS can only be one whose Tb is missing (all four conditions compare `tb` with the threshold). I could not open the
-IMERG input store by hand to confirm the Tb NaN fraction, so this is inferred from the code and not measured. If confirmed, the fix is a decision about what to do with rain at missing-Tb pixels (for example
-put it in a separate "no Tb" category or count it as drizzle/non-deep), not a change in the closure logic. Nothing was changed for it.
+By the classification code, an hour with rain and no cloud type outside an MCS can only be one whose Tb is missing (all four conditions compare `tb` with the threshold). Measured afterwards on the
+input Step 1 actually reads, `IR_IMERG_V7_1H_zoom8_20190101_20211231.zarr` (Step 1 overrides the config's `zoom: 9` with the mask zoom, `make_mcs_swath_masks.py` line 1272): between 60S and 60N `precipitation`
+is never NaN, and `Tb` is NaN in 0.30% of cell-hours; in a sample of every third day, 0.33% of the in-band rain falls on NaN-Tb cells, and the monthly share follows the monthly residual (r = 0.85; the share
+is 0.06% to 1.2% per month, largest in 2019-01 to 2019-05, 2019-09, 2020-02, 2021-09 and 2021-12). The share is larger than the residual, presumably because part of that rain lies inside MCS swaths, where it is attributed
+to the MCS whatever Tb is; that part was not checked. The fix is a decision about what to do with rain at missing-Tb pixels (for example put it in a separate "no Tb" category or count it as drizzle/non-deep),
+not a change in the closure logic. Nothing was changed for it.
+
+**IMERG input coverage.** The Step 1 input has data only within 59.87S-59.87N: poleward of 60 both `Tb` and `precipitation` are NaN in every cell and hour (not zero). Step 1 turns missing hours into zero
+(`tot_pr` is the sum with NaN as 0 over the hours present), so `tot_pr` is 0 there and the `tot_pr`-based thresholds are empty poleward of 60 (no wet sample). The existing IMERG thresholds were built from
+`IMERG_V7_6H_zoom8_20190101_20211231.zarr` (`calc_extreme_precip_thresholds.py`, the non-IR IMERG product, built from `IMERG_V7_1H_zoom9`), which has data at all latitudes (rain frequency 10% at 60-70N, 3-6% at
+70-90N); within 60S-60N it is the same field as `tot_pr` (same window labels; at the same label r = 0.9998 and sum ratio 1.0000, at the neighbouring windows r = 0.43). No chunk is missing in either store (3288 of 3288
+per variable in the IR 1H zoom-8 store, none zero-byte or truncated; 549 of 549 in the non-IR 6H store). The IR 1H zoom-9 store, which the config names, has lost `.zgroup`, `.zattrs`, `.zmetadata` and the per-array
+`.zarray` files (chunk file count is complete, 13152 per variable) and cannot be opened by zarr as it is; Step 1 does not read it.
 
 **Thresholds and attribution, `tot_pr`-based against the existing files (median ratio; unassigned share of extreme precipitation at 60S-60N, production | new code with existing thresholds | new code with `tot_pr` thresholds):**
 
