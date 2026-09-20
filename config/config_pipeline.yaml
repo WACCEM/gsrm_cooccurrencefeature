@@ -1,0 +1,129 @@
+---
+# Registry of the sources and steps run by scripts/run_cof_pipeline.py (Analyses 1 and 2).
+#
+# Steps, in the order of the dependency graph (see docs/procedures/run_cof_pipeline.md):
+#   s1          make_mcs_swath_masks.py               mcs_masks/{name}_mcs_masks_hp8.zarr            (needs the hourly MCS mask store)
+#   s2          combine_tracking_masks.py             all_masks/{name}_allmasks_hp8_v1.zarr          (IMERG: combine_era5_imerg_tracking_masks.py)
+#   s3          make_cooccurrence_masks.py            cof_masks/{name}_cofmasks_hp8_v1.zarr
+#   monthly     calc_monthly_rainmap_by_cof.py        cof_masks/stats/monthly/{name}_monthly_rainmap_cof_hp8_v1.nc      (Analysis 1)
+#   thresholds  calc_extreme_precip_thresholds.py     extreme_precip/{name}_precip_percentiles_6h_hp8_v1.nc             (Analysis 2)
+#   attribution calc_stormtype_extreme_precip_spatial.py  extreme_precip/{name}_stormtype_spatial_p90.nc, ..._p95.nc   (Analysis 2)
+# s1 -> s2 -> s3 -> monthly;  s3 + thresholds -> attribution;  thresholds needs s1 when it reads Step 1's tot_pr and nothing when
+# it reads an input store of its own (IMERG).
+#
+# 'slots' are CPU slots (workers x threads) that a step takes from the runner's budget while it runs; 'est_min' is the wall time
+# measured in the full test run (2026-09-19, one node, five chains at once) and only orders the work and feeds --dry-run: the
+# runner starts the longest remaining chain first. Change a number here to change how a source is run; adding a source needs
+# no code change.
+
+defaults:
+  python: /global/common/software/m1867/python/hackathon/bin/python
+  # Threads of numerical libraries inside each worker: one, as in the test runs, so that ~200 workers do not oversubscribe the node
+  env:
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+  # AR/TC/ETC masks of IMERG (from ERA5, already on the HEALPix grid). The CFS copy is the durable one (identical to the pscratch copy)
+  era5_zarr: /global/cfs/cdirs/wcm_shr/hk25/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr
+  # Thresholds: percentiles, the wet-window threshold that production used (the script's own default is 0.01), and the cells
+  # per block of the quantile (about 5 GB peak per task, so that several sources can compute thresholds together)
+  percentiles: [90, 95]
+  min_precip_threshold: 0.1
+  threshold_cell_chunk_size: 131072
+  # Sources and steps are killed after this many minutes (a hung Dask cluster); generous, the longest step takes about 50 min
+  timeout_min: {s1: 240, s2: 60, s3: 150, monthly: 90, thresholds: 90, attribution: 120}
+
+steps:
+  s1:          {slots: 24, est_min: 25}
+  s2:          {slots: 16, est_min: 1}
+  s3:          {slots: 24, est_min: 9}
+  monthly:     {slots: 48, est_min: 2}      # 12 workers x 4 threads
+  thresholds:  {slots: 8,  est_min: 4, env: {DASK_NUM_WORKERS: "8"}}
+  attribution: {slots: 24, est_min: 7}
+
+sources:
+  IMERGv7:
+    aliases: [IR_IMERG, imerg]
+    config_key: IR_IMERG                   # key in config_sources.yaml
+    source_name: IMERGv7                   # names the product files
+    mcs_config: config_mcs_tbpf_IMERGv7.yml
+    step2: era5_imerg                      # AR/TC/ETC from ERA5, not from tracking files
+    # Thresholds from the non-IR 6-hourly IMERG store: same field as tot_pr within 60S-60N (bit for bit the production thresholds),
+    # and data at all latitudes (the IR-based tot_pr is 0 poleward of 60)
+    thresholds:
+      input_zarr: /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20190101_20211231.zarr
+      input_var: precipitation
+    # Other input stores to check before the run (the IR store that Step 1 reads Tb and precipitation from)
+    check_stores: [/pscratch/sd/w/wcmca1/GPM/healpix/IR_IMERG_V7_1H_zoom8_20190101_20211231.zarr]
+    steps:
+      s1:          {slots: 48, est_min: 46}
+      s2:          {slots: 32, est_min: 1}
+      s3:          {slots: 32, est_min: 21}
+      monthly:     {est_min: 3}
+      thresholds:  {est_min: 5}
+      attribution: {est_min: 17}
+
+  scream:
+    aliases: [scream_ne120]
+    config_key: scream_ne120
+    source_name: scream
+    mcs_config: config_mcs_tbpf_scream.yml
+    step2: tracks
+    thresholds: {from_step1: true}         # tot_pr of Step 1
+    steps:
+      s1:          {slots: 32, est_min: 23}
+      s3:          {est_min: 10}
+      monthly:     {est_min: 2}
+      attribution: {est_min: 7}
+
+  icon_d3hp003:
+    aliases: [icon]
+    config_key: icon_d3hp003
+    source_name: icon_d3hp003
+    mcs_config: config_mcs_tbpf_icon_d3hp003.yml
+    step2: tracks
+    thresholds: {from_step1: true}
+    steps:
+      s1:          {est_min: 25}
+      s3:          {est_min: 10}
+      monthly:     {est_min: 2}
+      attribution: {est_min: 7}
+
+  nicam_gl11:
+    aliases: [nicam]
+    config_key: nicam_gl11
+    source_name: nicam_gl11
+    mcs_config: config_mcs_tbpf_nicam_gl11.yml
+    step2: tracks
+    thresholds: {from_step1: true}
+    steps:
+      s1:          {est_min: 24}
+      s3:          {est_min: 9}
+      monthly:     {est_min: 2}
+      attribution: {est_min: 7}
+
+  um_glm_n2560_RAL3p3:
+    aliases: [um]
+    config_key: um_glm_n2560_RAL3p3
+    source_name: um_glm_n2560_RAL3p3
+    mcs_config: config_mcs_tbpf_um_glm_n2560_RAL3p3.yml
+    step2: tracks
+    thresholds: {from_step1: true}
+    steps:
+      s1:          {est_min: 27}
+      s3:          {est_min: 9}
+      monthly:     {est_min: 2}
+      attribution: {est_min: 8}
+
+  casesm2_10km_nocumulus:
+    aliases: [casesm2]
+    config_key: casesm2_10km_nocumulus
+    source_name: casesm2_10km_nocumulus
+    mcs_config: config_mcs_tbpf_casesm2_10km_nocumulus.yml
+    step2: tracks
+    thresholds: {from_step1: true}
+    steps:
+      s1:          {est_min: 24}
+      s3:          {est_min: 9}
+      monthly:     {est_min: 2}
+      attribution: {est_min: 7}
