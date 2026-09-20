@@ -256,8 +256,9 @@ def _iso(t):
 def git_state():
     try:
         head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--", "scripts", "src", "config"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-        return head + (" (uncommitted changes in scripts/src/config)" if dirty else "")
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "scripts", "src", "config"], cwd=REPO,
+                               capture_output=True, text=True).stdout.strip()
+        return head + (" (tracked files in scripts/src/config have uncommitted changes)" if dirty else "")
     except Exception:  # noqa: BLE001
         return "unknown"
 
