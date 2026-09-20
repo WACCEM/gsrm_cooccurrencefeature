@@ -334,6 +334,40 @@ def compute_mean_precip_by_cloud_type(cloud_types_timeseries, pr_timeseries):
     return dc_pr, st_pr, nd_pr, dz_pr
 
 #--------------------------------------------------------------------------------------------------
+def remove_pr_where_tb_missing(pr, tb):
+    """
+    Set the precipitation to NaN at every pixel and hour where Tb is missing.
+
+    Without Tb a pixel cannot be classified (there is no cloud type), so its rain would be counted in tot_pr but
+    in no category and would show up as a residual. Removing it here, before anything is derived from pr,
+    makes tot_pr and dc/st/nd/dz_pr see the same NaN (a missing hour counts as zero with the same divisor),
+    so the budget closes. Where Tb is valid nothing changes. The sources whose Tb comes from OLR are missing Tb
+    only where pr is missing too, so this changes nothing for them; the IR-IMERG Tb has gaps (about 0.3% of
+    the cell-hours within 60S-60N, and about 0.3% of the rain fell there).
+
+    Parameters:
+    -----------
+    pr : xarray.DataArray
+        Precipitation (time, cell), mm/h
+    tb : xarray.DataArray
+        Brightness temperature on the same (time, cell) grid
+
+    Returns:
+    --------
+    (pr_masked, stats) : the masked precipitation and a dict with
+        'px_hours'     : pixel-hours that had rain (> 0) and no Tb
+        'rain_removed' : that rain, summed over pixels and hours (mm/h; HEALPix cells have equal area)
+        'rain_total'   : all rain before the removal, summed the same way
+    """
+    no_tb = tb.isnull()
+    stats = {
+        'px_hours': int(((pr > 0) & no_tb).sum()),
+        'rain_removed': float(pr.where(no_tb).sum()),
+        'rain_total': float(pr.sum()),
+    }
+    return pr.where(~no_tb), stats
+
+#--------------------------------------------------------------------------------------------------
 def add_tb_pr_to_dataset(_ds, config):
     """
     Add brightness temperature (tb) and precipitation (pr) variables to a dataset chunk.
@@ -360,7 +394,8 @@ def add_tb_pr_to_dataset(_ds, config):
     Returns:
     --------
     _ds : xarray.Dataset
-        Dataset with added 'tb' and 'pr' variables
+        Dataset with added 'tb' and 'pr' variables. 'pr' is NaN wherever 'tb' is missing (see
+        remove_pr_where_tb_missing); what that removed is in _ds.attrs['tb_gap'].
     """
     # Extract config values
     catalog_file = config['catalog_file']
@@ -443,10 +478,14 @@ def add_tb_pr_to_dataset(_ds, config):
     else:
         tb = olr_to_tb(ds_p[varname_olr])
     
+    # Rain at pixels whose Tb is missing cannot be classified, so it is removed before anything is derived from pr
+    pr, tb_gap = remove_pr_where_tb_missing(pr, tb)
+
     # 5. Add precipitation & tb to the dataset
     _ds = _ds.sel(time=common_times)
     _ds["pr"] = pr
     _ds["tb"] = tb
+    _ds.attrs['tb_gap'] = tb_gap
 
     return _ds
 
@@ -793,8 +832,9 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
         for _s in open_stores:
             _s.close()
         
-        # Add tb and pr variables to the dataset chunk
+        # Add tb and pr variables to the dataset chunk (pr is removed where Tb is missing)
         _ds = add_tb_pr_to_dataset(_ds, config)
+        tb_gap = _ds.attrs.pop('tb_gap', None)
         # Add the TC track mask so process_timechunk_swath can exclude TC-contaminated
         # MCS tracks before cloud-type classification (see add_tc_mask_to_dataset's
         # docstring and src/mcs_tc_filter.py). Config controls this per-source; a source
@@ -810,7 +850,10 @@ def process_timechunk_wrapper_zarr(start_idx, end_idx, zarr_path, config, verbos
         
         # Process this time chunk (all times in the chunk)
         timestep_results = process_timechunk_swath(_ds, verbose=verbose)
-        
+        # Not a mask variable (the zarr writer only takes the names in mask_variables): what the removal of rain
+        # at missing-Tb pixels took out of this window, summed up by stream_process_to_zarr().
+        timestep_results['tb_gap'] = tb_gap
+
         # Explicit cleanup
         del _ds
         gc.collect()
@@ -976,6 +1019,8 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
                     they are left as NaN
         'partial' : same records for windows written from fewer hourly steps than a full window
                     (the mean is over the steps present)
+        'tb_gap'  : rain removed at pixels with missing Tb, summed over the written windows
+                    ('px_hours', 'rain_removed', 'rain_total', 'windows'; see remove_pr_where_tb_missing)
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -991,6 +1036,8 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
 
     written = np.zeros(total_chunks, dtype=bool)
     failed, empty, partial = [], [], []
+    # Rain removed at pixels with missing Tb, summed over the written windows (see remove_pr_where_tb_missing)
+    tb_gap_total = {'px_hours': 0, 'rain_removed': 0.0, 'rain_total': 0.0, 'windows': 0}
 
     def chunk_meta(chunk_idx):
         aligned_time = output_times_list[chunk_idx]
@@ -1050,6 +1097,12 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
             return
 
         written[chunk_idx] = True
+        gap = result.get('tb_gap')
+        if gap:
+            tb_gap_total['px_hours'] += gap['px_hours']
+            tb_gap_total['rain_removed'] += gap['rain_removed']
+            tb_gap_total['rain_total'] += gap['rain_total']
+            tb_gap_total['windows'] += int(gap['px_hours'] > 0)
         if meta['n_steps'] < full_steps:
             partial.append(record)
         logger.info(f"Chunk {chunk_idx + 1} complete: 1 swath mask(s) written" + (f" ({detail})" if detail else ""))
@@ -1127,6 +1180,10 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
 
     n_written = int(written.sum())
     logger.info(f"Stream processing complete: {n_written}/{len(chunk_indices)} chunks written successfully")
+    share = 100.0 * tb_gap_total['rain_removed'] / tb_gap_total['rain_total'] if tb_gap_total['rain_total'] > 0 else 0.0
+    logger.info(f"Rain at pixels with missing Tb was removed before classification: {tb_gap_total['px_hours']:,} pixel-hours with "
+                f"rain in {tb_gap_total['windows']} window(s), {share:.3f}% of the total rain (nothing to remove is expected "
+                f"for sources whose Tb comes from OLR)")
     if empty:
         logger.info(f"{len(empty)} window(s) had no valid pr or Tb and were left as NaN (expected, e.g. model "
                     f"spin-up): {', '.join(r['time'] for r in empty[:10])}" + (" ..." if len(empty) > 10 else ""))
@@ -1138,7 +1195,8 @@ def stream_process_to_zarr(time_coords, mask_variables, output_path,
         logger.error(f"{len(failed)}/{len(chunk_indices)} frame(s) were NOT written and read back as NaN: "
                      + "; ".join(f"{r['time']} [{r['reason']}]" for r in failed[:10]) + (" ..." if len(failed) > 10 else "")
                      + ". Rerun Step 1 (or those windows) before using this store.")
-    return {'written': n_written, 'total': len(chunk_indices), 'failed': failed, 'empty': empty, 'partial': partial}
+    return {'written': n_written, 'total': len(chunk_indices), 'failed': failed, 'empty': empty, 'partial': partial,
+            'tb_gap': tb_gap_total}
 
 #--------------------------------------------------------------------------------------------------
 def main():
