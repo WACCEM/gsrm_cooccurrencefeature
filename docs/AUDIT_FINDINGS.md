@@ -164,3 +164,45 @@ drop (MCS-AR-ETC 11.0% -> 9.5%, TC 3.9% -> 3.0%). With thresholds from `tot_pr` 
 non-deep convective from 5.2% to 6.9%. The Step 3 overlap on this store is in follow-up 1.
 
 Is `make_mcs_swath_masks.py` ready for the other sources? Yes. The SCREAM record ran end to end with exit 0 in every stage (24 min in total on the node; Step 1 15.5 min at 48 workers) and no retry was needed in 1578 windows, so retries under a real failure are covered by the injection tests only. Steps 1-3 use the same code for the other sources; all six Step 1 configs carry TC settings.
+
+## Full-scale re-process of the other five sources (2026-09-19/20, nid004150; test area, production untouched)
+
+Same committed code and procedure as SCREAM (`pyflex-dev`, redirected copies, Steps 1-3 and the monthly script chained; IMERG Step 2 is
+`combine_era5_imerg_tracking_masks.py`). Outputs are in `/pscratch/sd/w/wcmca1/hackathon/tmp/full_reprocess/`; thresholds from Step 1's `tot_pr` are in
+`/pscratch/sd/w/wcmca1/hackathon/extreme_precip_cof/`, and the production files were not touched. All stages exited 0 for every source. Only `pr` is used (frozen
+precipitation is ignored), so the UM Step 1 fields differ from production where production had added `prs` (92-99% of the differing cells are poleward of 40 degrees).
+
+| Source | Windows | Step 1 vs production | Monthly closure | Notebook residual, \|lat\|<=60, land / ocean, before -> after | Total precipitation new / old |
+|---|---|---|---|---|---|
+| ICON | full record | identical | worst wet cell <= 0.00006%, residual 0.0000% | +8.48% / +2.83% -> 0.0000% | 0.959 (0.737 in W. China/Russia: the snow counted twice is gone) |
+| NICAM | full record | identical apart from 2020-03-01T00 (formerly dropped) | 0.0000% | -0.78% / -2.32% -> 0.0000% | 1.000 |
+| CASESM2 | full record | identical apart from 2020-03-01T00 (formerly dropped) | 0.0000% | -0.13% / -0.64% -> 0.0000% | 1.000 |
+| UM | 1576 frames | differs from production where production added `prs` | worst wet cell 0.00005%, 0.0000% | -35.41% / -4.72% -> 0.0000% | 1.000 |
+| IMERG | 4384 (36 months) | identical apart from 2019-03-16T00 (formerly dropped) | **not zero**, see below | -0.69% / -2.54% -> +0.16% / +0.14% | 1.000 |
+
+The NICAM and CASESM2 frame 2020-03-01T00 becomes valid in Step 1 and is dropped by Step 2 in both the old and the new run, so the frame ledger (Step 1 -> Step 2 -> Step 3 -> monthly) is unchanged
+in all five sources. The IMERG frames are the same in the old and new run at every stage.
+
+**IMERG does not close to zero.** The domain residual over the 36 months is +0.14% at 60S-60N (production -2.28%), +0.05% to +0.60% per month (largest in 2019-01 to 2019-05), and single wet cells reach
+up to 100% in the worst month. The notebook fractions are +0.16% land / +0.14% ocean at 60S-60N. The cause is in Step 1, not in Steps 2-3 or the monthly script: the Step 1 store is identical to production, and
+at cells that have a cloud type outside the MCS swath `dc+st+nd+dz` differs from `tot_pr` by up to 16.7 mm/h in single frames, with 472,591 pixel-frames (0.014% of all) that have rain but no cloud type.
+By the classification code, an hour with rain and no cloud type outside an MCS can only be one whose Tb is missing (all four conditions compare `tb` with the threshold). I could not open the
+IMERG input store by hand to confirm the Tb NaN fraction, so this is inferred from the code and not measured. If confirmed, the fix is a decision about what to do with rain at missing-Tb pixels (for example
+put it in a separate "no Tb" category or count it as drizzle/non-deep), not a change in the closure logic. Nothing was changed for it.
+
+**Thresholds and attribution, `tot_pr`-based against the existing files (median ratio; unassigned share of extreme precipitation at 60S-60N, production | new code with existing thresholds | new code with `tot_pr` thresholds):**
+
+| Source | Median ratio P90 / P95 | Cells differing > 10% (P90) | Unassigned P90 | Extreme total vs production, existing thr. / `tot_pr` thr. (P90) |
+|---|---|---|---|---|
+| SCREAM | 1.19 / 1.24 | 73.9% | 0.192% \| 0.000% \| 0.000% | 1.387 / 1.155 |
+| ICON | 1.01 / 1.01 | 44.8% | 0.218% \| 0.000% \| 0.000% | 0.988 / 0.965 |
+| NICAM | 1.00 / 1.00 | 19.1% | 0.234% \| 0.000% \| 0.000% | 1.003 / 1.000 |
+| UM | 1.00 / 1.00 | 2.5% | 0.102% \| 0.000% \| 0.000% | 1.001 / 1.003 |
+| CASESM2 | 1.00 / 1.00 | 0.0% | 0.281% \| 0.000% \| 0.000% | 1.000 / 1.000 |
+| IMERG | 1.00 / 1.00 | 0.3% | 0.176% \| 0.016% \| 0.016% | 1.000 / 1.000 |
+
+Only SCREAM (its thresholds came from the 6-hourly product built from another data stream) and, to a lower degree, ICON (snow in `tot_pr`) have thresholds that move with `tot_pr`. For NICAM, UM, CASESM2
+and IMERG the existing thresholds are already what `tot_pr` gives. Shares sum to 1 and type counts add up to `total_extreme_count` in every source (validation: PASS x5). No decision to adopt the `tot_pr` thresholds has been made.
+
+**Correction to an earlier note.** The first attempt to run the five chains at once ended when the Slurm job died (exit 137). I first attributed this to memory exhaustion. A measurement on the next node
+(24 workers = 14 GB resident; five chains together = 131 GB of 503 GB) does not support that, so the cause of that loss is unknown. The runs afterwards were staggered and completed without incident.
