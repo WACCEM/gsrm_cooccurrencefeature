@@ -21,7 +21,7 @@ The attribution uses two input datasets:
 - **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`, which also carries the total precipitation `tot_pr` (mm h⁻¹, written by `make_mcs_swath_masks.py`)
 - **Percentile threshold file** (`{source_name}_precip_percentiles_6h_hp8_v1.nc`): output of `calc_extreme_precip_thresholds.py`, computed from a 6-hourly precipitation product (intake catalog or pre-regridded local zarr)
 
-**Status of the two precipitation definitions (September 2026).** The attribution takes the precipitation from the COF store (`tot_pr`), while the threshold script still computes thresholds from each source's own 6-hourly product. In a one-month comparison the two definitions give the same thresholds for UM, IMERG and CASESM2 (median ratio 1.000). They differ for ICON (`tot_pr`-based thresholds are 0.56-0.88 times the product-based ones at high and northern mid-latitudes, where the ICON product counted snow twice) and for SCREAM. For SCREAM the full record (1578 windows, P90 / P95) confirms it: `tot_pr`-based thresholds are 1.19 / 1.24 times the existing ones at the median, 1.28-1.44 in the tropics and 1.10-1.15 at mid-latitudes, and 74% / 78% of the cells differ by more than 10%. The SCREAM 6-hourly product is built from a 3-hourly data stream whose spatial processing differs from Step 1's hourly one (see `docs/AUDIT_FINDINGS.md`), is liquid only, and its windows were offset by about 3 h from Step 1's (corrected in the new file `scream_pr6h_z8_aligned.zarr`, which the thresholds do not use). The thresholds of the other sources are to be compared once their Step 1 is reprocessed; the decision on recomputing them all from `tot_pr` is open.
+**Thresholds from `tot_pr` (adopted 2026-09-20).** The attribution takes the precipitation from the COF store (`tot_pr`), so the thresholds are computed from the same field: Step 1's window-mean `tot_pr`, through `calc_extreme_precip_thresholds.py --input_zarr <data root>/mcs_masks/{source}_mcs_masks_hp8.zarr --input_var tot_pr`. IMERG is the exception: its thresholds come from the non-IR 6-hourly IMERG store (`IMERG_V7_6H_zoom8_20190101_20211231.zarr`, `--input_var precipitation`), which is the same field as `tot_pr` within 60S-60N (window labels identical, correlation 0.9998 at the same label, sum ratio 1.0000; the thresholds equal the earlier production file bit for bit) and has data at all latitudes, whereas the IR-based `tot_pr` is 0 poleward of 60 (the IR input store covers 59.87S-59.87N; poleward of that `Tb` and `precipitation` are NaN). Full-record comparison of the `tot_pr`-based thresholds with the thresholds of each source's own 6-hourly product (median ratio P90 / P95; share of cells differing by more than 10% at P90): SCREAM 1.19 / 1.24 (74%), ICON 1.01 / 1.01 (45%), NICAM 1.00 / 1.00 (19%), UM 1.00 / 1.00 (2.5%), CASESM2 1.00 / 1.00 (0%), IMERG 1.00 / 1.00 (0.3%). SCREAM differs because its 6-hourly product is built from a 3-hourly data stream whose spatial processing differs from Step 1's hourly one (see `docs/AUDIT_FINDINGS.md`), is liquid only, and its windows were offset by about 3 h from Step 1's (corrected in the new file `scream_pr6h_z8_aligned.zarr`, which the thresholds no longer use); ICON's product counted snow twice. The pipeline runner (`docs/procedures/run_cof_pipeline.md`) passes these inputs.
 
 ---
 
@@ -31,14 +31,15 @@ The attribution uses two input datasets:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STAGE 1: calc_extreme_precip_thresholds.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Input: precipitation (catalog or local zarr)
+Input: --input_zarr (Step 1's tot_pr; IMERG: the non-IR 6-hourly store)
+       or, without it, the source's own 6-hourly precipitation (catalog or local zarr)
          |
          v
 [Step 1] Load and convert precipitation to mm/h
-[Step 2] Apply minimum precipitation threshold (default: 0.01 mm/h)
+[Step 2] Apply minimum precipitation threshold (script default 0.01 mm/h; the pipeline runner passes 0.1)
          └─ Values below threshold set to NaN (excluded from percentile)
 [Step 3] Optionally resample to target time duration (default: 6h)
-[Step 4] Compute quantile across all time steps at each cell
+[Step 4] Compute quantile across all time steps at each cell, in blocks of cells
          └─ e.g., 90th, 95th percentile
          |
          v
@@ -98,7 +99,18 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 ### Input
 
-Precipitation loaded identically to other scripts: from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹.
+Two ways to give the precipitation:
+
+- **`--input_zarr STORE`** (used by the pipeline): any Zarr store on the HEALPix grid, for any source; its zoom must match `--zoom` (checked). `--input_var` names the variable
+  (default: the config's `varname_precip_liq`); when it is given the field is used as it is, with no frozen precipitation added and `--input_factor` defaulting to 1, because a named
+  variable such as `tot_pr` is already in mm h⁻¹. A guard rejects an input whose domain-mean precipitation is outside 0.001-20 mm h⁻¹ (a wrong variable or factor). All time steps of the store are used unless
+  `--start_time` / `--end_time` are given (the config's dates apply only to the normal input). The variable, the factor, the period and the number of frames are written into the file
+  (`input_zarr`, `input_var`, `input_factor`, `frames_in_input`, `precipitation_source`).
+- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it).
+
+The quantiles are taken in blocks of cells (`--cell_chunk_size`, or sized from the available memory and the store's chunk width), which bounds the memory when several sources run on one node; the values equal
+xarray's `quantile` up to float32 round-off. The helpers come from `calc_extreme_precip_thresholds_1h.py`, whose way of making 6-hourly values from hourly ones (threshold the hourly values, then
+average the wet hours) is not used here: it is a different quantity from `tot_pr`.
 
 ### Minimum Precipitation Filter
 
@@ -195,7 +207,7 @@ $$f_c(x) = \frac{\text{precip}_c(x)}{\text{precip}_{\text{total}}(x)}$$
 
 where $\text{precip}_{\text{total}}(x) = \sum_c \text{precip}_c(x)$ is the total extreme precipitation at that cell. Cells with zero total extreme precipitation are assigned a fraction value of 0.0 in the output — including `unassigned_frac`. Downstream consumers that need a true residual/unassigned category should read `unassigned_frac` directly (rather than re-deriving it as `1 - sum(other fractions)`) and mask cells where `total_extreme_count == 0`, since at those cells every `{type}_frac` is 0.0, not undefined.
 
-Because `tot_pr` is the precipitation the cloud types were classified with, `unassigned` is close to zero: 0.000% of the 60°S-60°N extreme precipitation for the five model sources in the test months, and 0.05% for IMERG, where some windows have no IR brightness temperature and therefore no cloud type. In the earlier production files, which took the precipitation from a separate product, it was 0.1-0.3%.
+Because `tot_pr` is the precipitation the cloud types were classified with, `unassigned` is zero: 0.000% of the 60°S-60°N extreme precipitation at P90 and P95 for all six sources over the full records (IMERG included, since Step 1 removes the rain at pixels with missing Tb; before that rule it was 0.016%). In the earlier production files, which took the precipitation from a separate product, it was 0.10-0.32%.
 
 ---
 
@@ -223,6 +235,6 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | HEALPix zoom | 8 | Spatial resolution |
 | Percentiles | P90 | One output file per percentile |
 | Time duration | 6h | Time resolution for threshold calculation |
-| Min precipitation filter | 0.01 mm h⁻¹ (script default) | Exclude near-zero values from threshold computation. `run_all_extreme_precip_thresholds.sh` passes 0.1 mm h⁻¹, which is what the existing threshold files record |
+| Min precipitation filter | 0.01 mm h⁻¹ (script default) | Exclude near-zero values from threshold computation. `run_all_extreme_precip_thresholds.sh` and the pipeline runner pass 0.1 mm h⁻¹, which is what the existing threshold files record |
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |

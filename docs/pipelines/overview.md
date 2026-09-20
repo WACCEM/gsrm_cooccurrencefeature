@@ -28,8 +28,9 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Input:  hourly MCS pixel masks + Tb + Precipitation (HEALPix zarr, catalog)
   └─ Output: /hackathon/mcs_masks/{source}_mcs_masks_hp8.zarr
              (mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr, tot_pr)
-  └─ tot_pr is the window-mean total precipitation; every later step reads it
-     instead of a separate precipitation product
+  └─ tot_pr is the window-mean total precipitation; every later step, and the
+     extreme-precipitation thresholds, read it instead of a separate precipitation
+     product. Rain at pixels with missing Tb is removed first (it cannot be classified).
          |
          v
 [Step 2] Combined Tracking Mask Creation
@@ -45,6 +46,17 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Input:  Step 2 zarr
   └─ Output: /hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr
              (isolated masks, 2-way and 3-way overlap masks, cloud type precipitation, tot_pr)
+```
+
+### Running Steps 1–4 for all sources in one go
+
+`scripts/run_cof_pipeline.py` runs every step of Analyses 1 and 2 for any set of sources in dependency order on one node (Step 1 → 2 → 3 → monthly
+map; Step 1 → thresholds, Step 3 + thresholds → attribution), so a full re-process needs one allocation instead of one queue wait per step. It writes
+under a `--data-root` (a test area or production), skips finished steps with `--resume` and never overwrites outputs it did not create without `--force`.
+See [procedures/run_cof_pipeline.md](../procedures/run_cof_pipeline.md).
+
+```bash
+bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/round2 [--sources scream icon] [--analysis 1|2]
 ```
 
 ---
@@ -80,7 +92,8 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          v
 [Step 4a] Precipitation Percentile Threshold Computation
   └─ Script: scripts/calc_extreme_precip_thresholds.py
-  └─ Input:  precipitation (catalog or local zarr)
+  └─ Input:  --input_zarr: Step 1's tot_pr (models) or the non-IR 6-hourly IMERG store (IMERG);
+             without it, each source's own 6-hourly precipitation (catalog or local zarr)
   └─ Output: /hackathon/extreme_precip/
              {source}_precip_percentiles_6h_hp8_v1.nc
              (per-cell P90, P95, ... thresholds; shape: cell)
@@ -248,7 +261,7 @@ This pipeline uses the COF masks zarr (Step 3 of the shared upstream pipeline) t
 ── COF ANALYSES (1 & 2) ──────────────────────────────────────────────────────
 
 Hourly MCS pixel masks
-AR / TC / ETC NetCDF files          6-h precip. product (2a only)
+AR / TC / ETC NetCDF files          2a input: tot_pr / IMERG 6-h 
           │                                       │
           ▼                                       │
    [Step 1] make_mcs_swath_masks.py               │

@@ -132,8 +132,8 @@ Each model's own precipitation field is used as it is, and no separate frozen (s
 
 | Source | Field used in Step 1 | Contains |
 |--------|---------------------|----------|
-| IMERG | `precipitation` | The IMERG precipitation estimate |
-| SCREAM | hourly `pr` (`precip_total_surf_mass_flux`) | Total including snow; hourly values that behave like snapshots valid at their time stamp (the catalog calls the stream instantaneous) |
+| IMERG | `precipitation` | The IMERG precipitation estimate; rain at pixels with missing Tb is removed in Step 1 (Tb has gaps, about 0.3% of the rain) |
+| SCREAM | hourly `pr` (`precip_total_surf_mass_flux`) | Total including snow |
 | ICON | `pr` | Total including snow (`prs` is its snow part and is not added) |
 | NICAM | `pr` | Single precipitation field |
 | UM | `pr` | Rain only (stratiform rainfall flux) |

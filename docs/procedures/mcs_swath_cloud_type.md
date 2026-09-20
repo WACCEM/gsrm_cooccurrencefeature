@@ -13,7 +13,7 @@ This procedure generates temporally aggregated MCS swath masks and cloud type cl
 1. **MCS swath mask** — the spatial footprint of each MCS track over the aggregation window, with overlapping tracks resolved by coverage priority.
 2. **Cloud type classification** — a mutually exclusive, priority-based classification of non-MCS cloud areas outside the MCS swath.
 3. **Frequency-weighted mean precipitation** — mean precipitation attributed to each cloud type, weighted by how frequently that type occurred at each grid cell during the window.
-4. **Total precipitation** (`tot_pr`) — the window mean of the same hourly precipitation, not masked by the swath, so that everything derived from the cloud types can be checked against one total.
+4. **Total precipitation** (`tot_pr`) — the window mean of the same hourly precipitation, not masked by the swath, so that everything derived from the cloud types can be checked against one total. Precipitation at pixels where Tb is missing is removed first (it cannot be classified), so the total and the cloud types see the same field.
 
 MCS tracks that overlap tropical cyclones are excluded before the swath is built (Step 2).
 
@@ -209,14 +209,15 @@ All output variables are saved on the HEALPix grid (1D cell dimension) at the ag
 | `dz_pr` | mm h⁻¹ | Frequency-weighted mean precipitation for drizzle |
 | `tot_pr` | mm h⁻¹ | Window-mean total precipitation from the same hourly pr; not masked by the MCS swath |
 
-`dc_pr + st_pr + nd_pr + dz_pr` equals `tot_pr` at all non-MCS cells, except for precipitation at hourly steps that have no cloud type (Tb missing, as in some IMERG windows), which stays in `tot_pr` only.
+`dc_pr + st_pr + nd_pr + dz_pr` equals `tot_pr` at all non-MCS cells: precipitation at pixels and hours where Tb is missing is removed before the classification (see "Missing Tb" below), so no rain is left without a cloud type.
 
 A frame that was not written is NaN in every variable (the store's fill value is NaN, so a computed zero and a missing frame stay distinguishable).
 
 ---
 
-## Run Behaviour: Partial Windows, Retries and Exit Status
+## Run Behaviour: Missing Tb, Partial Windows, Retries and Exit Status
 
+- **Missing Tb.** A pixel without Tb cannot be classified, so its precipitation is removed: `pr` is set to NaN wherever Tb is NaN, before anything is derived from it (`remove_pr_where_tb_missing`; a missing hour counts as zero with the same divisor as every other hour). `tot_pr` and the cloud-type precipitation then see the same field, and the budget closes. The rule is the same inside MCS swaths. It changes nothing for the model sources, whose Tb comes from OLR and is missing only where `pr` is missing too. It changes IMERG, whose Tb has gaps (0.30% of the cell-hours within 60S-60N): 0.33% of the whole-record rain fell there (0.1-1.4% per month, largest in early 2019), so the whole-record total precipitation is 0.33% lower (60S-60N mean 3.003 to 2.993 mm/day) and the IMERG residual, +0.14% before the rule because this rain was counted in `tot_pr` and in no category, is 0.0000% in all 36 months and every region. The removed share is logged at the end of each run ("Rain at pixels with missing Tb was removed ..."). A window in which Tb is missing everywhere is an empty window (below).
 - **Partial windows.** A window with fewer hourly steps than the aggregation length (a record that starts at 01 UTC, a gap in the hourly data, the last window) is averaged over the steps present, and `tot_pr` and the cloud-type precipitation use that number of steps as the denominator. It is written to the frame of its aligned time and listed in the end-of-run summary. Examples in the September 2026 data: SCREAM 2019-08-01T00 (5 steps), 2020-04-20T00 (1 step) and 2020-04-22T00 (5 steps, after 48 missing hourly steps, 2020-04-20 01 UTC to 2020-04-22 00 UTC), CASESM2 2020-03-01T00 (5 steps). Before this was fixed, partial windows whose first hourly step was off the aligned hour were computed and then discarded, leaving those frames NaN.
 - **Empty windows.** A window with no valid pr and no valid Tb (for example missing model output during spin-up, depending on how the data were post-processed) is not a failure: it is not retried, stays NaN and is reported as expected.
 - **Retries.** A window whose task raises (an unreadable zarr chunk, a netCDF error while reading the TC tracks, out of memory), whose worker is killed, or whose result is all zero although its input has data, is retried up to three times with a short wait. Retries are submitted with `pure=False`: with Dask's default an identical resubmission returns the first attempt's cached result or exception and nothing is re-run.

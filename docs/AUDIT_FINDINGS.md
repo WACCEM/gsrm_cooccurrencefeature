@@ -20,6 +20,13 @@ that is missing input, not a pipeline error. The old IMERG residual of -1.7% hid
 
 A full-scale re-process of SCREAM (last section) gives a residual of 0.0000% in all 13 months and in every region of the notebook's residual metric.
 
+**Decisions of 2026-09-20 (after the full re-process of all six sources; sections at the end):**
+- The extreme-precipitation thresholds are computed from Step 1's `tot_pr` (`calc_extreme_precip_thresholds.py --input_zarr ... --input_var tot_pr`); IMERG's come from the non-IR 6-hourly store, which has data at all latitudes (commit 2d3907e).
+- Step 1 removes precipitation at pixels with missing Tb, since they cannot be classified (d2bcaab). This removes the IMERG residual.
+- The whole of Analyses 1 and 2 runs from one dependency-aware runner, `scripts/run_cof_pipeline.py` (378ecf4), and every script takes its data root from `COF_DATA_ROOT` (dfa60ed).
+- The test-area outputs are not promoted to production yet; another round of re-processing may be needed.
+- Held for after this phase (see "Follow-ups after this phase" at the end): which SCREAM 6-hourly file `extract_etc_2d_vars.py` reads, and the Step 3 pair-list overlap (option C stays).
+
 ## Budget identity (validated to ~1e-5 mm per cell against calc_monthly_rainmap_by_cof.py's own function)
 
 Residual R = sum_{m==0}(P - C) - sum_{m>=2}(m-1)P, with m = number of the 8 plotted category flags at a
@@ -93,7 +100,7 @@ directory.
 2. **Extreme thresholds.** `calc_extreme_precip_thresholds.py` still uses each source's 6-hourly product while the attribution uses `tot_pr`.
    One-month comparison (thresholds from `tot_pr` / from the product): UM, IMERG and CASESM2 identical (median ratio 1.000); NICAM same mean, per-cell
    correlation 0.94; ICON 0.56-0.88 at high and northern mid-latitudes (snow counted twice in the product); SCREAM 1.21-1.25 at the median.
-   As decided, the thresholds are computed from the `tot_pr` of the reprocessed Step 1 output (`thresholds_from_tot_pr.py`, audit tooling; it reuses
+   **Decision (2026-09-20): adopted for all sources**, implemented in the script itself as `--input_zarr` / `--input_var` (IMERG: the non-IR 6-hourly store). What follows is the comparison that led to it. As decided, the thresholds are computed from the `tot_pr` of the reprocessed Step 1 output (`thresholds_from_tot_pr.py`, audit tooling; it reuses
    `calc_precip_percentiles` and `write_netcdf` of the existing script and refuses to overwrite), saved to
    `/pscratch/sd/w/wcmca1/hackathon/extreme_precip_cof/` and compared with the existing files in `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`.
    SCREAM, full record (1578 windows): thresholds from `tot_pr` against the existing file (P90 / P95): median ratio 1.19 / 1.24 over all cells (mean 1.27 / 1.32; 10th-90th percentile 0.93-1.65 / 0.95-1.73), 74% / 78% of the cells differ by more than 10%, correlation 0.94; by band 1.28 / 1.36 at 0-30S, 1.38 / 1.44 at 0-30N, 1.10 / 1.12 at 30-60S and 1.12 / 1.15 at 30-60N. The polar bands differ most (60-90S correlation 0.03 / 0.01, where the liquid-only product holds almost no precipitation; 60-90N median ratio 0.98 / 1.02, correlation 0.70 / 0.72). The attribution with the new thresholds is compared with the existing ones in the last section. The same comparison is to be done for the other five sources once their Step 1 is rerun.
@@ -110,12 +117,6 @@ directory.
    - **Liquid only.** The `prs` line in `vars_to_include` is commented out (the 3-hourly `pr` is `precip_liq_surf_mass_flux`).
    - **Edges.** The noleap calendar mapped to standard dates leaves four all-NaN windows on 2020-02-29 (the aligned product has 4 empty and 0 partial windows;
      the old one had a single 3-hourly mean in its first and last windows). `resample().mean()` does not check that a window is complete; the script now logs it.
-   - **Hourly `pr` is a snapshot at its label, in our test.** Against the 3-hourly average, four hourly labels with trapezoid weights (the right estimator for
-     snapshots) reproduce it to 0.26-0.63% in the domain mean in four region/season cases (tropics July 2020, 30-60N January 2020, 30-60S October 2019,
-     60S-60N April 2020), against 0.64-1.40% for the mean of three labels, which is exact for end- or start-labelled hourly means; the two 3-label
-     variants are indistinguishable from each other. Against the 3-hourly instantaneous field the correlation has one sharp peak at the same label (0.77
-     in the tropics; 0.53 and 0.57 one hour either side). The catalog calls the stream instantaneous. Whether it is an hourly average in the SCREAM output
-     configuration is not settled by the data and does not affect the budget: `tot_pr` is the mean of six hourly values either way.
    - **The two products differ in spatial structure.** The processing chains, as understood (catalog notes plus the analyst's description): the hourly stream is native ne1024 (about 3.25 km) output
      Delaunay-remapped to zoom 10 and conservatively coarse-grained to level 8; `scream_ne120` is an online SCREAM output stream at ne120 (probably a
      conservative coarsening of ne1024) remapped to level 8 with Delaunay. Compared at the SAME instant (32 instants from 2020-07-11; hourly stream at label
@@ -127,7 +128,7 @@ directory.
      | 3-hourly instantaneous at L (ne120 chain) | 10.1 / 8.6 | 15.9% / 9.7% | 0.1788 / 0.0899 |
      | 3-hourly average labelled L (ne120 chain) | 8.2 / 6.6 | 18.2% / 11.2% | 0.1786 / 0.0894 |
 
-     The pixel correlation between the two snapshots is 0.77 (0.83 at 30-60N) with identical means, so the spatial chains differ substantially before any
+     The pixel correlation between the two fields at the same label is 0.77 (0.83 at 30-60N) with identical means, so the spatial chains differ substantially before any
      averaging is involved; averaging inside the ne120 chain (instantaneous to 3-h average) trims P99 by about 20% more. Which step inside each chain causes
      the difference is not isolated. Window length and label alignment do not explain it. The earlier 6-hourly comparison (6-h means built from the
      3-hourly product against 6-h means of the hourly `pr`) showed the same: wet fraction 20% against 16% and P99 6.8 against 9.8 mm/h in the tropics.
@@ -191,7 +192,7 @@ input Step 1 actually reads, `IR_IMERG_V7_1H_zoom8_20190101_20211231.zarr` (Step
 is never NaN, and `Tb` is NaN in 0.30% of cell-hours; in a sample of every third day, 0.33% of the in-band rain falls on NaN-Tb cells, and the monthly share follows the monthly residual (r = 0.85; the share
 is 0.06% to 1.2% per month, largest in 2019-01 to 2019-05, 2019-09, 2020-02, 2021-09 and 2021-12). The share is larger than the residual, presumably because part of that rain lies inside MCS swaths, where it is attributed
 to the MCS whatever Tb is; that part was not checked. The fix is a decision about what to do with rain at missing-Tb pixels (for example put it in a separate "no Tb" category or count it as drizzle/non-deep),
-not a change in the closure logic. Nothing was changed for it.
+not a change in the closure logic. **Resolved 2026-09-20:** Step 1 removes the rain at pixels with missing Tb (d2bcaab); results in the next-to-last section.
 
 **IMERG input coverage.** The Step 1 input has data only within 59.87S-59.87N: poleward of 60 both `Tb` and `precipitation` are NaN in every cell and hour (not zero). Step 1 turns missing hours into zero
 (`tot_pr` is the sum with NaN as 0 over the hours present), so `tot_pr` is 0 there and the `tot_pr`-based thresholds are empty poleward of 60 (no wet sample). The existing IMERG thresholds were built from
@@ -216,3 +217,37 @@ and IMERG the existing thresholds are already what `tot_pr` gives. Shares sum to
 
 **Correction to an earlier note.** The first attempt to run the five chains at once ended when the Slurm job died (exit 137). I first attributed this to memory exhaustion. A measurement on the next node
 (24 workers = 14 GB resident; five chains together = 131 GB of 503 GB) does not support that, so the cause of that loss is unknown. The runs afterwards were staggered and completed without incident.
+
+## Round 2: the pipeline runner on all six sources (2026-09-20, nid004144; test area `tmp/round2`)
+
+All six sources, Steps 1-3, the monthly map, the thresholds (from `tot_pr`; IMERG from the non-IR 6-hourly store) and the attribution, in one run of `slurm/run_interactive_cof_pipeline.sh` with the committed code
+(378ecf4): 36 steps, all exit status 0, 94.6 min wall time, into `/pscratch/sd/w/wcmca1/hackathon/tmp/round2/` (production untouched). Time and memory per step are in `docs/procedures/run_cof_pipeline.md`.
+
+| Check | Result |
+|---|---|
+| Five models against round 1 (manual chains), every stage | Bit-identical: Steps 1, 2 and 3 (all 7, 11 and 22 variables, every frame), the monthly file (43 variables), the thresholds (P90, P95; same NaN cells) and both attribution files. The orchestrated run equals the manual chains, and the Step 1 rule for missing Tb changes nothing for the models |
+| IMERG against round 1, Steps 1-3 | Only `tot_pr` differs (8,201,903 cell-frame values, 0.24% of all, in all 4384 frames, at most 26 mm/h); `mcs_mask`, the cloud types and `dc/st/nd/dz_pr` are identical; the frames are identical in every stage (ledger: 4384, none dropped) |
+| IMERG Step 1 | `max\|dc+st+nd+dz - tot_pr\|` at classified non-swath cells 3.8e-6 mm/h (16.7 mm/h in round 1); pixel-frames with rain but no cloud type 0 (472,591); identical to production apart from the formerly dropped frame 2019-03-16T00 |
+| IMERG monthly closure | Worst wet cell 0.00005% in every one of the 36 months (100% in round 1); domain residual 0.0000% in every month (+0.14% at 60S-60N before); the notebook's residual fractions 0.0000 in tropics, N.H. and S.H., land and ocean (production -0.69% land / -2.54% ocean at 60S-60N) |
+| IMERG total precipitation | 0.33% lower than production and round 1 (60S-60N mean 3.0026 to 2.9926 mm/day; 0.1-1.4% per month, largest in 2019-01 and 2019-02): exactly the rain that fell on pixels without Tb |
+| IMERG thresholds | Bit-identical to the production file (773,094 finite cells, same NaN cells, 87.6% of the cells poleward of 60 have a threshold); 60S-60N equals the IR-based `tot_pr` field (correlation 0.9998 at the same window label) |
+| Attribution, all six sources | Shares sum to 1, type counts add up, unassigned 0.000% at P90 and P95 (IMERG 0.176% / 0.183% in production, 0.016% / 0.015% in round 1). IMERG's type shares move by at most 0.12 percentage points against round 1 (isolated MCS at P90 56.20% to 56.32%); total extreme precipitation 0.996 / 0.995 of production |
+
+The IMERG monthly counts of precipitating hours (for example `ar_etc_precipitation_count`) change at some cells, because a window whose rain was only at pixels without Tb no longer counts as precipitating.
+
+## Follow-ups after this phase
+
+Held on purpose while the pipeline runner and the second full round are done; none of them changes the results of Analyses 1 and 2 as they stand.
+
+1. **`extract_etc_2d_vars.py` and the SCREAM 6-hourly file.** It still reads `scream_pr6h_z8.zarr` (windows centred on the label, as built) and pairs it with an
+   instantaneous track time through `sel(time=storm_time, method='nearest')`. The aligned file `scream_pr6h_z8_aligned.zarr` (window [T, T+6 h), the window Step 1 uses) exists
+   but nothing reads it. Which one the ETC composites should use is a question for that analysis (Analysis 3); the extreme thresholds no longer read either file.
+2. **Step 3 pair-list overlap** (follow-up 1 above, options A and B). Option C stays: Step 3 is unchanged and the priority order stays in the consumers. The impact
+   measured on SCREAM is small (2.2% of the precipitation at 60S-60N counted twice if the categories were added, 0% in the totals because of the priority order).
+3. **Promotion of the test-area outputs to production.** Not done. Re-running the runner with the production root re-makes everything in about 1.5 h, which may be simpler than copying.
+4. **The unexplained loss of the first node** (Slurm job killed with status 137 82 s after five chains were started at once). The cause is unknown; the runner staggers starts,
+   gates on available memory and records the memory of every step, which should show it if it happens again.
+5. **`--min_precip_threshold`.** The default of `calc_extreme_precip_thresholds.py` is 0.01 mm/h while the existing threshold files were made with 0.1 mm/h (through the run script); the runner passes 0.1.
+6. **`write_zarr` for short stores.** `src/zarr_tools.write_zarr` (Step 2) and the writer inside `combine_era5_imerg_tracking_masks.py` divide by zero when the store has fewer time steps than
+   the time chunk (24 and 28). It only matters for tiny test stores (a real record has more than 1400 frames); a guard for `chunks == 0` would remove it.
+7. **IFS** (`ifs_tco3999_rcbmf`) is in `config_sources.yaml` and has a Step 1 config but no tracking inputs yet; it is not enabled in `config/config_pipeline.yaml`.

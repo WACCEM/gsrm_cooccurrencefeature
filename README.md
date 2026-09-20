@@ -37,6 +37,7 @@ The full workflow is described in the [analysis pipeline overview](docs/pipeline
 |------|------------|--------------------------|
 | Understand the full workflow | [Analysis pipeline overview](docs/pipelines/overview.md) | Multiple processing scripts |
 | Find docs for a specific script | [Documentation index](docs/index.md) | All documented scripts and notebooks |
+| Run Analyses 1 and 2 for all sources in one go | [Pipeline runner](docs/procedures/run_cof_pipeline.md) | `scripts/run_cof_pipeline.py`, `slurm/run_interactive_cof_pipeline.sh` |
 | Build MCS swath masks | [MCS swath procedure](docs/procedures/mcs_swath_cloud_type.md) | `scripts/make_mcs_swath_masks.py` |
 | Combine feature masks | [Combined mask procedure](docs/procedures/combine_tracking_masks.md) | `scripts/combine_tracking_masks.py` |
 | Identify COF masks | [COF identification procedure](docs/procedures/cof_identification.md) | `scripts/make_cooccurrence_masks.py` |

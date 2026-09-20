@@ -12,9 +12,9 @@
 # it reads an input store of its own (IMERG).
 #
 # 'slots' are CPU slots (workers x threads) that a step takes from the runner's budget while it runs; 'est_min' is the wall time
-# measured in the full test run (2026-09-19, one node, five chains at once) and only orders the work and feeds --dry-run: the
-# runner starts the longest remaining chain first. Change a number here to change how a source is run; adding a source needs
-# no code change.
+# measured in the full run of 2026-09-20 (all six sources at once on one 503 GB node, 204 slots, 94.6 min in total) and only orders the
+# work and feeds --dry-run: the runner starts the longest remaining chain first. Change a number here to change how a source is run;
+# adding a source needs no code change.
 
 defaults:
   python: /global/common/software/m1867/python/hackathon/bin/python
@@ -26,20 +26,20 @@ defaults:
   # AR/TC/ETC masks of IMERG (from ERA5, already on the HEALPix grid). The CFS copy is the durable one (identical to the pscratch copy)
   era5_zarr: /global/cfs/cdirs/wcm_shr/hk25/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr
   # Thresholds: percentiles, the wet-window threshold that production used (the script's own default is 0.01), and the cells
-  # per block of the quantile (about 5 GB peak per task, so that several sources can compute thresholds together)
+  # per block of the quantile (2-4 GB resident per task in the full run, so that several sources can compute thresholds together)
   percentiles: [90, 95]
   min_precip_threshold: 0.1
   threshold_cell_chunk_size: 131072
-  # Sources and steps are killed after this many minutes (a hung Dask cluster); generous, the longest step takes about 50 min
+  # Steps are killed after this many minutes (a hung Dask cluster); generous, the longest step takes about 55 min (IMERG Step 1)
   timeout_min: {s1: 240, s2: 60, s3: 150, monthly: 90, thresholds: 90, attribution: 120}
 
 steps:
-  s1:          {slots: 24, est_min: 25}
+  s1:          {slots: 24, est_min: 30}
   s2:          {slots: 16, est_min: 1}
-  s3:          {slots: 24, est_min: 9}
+  s3:          {slots: 24, est_min: 10}
   monthly:     {slots: 48, est_min: 2}      # 12 workers x 4 threads
-  thresholds:  {slots: 8,  est_min: 4, env: {DASK_NUM_WORKERS: "8"}}
-  attribution: {slots: 24, est_min: 7}
+  thresholds:  {slots: 8,  est_min: 2, env: {DASK_NUM_WORKERS: "8"}}
+  attribution: {slots: 24, est_min: 9}
 
 sources:
   IMERGv7:
@@ -56,12 +56,12 @@ sources:
     # Other input stores to check before the run (the IR store that Step 1 reads Tb and precipitation from)
     check_stores: [/pscratch/sd/w/wcmca1/GPM/healpix/IR_IMERG_V7_1H_zoom8_20190101_20211231.zarr]
     steps:
-      s1:          {slots: 48, est_min: 46}
+      s1:          {slots: 48, est_min: 55}
       s2:          {slots: 32, est_min: 1}
       s3:          {slots: 32, est_min: 21}
       monthly:     {est_min: 3}
-      thresholds:  {est_min: 5}
-      attribution: {est_min: 17}
+      thresholds:  {est_min: 3}
+      attribution: {est_min: 18}
 
   scream:
     aliases: [scream_ne120]
@@ -71,10 +71,7 @@ sources:
     step2: tracks
     thresholds: {from_step1: true}         # tot_pr of Step 1
     steps:
-      s1:          {slots: 32, est_min: 23}
-      s3:          {est_min: 10}
-      monthly:     {est_min: 2}
-      attribution: {est_min: 7}
+      s1:          {slots: 32, est_min: 35}
 
   icon_d3hp003:
     aliases: [icon]
@@ -84,10 +81,7 @@ sources:
     step2: tracks
     thresholds: {from_step1: true}
     steps:
-      s1:          {est_min: 25}
-      s3:          {est_min: 10}
-      monthly:     {est_min: 2}
-      attribution: {est_min: 7}
+      s1:          {est_min: 34}
 
   nicam_gl11:
     aliases: [nicam]
@@ -97,10 +91,7 @@ sources:
     step2: tracks
     thresholds: {from_step1: true}
     steps:
-      s1:          {est_min: 24}
-      s3:          {est_min: 9}
-      monthly:     {est_min: 2}
-      attribution: {est_min: 7}
+      s1:          {est_min: 32}
 
   um_glm_n2560_RAL3p3:
     aliases: [um]
@@ -110,10 +101,7 @@ sources:
     step2: tracks
     thresholds: {from_step1: true}
     steps:
-      s1:          {est_min: 27}
-      s3:          {est_min: 9}
-      monthly:     {est_min: 2}
-      attribution: {est_min: 8}
+      s1:          {est_min: 34}
 
   casesm2_10km_nocumulus:
     aliases: [casesm2]
@@ -123,7 +111,4 @@ sources:
     step2: tracks
     thresholds: {from_step1: true}
     steps:
-      s1:          {est_min: 24}
-      s3:          {est_min: 9}
-      monthly:     {est_min: 2}
-      attribution: {est_min: 7}
+      s1:          {est_min: 29}

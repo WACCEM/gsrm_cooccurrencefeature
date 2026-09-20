@@ -13,7 +13,8 @@
 #
 # Analyses 1 and 2 for all six sources (or a subset) in ONE job on ONE node: Steps 1-3, the monthly rain map, the extreme-precipitation
 # thresholds and the attribution, in dependency order (scripts/run_cof_pipeline.py). One queue wait instead of one per step.
-# Measured on a 503 GB node: five chains at once used about 131 GB; the whole run is expected in about 1.5 h (1.2-2.1 h), so 3 h.
+# Measured on a 503 GB node (all six sources, 2026-09-20): 95 min in total; the summed resident memory of all steps peaked at 266 GB while the six
+# Step 1 runs overlapped. 3 h leaves about 2x margin.
 #
 # Usage (DATA_ROOT is required: a test area, or /pscratch/sd/w/wcmca1/hackathon/ for production):
 #   sbatch --export=ALL,DATA_ROOT=/pscratch/sd/w/wcmca1/hackathon/tmp/round2 slurm/slurm_run_cof_pipeline.sh

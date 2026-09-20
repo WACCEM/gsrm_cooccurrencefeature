@@ -7,6 +7,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | Topic | Documentation |
 |-------|---------------|
 | End-to-end analysis pipelines | [pipelines/overview.md](pipelines/overview.md) |
+| Running Analyses 1 and 2 for all sources (dependency-aware runner) | [procedures/run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
 | MCS swath masks and cloud type classification | [procedures/mcs_swath_cloud_type.md](procedures/mcs_swath_cloud_type.md) |
 | Combined tracking mask creation | [procedures/combine_tracking_masks.md](procedures/combine_tracking_masks.md) |
 | Co-occurrence feature identification | [procedures/cof_identification.md](procedures/cof_identification.md) |
@@ -21,6 +22,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 
 | Script / Notebook | Documentation |
 |-------------------|---------------|
+| `run_cof_pipeline.py`, `check_zarr_store.py` | [procedures/run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
 | `make_mcs_swath_masks.py` | [procedures/mcs_swath_cloud_type.md](procedures/mcs_swath_cloud_type.md) |
 | `combine_tracking_masks.py` | [procedures/combine_tracking_masks.md](procedures/combine_tracking_masks.md) |
 | `combine_era5_imerg_tracking_masks.py` | Needs standalone documentation |
@@ -43,6 +45,9 @@ These scripts automate running one or more Python processing scripts across mode
 
 | Script | Analysis | Python Script(s) Called | Sources | Notes |
 |--------|----------|-------------------------|---------|-------|
+| `slurm/run_interactive_cof_pipeline.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | 6 sources (or a subset) | Interactive node (`salloc`, 4 h); runs all steps in dependency order in the background; see [run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
+| `slurm/slurm_run_cof_pipeline.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | 6 sources (or a subset) | One Slurm job on one node (3 h); `--export=ALL,DATA_ROOT=DIR` |
+| `slurm/slurm_run_cof_pipeline_array.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | one source per array task | `--array=1-6`, one node per source; `--export=ALL,DATA_ROOT=DIR` |
 | `slurm/slurm_make_mcs_swath_masks.sh` | Shared Step 1 | `make_mcs_swath_masks.py` | 6 sources via task file | SLURM job array (`--array=1-6`); reads commands from `tasks_make_mcs_swath_masks.txt` |
 | `run_combine_tracking_masks_all.sh` | Shared Step 2 | `combine_tracking_masks.py` | scream, icon, nicam, um, casesm2 | Optionally pass a single source as argument |
 | `slurm/slurm_make_cooccurrence_masks.sh` | Shared Step 3 | `make_cooccurrence_masks.py` | 6 sources via task file | SLURM job array (`--array=1-6`); reads commands from `tasks_make_cooccurrence_masks_all.txt` |
@@ -63,7 +68,7 @@ These scripts automate running one or more Python processing scripts across mode
 | 2 | `combine_tracking_masks.py` (IMERG: `combine_era5_imerg_tracking_masks.py`) | Step 1 zarr + AR/TC/ETC NetCDF (IMERG: ERA5 masks) | `/hackathon/all_masks/{source}_allmasks_hp8_v1.zarr` |
 | 3 | `make_cooccurrence_masks.py` | Step 2 zarr | `/hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr` |
 | 4 (A1) | `calc_monthly_rainmap_by_cof.py` | Step 3 zarr (masks + `tot_pr`) | `/hackathon/cof_masks/stats/monthly/{source}_monthly_rainmap_cof_hp8_v1.nc` |
-| 4a (A2) | `calc_extreme_precip_thresholds.py` | Catalog pr | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` |
+| 4a (A2) | `calc_extreme_precip_thresholds.py` | Step 1 zarr `tot_pr` via `--input_zarr` (IMERG: non-IR 6-hourly store); otherwise the source's own 6-hourly precipitation | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` |
 | 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr (masks + `tot_pr`) + Step 4a nc | `/hackathon/extreme_precip/{source}_stormtype_spatial_{pxx}{date_suffix}.nc` |
 | 5 (A1) | `plot_cof_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
 | 5 (A2) | `plot_cof_extreme_raintype_rank_map.ipynb` | Step 4b (A2) nc | Figures |

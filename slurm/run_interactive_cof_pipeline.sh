@@ -16,7 +16,7 @@
 #        cat <data-root>/pipeline_logs/<run id>/status.json     # what is running, done, failed
 #        tail -f <data-root>/pipeline_logs/launch_<time>.out    # the runner's events
 #
-# The expected wall time for all six sources is about 1.5 h (1.2-2.1 h); dry-run shows the schedule. Options and behaviour:
+# All six sources took 95 min (1.6 h) in the full test run on a 503 GB node; --dry-run shows the schedule. Options and behaviour:
 #   python scripts/run_cof_pipeline.py --help      and      docs/procedures/run_cof_pipeline.md
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
