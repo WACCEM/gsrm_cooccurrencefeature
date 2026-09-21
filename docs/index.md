@@ -13,6 +13,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | Co-occurrence feature identification | [procedures/cof_identification.md](procedures/cof_identification.md) |
 | Monthly precipitation by COF type | [procedures/monthly_precip_by_cof.md](procedures/monthly_precip_by_cof.md) |
 | Extreme precipitation by storm type | [procedures/extreme_precip_by_stormtype.md](procedures/extreme_precip_by_stormtype.md) |
+| Step 3 bridge promotion (not adopted; plan and rationale for future work) | [step3_bridge_promotion_future_work.md](step3_bridge_promotion_future_work.md) |
 | MCS co-occurring feature (COF) track statistics | [procedures/mcs_cof_trackstats.md](procedures/mcs_cof_trackstats.md) |
 | Batched ETC environment extraction | [../extract_environments/README_BATCHED_EXTRACTION.md](../extract_environments/README_BATCHED_EXTRACTION.md) |
 | ETC variable scaling | [../extract_environments/README_VARIABLE_SCALING.md](../extract_environments/README_VARIABLE_SCALING.md) |

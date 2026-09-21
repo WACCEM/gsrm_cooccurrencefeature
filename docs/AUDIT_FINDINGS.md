@@ -244,6 +244,9 @@ Held on purpose while the pipeline runner and the second full round are done; no
    but nothing reads it. Which one the ETC composites should use is a question for that analysis (Analysis 3); the extreme thresholds no longer read either file.
 2. **Step 3 pair-list overlap** (follow-up 1 above, options A and B). Option C stays: Step 3 is unchanged and the priority order stays in the consumers. The impact
    measured on SCREAM is small (2.2% of the precipitation at 60S-60N counted twice if the categories were added, 0% in the totals because of the priority order).
+   **Decided 2026-09-20: option A (bridge promotion) is not adopted.** An ETC is the main dynamical driver of the AR and MCS it touches, so the existing ETC-bridge rule is physically justified; promoting
+   through an AR or MCS bridge is less so, and the orphan case is deliberately left as an edge case. Option B was not part of the decision and stays open. The plan, the measured effect, the rationale and
+   what a revisit would need are in [step3_bridge_promotion_future_work.md](step3_bridge_promotion_future_work.md).
 3. **Promotion of the test-area outputs to production.** Not done. Re-running the runner with the production root re-makes everything in about 1.5 h, which may be simpler than copying.
 4. **The unexplained loss of the first node** (Slurm job killed with status 137 82 s after five chains were started at once). The cause is unknown; the runner staggers starts,
    gates on available memory and records the memory of every step, which should show it if it happens again.

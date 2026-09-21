@@ -244,9 +244,12 @@ This lifetime-*dominance* classification is a deliberate design choice: it assig
 co-occurrence type it spends most of its life in, rather than to every category it ever briefly
 touches. Note that "Isolated" here is re-derived from the three fractions being zero, not read
 directly from the `cof_flag_isolated` column extracted in Step 1 — the two should agree by
-construction, since the COF mask categories are mutually exclusive at the grid-cell level (see
-[cof_identification.md](cof_identification.md)), but the notebook does not depend on that column for
-this classification.
+construction, since both come from the same track-level pair lists of Step 3 (a track is isolated in a
+frame when it is in no pair list and in no 3-way set), not because the categories are exclusive at the
+grid-cell level: they are not (an isolated MCS can lie inside a 3-way footprint; see
+[cof_identification.md](cof_identification.md) and
+[step3_bridge_promotion_future_work.md](../step3_bridge_promotion_future_work.md)). The notebook does not depend on that
+column for this classification.
 
 ### Per-Track Lifetime Statistics
 

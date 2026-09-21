@@ -74,7 +74,7 @@ Output: COF masks (zarr) + ETC statistics (CSV, Parquet)
 
 - **Step 5 — Dual Two-Way Promotion:** If an ETC independently overlaps both an AR and an MCS in separate two-way pairs, the three features are promoted to a three-way COF even if they never all converge at the same pixel. The promotion propagates transitively to all connected tracks to ensure physically coherent grouping.
 
-- **Step 6 — Mutually Exclusive Mask Generation:** Each feature is assigned to exactly one category—isolated, one of three two-way pair types, or the three-way group—based on its highest-order co-occurrence relationship. Separate output masks are produced for each category to support feature-type-specific analysis.
+- **Step 6 — Mutually Exclusive Mask Generation:** Each feature is assigned to a category—isolated, one of three two-way pair types, or the three-way group—based on its highest-order co-occurrence relationship (exclusive only after the priority order of the consumers; see the note in the Step 6 section). Separate output masks are produced for each category to support feature-type-specific analysis.
 
 - **Step 7 — ETC Overlap Statistics:** Each ETC track receives an overlap flag (0–3) indicating whether it co-occurs with MCS, AR, both, or neither. Associated MCS and AR track IDs are recorded and saved for subsequent statistical analysis.
 
@@ -174,7 +174,7 @@ This step ensures that all COF features within a physically connected system are
 
 ## Step 6 — Mutually Exclusive Mask Generation
 
-After completion of Steps 1–5, each feature is assigned to exactly one mutually exclusive category based on the highest-order co-occurrence relationship it participates in:
+After completion of Steps 1–5, each feature is assigned to a category based on the highest-order co-occurrence relationship it participates in (see the note below the table for where the categories are and are not exclusive):
 
 | Category | Description |
 |----------|-------------|
@@ -187,6 +187,8 @@ After completion of Steps 1–5, each feature is assigned to exactly one mutuall
 | **MCS-AR-ETC (3-way)** | All three features mutually co-located |
 
 Separate output masks are produced for both perspectives of each pair (e.g., the MCS component of an MCS-AR pair and the AR component of the same pair) to facilitate feature-type-specific analysis.
+
+**Note on exclusivity.** The assignment is per track (a track in a list gets its whole footprint into that category), and the Step 6 masks are not strictly disjoint. A track that is in two pair lists has its whole footprint in both categories (for example an AR that overlaps an MCS in one place and an ETC in another, without a pixel where all three overlap, or an MCS that overlaps an AR and an ETC), and an isolated object can lie inside the footprint of a 2-way or 3-way group. The existing promotion in Step 5 handles only an ETC that bridges the MCS-ETC and AR-ETC pairs. The monthly and extreme-precipitation scripts resolve the remaining overlaps per pixel with a priority order, so their categories are exclusive and add up to the total; track-level products (the ETC overlap flag, the MCS track flags) see the categories as defined here. The measured size of the effect (0.65-2.7% of the precipitation at 60S-60N would be counted twice if the categories were simply added, 0% in the published totals) and the decision not to promote through an AR or MCS bridge are in [step3_bridge_promotion_future_work.md](../step3_bridge_promotion_future_work.md).
 
 ---
 
