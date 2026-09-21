@@ -277,7 +277,9 @@ def topological_order(tasks):
             if d in tasks:
                 visit(d)
         order.append(k)
-    for k in sorted(tasks, key=lambda k: (STEP_ORDER.index(k[1]), k[0])):
+    # steps that are not in STEP_ORDER (another pipeline that reuses this engine, see run_etc_pipeline.py) sort after the known ones,
+    # in the order the tasks were built; the dependencies alone decide when a step can start
+    for k in sorted(tasks, key=lambda k: (STEP_ORDER.index(k[1]) if k[1] in STEP_ORDER else len(STEP_ORDER), k[0])):
         visit(k)
     return order
 
@@ -509,8 +511,8 @@ class Runner:
     def launch(self, t):
         t.log_path = str(self.log_dir / f"{t.source}_{t.step}.log")
         env = dict(os.environ)
-        env.update(t.env)
-        env["COF_DATA_ROOT"] = self.root
+        env["COF_DATA_ROOT"] = self.root             # always the runner's root, whatever the caller's environment says
+        env.update(t.env)                            # a task may set its own (the ETC pipeline reads the COF products from another root)
         logf = open(t.log_path, "wb")
         t.start = time.time()
         t.proc = subprocess.Popen(t.argv, cwd=REPO, env=env, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)

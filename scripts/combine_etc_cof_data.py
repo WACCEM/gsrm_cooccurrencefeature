@@ -157,7 +157,7 @@ Example usage:
         if not file_mappings:
             print(f"Error: No files found for source '{args.source}'")
             print(f"Available sources: casesm2_10km_nocumulus, era5, icon_d3hp003, nicam_gl11, scream, um_glm_n2560_RAL3p3")
-            return
+            return 1
     
     # Process each file pair
     success_count = 0
@@ -195,7 +195,9 @@ Example usage:
     print(f"Successfully processed: {success_count}/{len(file_mappings)} file pairs")
     print(f"Output location: {output_dir}")
     print(f"{'='*70}")
+    # exit status 1 when an input is missing or a merge failed (they were only printed before, and the exit status was 0)
+    return 0 if success_count == len(file_mappings) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
