@@ -102,7 +102,7 @@ Output: Box-plot figures (PDF) + significance-test tables (HTML)
   extratropical MCS — the population most relevant to AR/ETC co-occurrence.
 
 - **Step 3 — COF Type Classification:** Each track is assigned to one of four COF types (Isolated,
-  MCS+AR, MCS+ETC, MCS+AR+ETC) based on which overlap category occupied the largest fraction of its
+  MCS-AR, MCS-ETC, MCS-AR-ETC) based on which overlap category occupied the largest fraction of its
   lifetime, not merely whether it ever overlapped.
 
 - **Step 3 — Statistical Comparison:** Per-track lifetime statistics (e.g., duration, area, minimum
@@ -236,9 +236,9 @@ dominates its lifetime, applied in this order:
 | Priority | COF type | Condition |
 |----------|----------|-----------|
 | 1 | Isolated | All three fractions equal 0 |
-| 2 | MCS+AR+ETC | `frac_ar_etc` is at least as large as both `frac_ar` and `frac_etc` (3-way wins ties with either 2-way type) |
-| 3 | MCS+AR | Not 3-way, and `frac_ar > frac_etc` |
-| 4 | MCS+ETC | Not 3-way, and `frac_ar ≤ frac_etc` (also the tie-break when `frac_ar == frac_etc > 0`) |
+| 2 | MCS-AR-ETC | `frac_ar_etc` is at least as large as both `frac_ar` and `frac_etc` (3-way wins ties with either 2-way type) |
+| 3 | MCS-AR | Not 3-way, and `frac_ar > frac_etc` |
+| 4 | MCS-ETC | Not 3-way, and `frac_ar ≤ frac_etc` (also the tie-break when `frac_ar == frac_etc > 0`) |
 
 This lifetime-*dominance* classification is a deliberate design choice: it assigns each track to the
 co-occurrence type it spends most of its life in, rather than to every category it ever briefly
@@ -288,12 +288,14 @@ maximum cold-cloud-shield area, minimum brightness temperature, median movement 
 major-axis length, maximum PF aspect ratio, maximum rain rate, total rain, and heavy-rain ratio)
 across the four COF types, with one box per data source per type. Boxes show the median and
 interquartile range with whiskers at the 5th/95th percentiles; outliers beyond the whiskers are not
-plotted.
+plotted. The legend gives, for each dataset, the **average number of tracks per year** in the four COF types (in the order of the x-axis): the count divided by the
+number of years covered by the dataset's time stamps (last minus first `base_time_dt`, in years of 365.25 days: OBS 3.0, SCREAM 1.09, UM 1.08, ICON, NICAM and CASESM2 1.0),
+so that the 3-year observations and the roughly 1-year models are comparable; a record that crosses a calendar year is not counted as two years.
 
 ### Significance Testing
 
 For each source and each lifetime statistic, the mean percentage difference of each non-isolated COF
-type (MCS+AR, MCS+ETC, MCS+AR+ETC) relative to the Isolated baseline is computed, together with a
+type (MCS-AR, MCS-ETC, MCS-AR-ETC) relative to the Isolated baseline is computed, together with a
 significance test:
 
 | Aspect | Choice |

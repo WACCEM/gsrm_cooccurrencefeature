@@ -204,6 +204,8 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
        → ETC spatial mean statistics for all sources (paper figure)
      notebooks/plot_etc_spatialmean_stats_1source.ipynb
        → ETC spatial mean statistics for one source (prototype)
+     (sample sizes in the legends and titles of the statistics notebooks are the average number of
+      tracks per year: count / years covered by the time stamps of the classified points)
 ```
 
 ### Running Analysis 3 in one go
