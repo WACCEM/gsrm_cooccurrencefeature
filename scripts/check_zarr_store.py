@@ -12,7 +12,9 @@ only, so it is quick even for large stores. Both chunk layouts are handled ('.' 
 Usage:
   python check_zarr_store.py STORE [STORE ...] [--arrays mcs_mask tot_pr] [--quiet]
 
-Exit status 1 when any chunk is missing or has zero bytes; unexpected extra chunk files are only reported.
+Exit status 1 when any chunk is missing or has zero bytes, when a store has no array metadata at all (the scratch purge can remove
+the .zgroup/.zmetadata/.zarray files and leave empty directories: there is then nothing to compare with, which is not "complete"), or
+when a requested array is not in the store; unexpected extra chunk files are only reported.
 
 Author: Zhe Feng | zhe.feng@pnnl.gov
 """
@@ -94,11 +96,23 @@ def scan_store(store, arrays=None):
     --------
     dict : {array name: {'expected': int, 'present': int, 'missing': [keys], 'zero': [keys], 'unexpected': [keys]}}
         'present' counts the expected chunks that exist; the lists are sorted.
+
+    Raises:
+    -------
+    FileNotFoundError : the path is not a directory
+    ValueError : the store has no array metadata (no .zmetadata and no array with a .zarray file: purged, or not a Zarr v2 store),
+        or a requested array is not in the store. Both would otherwise be reported as a store with nothing missing.
     """
     if not os.path.isdir(store):
         raise FileNotFoundError(f"Not a directory: {store}")
+    specs = array_specs(store)
+    if not specs:
+        raise ValueError("no array metadata found (no .zmetadata, no array with a .zarray file): the store is hollow (purged) "
+                         "or not a Zarr v2 store")
+    if arrays and set(arrays) - set(specs):
+        raise ValueError(f"requested arrays not in the store: {', '.join(sorted(set(arrays) - set(specs)))}")
     result = {}
-    for name, spec in sorted(array_specs(store).items()):
+    for name, spec in sorted(specs.items()):
         if (arrays and name not in arrays) or not spec["shape"]:
             continue
         adir = os.path.join(store, name)

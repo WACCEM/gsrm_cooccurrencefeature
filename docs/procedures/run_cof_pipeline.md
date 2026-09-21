@@ -139,7 +139,8 @@ the thresholds; the attribution). See `docs/AUDIT_FINDINGS.md` for the compariso
 - A step that failed: read its log under `pipeline_logs/<run id>/<source>_<step>.log`, fix the cause, run again with `--resume`.
 - Tiny test stores: a test with `--step-args s1 "--test-steps N"` gives a store of N/6 windows, fewer than the time chunk of the Step 2 writers (24 frames; 28 in the IMERG Step 2 script). Those writers used to
   divide by zero in that case; they now write one chunk. Checked for SCREAM with N = 24 through Steps 1-3; the later steps (monthly, thresholds, attribution) were run on tiny stores with N = 240 (40 windows).
-- To check a store by hand: `python scripts/check_zarr_store.py STORE [STORE ...]` (exit status 1 when a chunk is missing or empty).
+- To check a store by hand: `python scripts/check_zarr_store.py STORE [STORE ...]` (exit status 1 when a chunk is missing or empty, when the store has no array metadata at all,
+  as after a scratch purge that leaves empty directories, or when a requested `--arrays` name is not in it). Tests: `python tests/test_check_zarr_store.py`.
 
 ## Adding a source
 
