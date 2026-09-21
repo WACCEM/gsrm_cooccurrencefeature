@@ -3,7 +3,9 @@
 Calculate spatial statistics for ETC 2D data.
 
 This script computes statistics over spatial dimensions (x, y) to condense 3D data
-(time, y, x) into 1D time series. Statistics include:
+(time, y, x) into 1D time series. Radii are in degrees: x and y of the input are offsets in grid points, converted
+with the global attributes lon_res and lat_res of the store (before 2026-09-21 they were compared with the radius as
+grid points, so "10 degrees" was 2.5 degrees). Statistics include:
 - Mean/min/max for regular variables within circular radius
 - Fractional area coverage for feature masks
 - Domain-mean precipitation separated by features (AR, MCS, ETC)
@@ -23,26 +25,51 @@ import xarray as xr
 import numpy as np
 
 
-def create_circular_mask(x_dim, y_dim, radius_deg):
+def get_grid_resolution(ds):
+    """
+    Grid spacing (degrees) of the storm-relative box, from the global attributes lon_res and lat_res.
+
+    The coordinates x and y of the ETC 2D stores are offsets in grid points (-80 ... 80 for a box of +-20 degrees at
+    0.25 degrees), so they have to be multiplied by the spacing to get degrees. A store without these attributes is an
+    error: assuming a spacing would silently give a wrong radius.
+    """
+    try:
+        lon_res = float(ds.attrs['lon_res'])
+        lat_res = float(ds.attrs['lat_res'])
+    except KeyError as missing:
+        raise ValueError(f"the dataset has no global attribute {missing}: x and y are offsets in grid points and "
+                         f"need lon_res and lat_res (degrees) to be converted to degrees") from None
+    if not (lon_res > 0 and lat_res > 0):
+        raise ValueError(f"lon_res and lat_res must be positive, got {lon_res} and {lat_res}")
+    return lon_res, lat_res
+
+
+def create_circular_mask(x_dim, y_dim, radius_deg, lon_res, lat_res):
     """
     Create a boolean circular mask centered at (0, 0).
-    
+
+    x_dim and y_dim are offsets in GRID POINTS; they are converted to degrees with the grid spacing before they are
+    compared with the radius. The circle is a circle in degrees of longitude and latitude (as the circles drawn in the
+    composite notebooks), not in kilometres: it is narrower in km towards the poles.
+
     Parameters:
     -----------
     x_dim : xarray.DataArray
-        X coordinate array (centered at 0)
+        X coordinate array, grid points (centered at 0)
     y_dim : xarray.DataArray
-        Y coordinate array (centered at 0)
+        Y coordinate array, grid points (centered at 0)
     radius_deg : float
         Radius in degrees
-    
+    lon_res, lat_res : float
+        Grid spacing in degrees along x and y (global attributes lon_res and lat_res of the store)
+
     Returns:
     --------
     mask : xarray.DataArray
         Boolean mask (True inside circle, False outside)
     """
-    # Create distance field from center
-    distance = np.sqrt(x_dim**2 + y_dim**2)
+    # Create distance field from center, in degrees
+    distance = np.sqrt((x_dim * lon_res)**2 + (y_dim * lat_res)**2)
     mask = distance <= radius_deg
     return mask
 
@@ -66,8 +93,9 @@ def compute_spatial_stats_basic(ds, variables, radius_deg=10):
         Dataset with computed statistics (time dimension only)
     """
     # Create circular mask
-    mask = create_circular_mask(ds.x, ds.y, radius_deg)
-    
+    lon_res, lat_res = get_grid_resolution(ds)
+    mask = create_circular_mask(ds.x, ds.y, radius_deg, lon_res, lat_res)
+
     # Initialize result dictionary
     stats_dict = {}
     
@@ -124,10 +152,11 @@ def compute_mask_fractional_area(ds, mask_variables, radii=[10, 15]):
         Dataset with fractional area coverage (time dimension only)
     """
     stats_dict = {}
-    
+    lon_res, lat_res = get_grid_resolution(ds)
+
     for radius_deg in radii:
         # Create circular mask
-        circle_mask = create_circular_mask(ds.x, ds.y, radius_deg)
+        circle_mask = create_circular_mask(ds.x, ds.y, radius_deg, lon_res, lat_res)
         total_pixels = circle_mask.sum().values  # Total pixels in circle
         
         for var_name in mask_variables:
@@ -180,9 +209,10 @@ def compute_feature_precipitation_stats(ds, radius_deg=10):
         Dataset with feature-specific precipitation statistics
     """
     # Create circular mask
-    circle_mask = create_circular_mask(ds.x, ds.y, radius_deg)
+    lon_res, lat_res = get_grid_resolution(ds)
+    circle_mask = create_circular_mask(ds.x, ds.y, radius_deg, lon_res, lat_res)
     total_pixels = circle_mask.sum().values  # Total pixels in circle
-    
+
     stats_dict = {}
     
     if 'pr' not in ds:
@@ -364,10 +394,15 @@ def compute_all_spatial_stats(ds,
     if 'storm_id' in ds:
         combined_ds = combined_ds.assign_coords({'storm_id': ds.storm_id})
     
-    # Add metadata
+    # Add metadata. The radii are in degrees (x and y of the input are grid points, converted with lon_res and lat_res);
+    # files made before 2026-09-21 have no radius_units and used the radii as GRID POINTS (10 -> 2.5 degrees).
+    lon_res, lat_res = get_grid_resolution(ds)
     combined_ds.attrs['basic_radius_deg'] = basic_radius
     combined_ds.attrs['mask_radii_deg'] = mask_radii
     combined_ds.attrs['pr_radius_deg'] = pr_radius
+    combined_ds.attrs['radius_units'] = 'degrees'
+    combined_ds.attrs['lon_res'] = lon_res
+    combined_ds.attrs['lat_res'] = lat_res
     combined_ds.attrs['description'] = 'Spatial statistics computed within circular radii centered at ETC. overlap_flag coordinate: 0=isolated, 1=mcs_only, 2=ar_only, 3=3way'
     
     print(f"  Output variables: {len(combined_ds.data_vars)}")
@@ -411,6 +446,7 @@ def main():
     print(f"Basic stats radius: {args.basic_radius}°")
     print(f"Mask radii: {args.mask_radii}°")
     print(f"Precipitation radius: {args.pr_radius}°")
+    print("(radii in degrees; the grid points of the store are converted with its lon_res and lat_res)")
     print("=" * 80)
     
     # Create output directory
@@ -431,7 +467,11 @@ def main():
     print(f"  Loaded in {time.time() - start_time:.2f} seconds")
     print(f"  Dataset shape: {dict(ds.sizes)}")
     print(f"  Number of variables: {len(ds.data_vars)}")
-    
+    lon_res, lat_res = get_grid_resolution(ds)
+    for name, radius in [('basic', args.basic_radius), ('precipitation', args.pr_radius)] + [('mask', r) for r in args.mask_radii]:
+        print(f"  {name} radius {radius}° = {radius / lon_res:g} grid points along x, {radius / lat_res:g} along y "
+              f"(grid spacing {lon_res}° x {lat_res}°)")
+
     # Identify variable types
     metadata_vars = ['storm_id', 'grid_id', 'lon_id', 'lat_id', 'storm_lat', 'storm_lon', 
                      'overlap_flag', 'ar_tracks_str', 'mcs_tracks_str', 'cof_lat', 'cof_lon']
