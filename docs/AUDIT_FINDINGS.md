@@ -221,7 +221,7 @@ and IMERG the existing thresholds are already what `tot_pr` gives. Shares sum to
 ## Round 2: the pipeline runner on all six sources (2026-09-20, nid004144; test area `tmp/round2`)
 
 All six sources, Steps 1-3, the monthly map, the thresholds (from `tot_pr`; IMERG from the non-IR 6-hourly store) and the attribution, in one run of `slurm/run_interactive_cof_pipeline.sh` with the committed code
-(378ecf4): 36 steps, all exit status 0, 94.6 min wall time, into `/pscratch/sd/w/wcmca1/hackathon/tmp/round2/` (production untouched). Time and memory per step are in `docs/procedures/run_cof_pipeline.md`.
+(378ecf4): 36 steps, all exit status 0, 94.6 min wall time, into `/pscratch/sd/w/wcmca1/hackathon/tmp/round2/` (production untouched at that time; the outputs were promoted to production on 2026-09-20 evening, follow-up 3). Time and memory per step are in `docs/procedures/run_cof_pipeline.md`.
 
 | Check | Result |
 |---|---|
@@ -247,7 +247,13 @@ Held on purpose while the pipeline runner and the second full round are done; no
    **Decided 2026-09-20: option A (bridge promotion) is not adopted.** An ETC is the main dynamical driver of the AR and MCS it touches, so the existing ETC-bridge rule is physically justified; promoting
    through an AR or MCS bridge is less so, and the orphan case is deliberately left as an edge case. Option B was not part of the decision and stays open. The plan, the measured effect, the rationale and
    what a revisit would need are in [step3_bridge_promotion_future_work.md](step3_bridge_promotion_future_work.md).
-3. **Promotion of the test-area outputs to production.** Not done. Re-running the runner with the production root re-makes everything in about 1.5 h, which may be simpler than copying.
+3. **Promotion of the test-area outputs to production.** *Done 2026-09-20.* The 54 round-2 items (`mcs_masks`, `all_masks`, `cof_masks` with `stats/` overlap files and `stats/monthly/`, `extreme_precip`; 192.6 GB) were moved by rename from `tmp/round2`
+   into the production folders of `/pscratch/sd/w/wcmca1/hackathon/`. The previous production (119.7 GB, made 2026-09-18/19; thresholds 2026-03) and the round-1 interim thresholds (`extreme_precip_cof`) are in
+   `/pscratch/sd/w/wcmca1/hackathon/_prev_production_20260918/` (README, `MANIFEST_pscratch.tsv`, sizes). Verified after the move: sizes of all 108 items equal the sizes measured before, the exact chunk-key scan finds all 18 zarr stores complete
+   (289 arrays), the frame counts are 1460, 1460, 4384, 1459, 1577, 1576 in Steps 2 and 3 (Step 1 holds one extra final window for CASESM2, NICAM and SCREAM, as before), every nc and parquet file opens. The ERA5 mask store, the March
+   Analysis 4 files and everything else in those folders were not touched. The round-2 runner markers and logs stay in `tmp/round2`.
+   The CFS backup folders were prepared the same way: the 54 older same-named items (121.1 GB, dated 2025-11 to 2026-07) moved into `/global/cfs/cdirs/wcm_shr/hk25/_prev_production_20260918/`, so that a Globus copy of the
+   new pscratch items mirrors production exactly (the ERA5 mask store, which the IMERG Step 1 reads from CFS, stays). The list of the 54 new items is `NEW_ITEMS_for_globus.txt` in the pscratch archive folder.
 4. **The unexplained loss of the first node** (Slurm job killed with status 137 82 s after five chains were started at once). The cause is unknown; the runner staggers starts,
    gates on available memory and records the memory of every step, which should show it if it happens again.
 5. **`--min_precip_threshold`.** *Done.* The default of `calc_extreme_precip_thresholds.py` was 0.01 mm/h while the existing threshold files were made with 0.1 mm/h (through the run script); it is now 0.1

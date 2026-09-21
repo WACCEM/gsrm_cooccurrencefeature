@@ -84,6 +84,8 @@ which stops its steps cleanly.
 it for each step from `--data-root`, so a test area gets its own `mcs_masks/`, `all_masks/`, `cof_masks/` and `extreme_precip/`
 and production is never touched. The hourly MCS masks, the tracking files, the catalog data and the ERA5 masks are inputs and are not under the root.
 
+- The production tree holds the round-2 outputs since 2026-09-20 (moved from `tmp/round2`, whose markers and logs stayed there). They have no markers under the production root, so a run with
+  `--data-root /pscratch/sd/w/wcmca1/hackathon/` stops at once and lists them unless `--force` is given: that is the protection working as intended. The previous production is in `_prev_production_20260918/`.
 - A **marker** `<data-root>/pipeline_state/<source>/<step>.json` records each step (`running`, `success`, `failed`, `interrupted`) with the command, times, host,
   code version and peak memory. It is written only by the runner.
 - An output that exists **without a marker** is never overwritten unless `--force` is given. That is what protects a production tree: pointing
