@@ -47,9 +47,9 @@ def parse_cmd_args():
     parser.add_argument('--method', type=str, default='linear',
                         choices=['linear', 'lower', 'higher', 'midpoint', 'nearest'],
                         help='Quantile interpolation method (default: linear)')
-    parser.add_argument('--min_precip_threshold', type=float, default=0.01,
+    parser.add_argument('--min_precip_threshold', type=float, default=0.1,
                         help='Minimum precipitation threshold (mm/h) to exclude from percentile calculation. '
-                             'Values below this threshold are treated as missing. (default: 0.01 mm/h)')
+                             'Values below this threshold are treated as missing. (default: 0.1 mm/h)')
     parser.add_argument('--input_zarr', type=str, default=None,
                         help='Explicit path to a Zarr store on the HEALPix grid that replaces the source\'s normal input (catalog '
                              'or 6-hourly product), for ANY source. The store\'s zoom must match --zoom (checked). All of its '

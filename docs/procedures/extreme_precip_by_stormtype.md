@@ -36,7 +36,7 @@ Input: --input_zarr (Step 1's tot_pr; IMERG: the non-IR 6-hourly store)
          |
          v
 [Step 1] Load and convert precipitation to mm/h
-[Step 2] Apply minimum precipitation threshold (script default 0.01 mm/h; the pipeline runner passes 0.1)
+[Step 2] Apply minimum precipitation threshold (default 0.1 mm/h; the pipeline runner passes it explicitly)
          └─ Values below threshold set to NaN (excluded from percentile)
 [Step 3] Optionally resample to target time duration (default: 6h)
 [Step 4] Compute quantile across all time steps at each cell, in blocks of cells
@@ -83,7 +83,7 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 ## Key Steps at a Glance
 
-- **Stage 1, Step 1–2 — Threshold Conditioning:** Precipitation values below a minimum threshold (default 0.01 mm/h) are excluded from the percentile calculation by setting them to NaN. This prevents near-zero drizzle values from depressing the computed extreme threshold in regions with frequent light precipitation.
+- **Stage 1, Step 1–2 — Threshold Conditioning:** Precipitation values below a minimum threshold (default 0.1 mm/h) are excluded from the percentile calculation by setting them to NaN. This prevents near-zero drizzle values from depressing the computed extreme threshold in regions with frequent light precipitation.
 
 - **Stage 1, Steps 3–4 — Percentile Computation:** Precipitation is optionally resampled to a target time duration (default: retain 6-hourly resolution), then the $N$th percentile is computed independently at each HEALPix cell across all time steps using `xarray.quantile` with NaN-skipping. The result is a spatially varying threshold map.
 
@@ -114,7 +114,7 @@ average the wet hours) is not used here: it is a different quantity from `tot_pr
 
 ### Minimum Precipitation Filter
 
-Before computing quantiles, values below a minimum threshold $\epsilon$ (default: $0.01\;\text{mm\,h}^{-1}$) are replaced with NaN:
+Before computing quantiles, values below a minimum threshold $\epsilon$ (default: $0.1\;\text{mm\,h}^{-1}$) are replaced with NaN:
 
 $$\tilde{P}(t, x) = \begin{cases} P(t, x) & \text{if } P(t, x) \geq \epsilon \\ \text{NaN} & \text{otherwise} \end{cases}$$
 
@@ -235,6 +235,6 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | HEALPix zoom | 8 | Spatial resolution |
 | Percentiles | P90 | One output file per percentile |
 | Time duration | 6h | Time resolution for threshold calculation |
-| Min precipitation filter | 0.01 mm h⁻¹ (script default) | Exclude near-zero values from threshold computation. `run_all_extreme_precip_thresholds.sh` and the pipeline runner pass 0.1 mm h⁻¹, which is what the existing threshold files record |
+| Min precipitation filter | 0.1 mm h⁻¹ | Exclude near-zero values from threshold computation (`--min_precip_threshold`). The value the existing threshold files record; `run_all_extreme_precip_thresholds.sh` and the pipeline runner pass it explicitly; the 1-hourly script has the same default |
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |

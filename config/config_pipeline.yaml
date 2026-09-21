@@ -25,7 +25,8 @@ defaults:
     OPENBLAS_NUM_THREADS: "1"
   # AR/TC/ETC masks of IMERG (from ERA5, already on the HEALPix grid). The CFS copy is the durable one (identical to the pscratch copy)
   era5_zarr: /global/cfs/cdirs/wcm_shr/hk25/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr
-  # Thresholds: percentiles, the wet-window threshold that production used (the script's own default is 0.01), and the cells
+  # Thresholds: percentiles, the wet-window threshold that production used (also the script's own default, passed explicitly so
+  # that it is recorded in the step's command), and the cells
   # per block of the quantile (2-4 GB resident per task in the full run, so that several sources can compute thresholds together)
   percentiles: [90, 95]
   min_precip_threshold: 0.1

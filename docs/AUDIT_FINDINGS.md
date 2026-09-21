@@ -247,7 +247,8 @@ Held on purpose while the pipeline runner and the second full round are done; no
 3. **Promotion of the test-area outputs to production.** Not done. Re-running the runner with the production root re-makes everything in about 1.5 h, which may be simpler than copying.
 4. **The unexplained loss of the first node** (Slurm job killed with status 137 82 s after five chains were started at once). The cause is unknown; the runner staggers starts,
    gates on available memory and records the memory of every step, which should show it if it happens again.
-5. **`--min_precip_threshold`.** The default of `calc_extreme_precip_thresholds.py` is 0.01 mm/h while the existing threshold files were made with 0.1 mm/h (through the run script); the runner passes 0.1.
+5. **`--min_precip_threshold`.** *Done.* The default of `calc_extreme_precip_thresholds.py` was 0.01 mm/h while the existing threshold files were made with 0.1 mm/h (through the run script); it is now 0.1
+   like the 1-hourly script, and the runner and `run_all_extreme_precip_thresholds.sh` still pass it explicitly. No stored file changes; only a run without the flag would have differed.
 6. **`write_zarr` for short stores.** `src/zarr_tools.write_zarr` (Step 2) and the writer inside `combine_era5_imerg_tracking_masks.py` divide by zero when the store has fewer time steps than
    the time chunk (24 and 28). It only matters for tiny test stores (a real record has more than 1400 frames); a guard for `chunks == 0` would remove it.
 7. **IFS** (`ifs_tco3999_rcbmf`) is in `config_sources.yaml` and has a Step 1 config but no tracking inputs yet; it is not enabled in `config/config_pipeline.yaml`.
