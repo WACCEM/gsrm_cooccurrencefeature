@@ -9,6 +9,7 @@ if at least min_coverage of its box (161 rows, +-20 degrees at 0.25 degrees) lie
   - the composites: the rule applies to every category (flag 3 and 'all'), in both hemispheres, with the counts and the mean of a marker field
     that identifies the points; the attributes record the rule; 0 switches it off
   - the statistics drop the points and keep the others in order
+  - the defaults: the composites 0.7 (centre within 52 degrees), the statistics 0.5 (within 60 degrees), lat limit 60
 
 Run:  python tests/test_etc_domain.py      (or pytest tests/)
 """
@@ -123,6 +124,24 @@ def test_statistics_drop_the_points():
     assert n_kept == 7 and kept is ds
 
 
+def test_defaults_of_the_scripts():
+    import inspect
+    import subprocess
+    old_argv = sys.argv
+    try:
+        sys.argv = ["create_etc_composites.py", "--source", "era5"]
+        args = cc.parse_args()
+    finally:
+        sys.argv = old_argv
+    assert args.min_lat_coverage == 0.7 and args.lat_limit == 60.0
+    assert inspect.signature(cc.create_composites).parameters["min_lat_coverage"].default == 0.7
+    assert inspect.signature(dom.in_cof_domain).parameters["min_coverage"].default == 0.7
+    lats = np.array([52.0, 52.25, 60.0, -52.0, -52.25])
+    assert dom.in_cof_domain(lats, ROWS, 0.25).tolist() == [True, False, False, True, False]         # the default 0.7: centre within 52 degrees
+    out = " ".join(subprocess.run([sys.executable, str(REPO / "scripts" / "calc_etc_spatial_stats.py"), "--help"], capture_output=True, text=True).stdout.split())
+    assert "--min-lat-coverage" in out and "0.5 keeps the points whose centre is within the limit" in out and "(default: 0.5)" in out
+
+
 if __name__ == "__main__":
-    test_coverage_of_the_box(); test_selection_at_the_three_levels(); test_dataset_version(); test_composites_apply_the_rule_to_every_category(); test_statistics_drop_the_points()
+    test_coverage_of_the_box(); test_selection_at_the_three_levels(); test_dataset_version(); test_composites_apply_the_rule_to_every_category(); test_statistics_drop_the_points(); test_defaults_of_the_scripts()
     print("test_etc_domain: all checks passed")

@@ -189,7 +189,7 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
 [Step 5] Visualization and Analysis
   └─ Composites: scripts/create_etc_composites.py builds etc_2d_composite_{nh,sh}_{all,isolated,
               mcs_only,ar_only,3way}.nc from the Step 3 zarr; it uses only the ETCs of which at
-              least --min-lat-coverage (default 0.8, ETC centre within 48°) of the ±20° box lies
+              least --min-lat-coverage (default 0.7, ETC centre within 52°) of the ±20° box lies
               within |latitude| <= --lat-limit (60°), because the COF products exist only
               equatorward of 60°
   └─ Notebooks (composite figures — input: composites of the Step 3 zarr):

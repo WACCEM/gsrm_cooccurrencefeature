@@ -71,10 +71,10 @@ def parse_args():
     parser.add_argument(
         '--min-lat-coverage',
         type=float,
-        default=0.8,
+        default=0.7,
         help='An ETC enters the composites only if at least this fraction of its storm-relative box (the +-20 degree rows) lies within '
-             '|latitude| <= --lat-limit. 0.8 keeps ETCs centred within 48 degrees, 0.5 those centred within 60 degrees, 0 keeps every ETC '
-             '(default: 0.8)'
+             '|latitude| <= --lat-limit. 0.7 keeps ETCs centred within 52 degrees, 0.5 those centred within 60 degrees, 0 keeps every ETC '
+             '(default: 0.7)'
     )
     parser.add_argument(
         '--overlap-flag',
@@ -374,7 +374,7 @@ def convert_masks_and_create_exclusive_precip(ds, overlap_category='3way'):
 
 
 def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name='isolated', 
-                     nh_lat_threshold=20.0, sh_lat_threshold=-20.0, lat_limit=60.0, min_lat_coverage=0.8):
+                     nh_lat_threshold=20.0, sh_lat_threshold=-20.0, lat_limit=60.0, min_lat_coverage=0.7):
     """
     Create composites by hemisphere for a specific overlap flag.
     
@@ -398,7 +398,7 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
         Latitude (degrees) poleward of which there are no COF products (default: 60.0)
     min_lat_coverage : float
         Minimum fraction of the storm-relative box that must lie within |latitude| <= lat_limit for an ETC to be used, for every category
-        including 'all' (default: 0.8, ETCs centred within 48 degrees; 0 keeps every ETC). See src/etc_domain.py.
+        including 'all' (default: 0.7, ETCs centred within 52 degrees; 0 keeps every ETC). See src/etc_domain.py.
     
     Returns:
     --------

@@ -9,7 +9,8 @@ The rule is on the coverage of the box: the fraction of its rows (latitudes) tha
 ETC centre (161 rows at 0.25 degrees), so for a centre at latitude L in the northern hemisphere the coverage is (60 - (L - 20)) / 40:
 
     coverage >= 1.0  <=>  |L| <= 40      (the whole box is inside)
-    coverage >= 0.8  <=>  |L| <= 48      (default of the composites)
+    coverage >= 0.8  <=>  |L| <= 48
+    coverage >= 0.7  <=>  |L| <= 52      (default of the composites)
     coverage >= 0.5  <=>  |L| <= 60      (the centre is inside: the "centroid" rule, default of the statistics)
 
 Both scripts take --lat-limit and --min-lat-coverage; a minimum coverage of 0 switches the rule off.
@@ -54,7 +55,7 @@ def lat_box_coverage(center_lat, y_offsets_deg, lat_res, lat_limit=LAT_LIMIT):
     return inside.mean(axis=1)
 
 
-def in_cof_domain(center_lat, y_offsets_deg, lat_res, lat_limit=LAT_LIMIT, min_coverage=0.8):
+def in_cof_domain(center_lat, y_offsets_deg, lat_res, lat_limit=LAT_LIMIT, min_coverage=0.7):
     """Boolean array (n,): True where at least min_coverage of the box lies within |latitude| <= lat_limit. min_coverage <= 0 keeps every point."""
     center_lat = np.asarray(center_lat, dtype='float64')
     if min_coverage <= 0:
@@ -62,7 +63,7 @@ def in_cof_domain(center_lat, y_offsets_deg, lat_res, lat_limit=LAT_LIMIT, min_c
     return lat_box_coverage(center_lat, y_offsets_deg, lat_res, lat_limit) >= min_coverage - 1e-12
 
 
-def store_in_cof_domain(ds, lat_limit=LAT_LIMIT, min_coverage=0.8):
+def store_in_cof_domain(ds, lat_limit=LAT_LIMIT, min_coverage=0.7):
     """
     in_cof_domain for an ETC 2D dataset: the centre is cof_lat (storm_lat if there is none), the rows are y * lat_res of the dataset.
     Returns a boolean numpy array over the time (point) dimension.
