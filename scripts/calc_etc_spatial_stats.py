@@ -24,24 +24,25 @@ import time
 import xarray as xr
 import numpy as np
 
+# Add parent directory to path to import from src
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.etc_domain import get_grid_resolution, store_in_cof_domain  # noqa: E402
 
-def get_grid_resolution(ds):
-    """
-    Grid spacing (degrees) of the storm-relative box, from the global attributes lon_res and lat_res.
 
-    The coordinates x and y of the ETC 2D stores are offsets in grid points (-80 ... 80 for a box of +-20 degrees at
-    0.25 degrees), so they have to be multiplied by the spacing to get degrees. A store without these attributes is an
-    error: assuming a spacing would silently give a wrong radius.
+def apply_lat_domain(ds, lat_limit, min_coverage):
     """
-    try:
-        lon_res = float(ds.attrs['lon_res'])
-        lat_res = float(ds.attrs['lat_res'])
-    except KeyError as missing:
-        raise ValueError(f"the dataset has no global attribute {missing}: x and y are offsets in grid points and "
-                         f"need lon_res and lat_res (degrees) to be converted to degrees") from None
-    if not (lon_res > 0 and lat_res > 0):
-        raise ValueError(f"lon_res and lat_res must be positive, got {lon_res} and {lat_res}")
-    return lon_res, lat_res
+    Drop the ETC points whose storm-relative box lies mostly poleward of lat_limit (the COF products, and with them the overlap flags
+    and masks, exist only equatorward of 60 degrees). At least min_coverage of the box rows must lie within |latitude| <= lat_limit;
+    the default of 0.5 keeps the points whose centre is within lat_limit (see src/etc_domain.py). min_coverage <= 0 keeps every point.
+
+    Returns (dataset, n_points_before, n_points_kept). The dropped points are removed from the time dimension, so a track that leaves the
+    domain is truncated where it crosses the limit.
+    """
+    keep = store_in_cof_domain(ds, lat_limit=lat_limit, min_coverage=min_coverage)
+    n_before = int(keep.size)
+    if not keep.all():
+        ds = ds.isel(time=np.where(keep)[0])
+    return ds, n_before, int(keep.sum())
 
 
 def create_circular_mask(x_dim, y_dim, radius_deg, lon_res, lat_res):
@@ -434,6 +435,13 @@ def main():
                         help='Radii (degrees) for mask fractional area')
     parser.add_argument('--pr-radius', type=float, default=10.0,
                         help='Radius (degrees) for precipitation statistics')
+    parser.add_argument('--lat-limit', type=float, default=60.0,
+                        help='Latitude (degrees) poleward of which there are no COF products: the MCS masks, and with them the overlap flags '
+                             'and masks, exist only equatorward of it')
+    parser.add_argument('--min-lat-coverage', type=float, default=0.5,
+                        help='ETC points whose storm-relative box has less than this fraction of its rows within |latitude| <= --lat-limit are '
+                             'dropped. 0.5 keeps the points whose centre is within the limit; 0.8 selects the same points as the composites; '
+                             '0 keeps every point')
     
     args = parser.parse_args()
     
@@ -447,6 +455,7 @@ def main():
     print(f"Mask radii: {args.mask_radii}°")
     print(f"Precipitation radius: {args.pr_radius}°")
     print("(radii in degrees; the grid points of the store are converted with its lon_res and lat_res)")
+    print(f"Latitude rule: at least {args.min_lat_coverage:g} of the ETC box within |latitude| <= {args.lat_limit:g}° (0 = every point is kept)")
     print("=" * 80)
     
     # Create output directory
@@ -472,6 +481,14 @@ def main():
         print(f"  {name} radius {radius}° = {radius / lon_res:g} grid points along x, {radius / lat_res:g} along y "
               f"(grid spacing {lon_res}° x {lat_res}°)")
 
+    # Drop the ETC points in the polar region, where there are no COF products (see src/etc_domain.py)
+    ds, n_points_total, n_points_kept = apply_lat_domain(ds, args.lat_limit, args.min_lat_coverage)
+    print(f"  Latitude rule: {n_points_kept} of {n_points_total} points kept, {n_points_total - n_points_kept} dropped "
+          f"({100.0 * (n_points_total - n_points_kept) / max(n_points_total, 1):.1f}%)")
+    if n_points_kept == 0:
+        print("ERROR: no ETC point is left after the latitude rule")
+        sys.exit(1)
+
     # Identify variable types
     metadata_vars = ['storm_id', 'grid_id', 'lon_id', 'lat_id', 'storm_lat', 'storm_lon', 
                      'overlap_flag', 'ar_tracks_str', 'mcs_tracks_str', 'cof_lat', 'cof_lon']
@@ -494,6 +511,11 @@ def main():
         pr_radius=args.pr_radius
     )
     
+    stats.attrs['lat_limit'] = args.lat_limit
+    stats.attrs['min_lat_coverage'] = args.min_lat_coverage
+    stats.attrs['n_points_before_lat_rule'] = n_points_total
+    stats.attrs['n_points'] = n_points_kept
+
     compute_time = time.time() - start_time
     print(f"\n  Statistics computed in {compute_time:.2f} seconds")
     
