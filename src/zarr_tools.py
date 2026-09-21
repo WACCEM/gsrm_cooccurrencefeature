@@ -90,11 +90,11 @@ def write_zarr(ds, out_zarr, client=None, logger=None, chunksize_time=24, chunks
             # Default cell chunking for non-HEALPix data
             chunksize_cell = min(10000, ds.sizes.get('cell', ds.sizes.get('ncol', 1000)))
     
-    # Make time chunks more even if needed
+    # Make time chunks more even if needed (a store shorter than one time chunk is written as a single chunk)
     if isinstance(chunksize_time, (int, float)) and chunksize_time != 'auto':
         total_times = ds.sizes['time']
         chunks = total_times // chunksize_time
-        if chunks * chunksize_time < total_times:
+        if chunks > 0 and chunks * chunksize_time < total_times:
             # We have a remainder - try to make chunks more even
             if total_times % chunks == 0:
                 chunksize_time = total_times // chunks

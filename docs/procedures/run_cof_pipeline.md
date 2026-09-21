@@ -135,8 +135,8 @@ the thresholds; the attribution). See `docs/AUDIT_FINDINGS.md` for the compariso
 - `kill -TERM <pid>` or Ctrl-C stops the runner: it terminates the running steps (their whole process group), marks them `interrupted` and exits with status 1. Continue with `--resume`.
 - Exit status: 0 all steps done; 1 a step failed, was skipped because of a failure, or the run was interrupted; 2 usage error, refused overwrite, missing prerequisite or failed preflight.
 - A step that failed: read its log under `pipeline_logs/<run id>/<source>_<step>.log`, fix the cause, run again with `--resume`.
-- Tiny test stores: `write_zarr` divides by zero for a store with fewer time steps than its time chunk (24 frames in Step 2, 28 in the IMERG Step 2 script), so a test with
-  `--step-args s1 "--test-steps N"` needs about 40 windows (N = 240) or more. This is an existing limitation and does not occur for real records.
+- Tiny test stores: a test with `--step-args s1 "--test-steps N"` gives a store of N/6 windows, fewer than the time chunk of the Step 2 writers (24 frames; 28 in the IMERG Step 2 script). Those writers used to
+  divide by zero in that case; they now write one chunk. Checked for SCREAM with N = 24 through Steps 1-3; the later steps (monthly, thresholds, attribution) were run on tiny stores with N = 240 (40 windows).
 - To check a store by hand: `python scripts/check_zarr_store.py STORE [STORE ...]` (exit status 1 when a chunk is missing or empty).
 
 ## Adding a source
