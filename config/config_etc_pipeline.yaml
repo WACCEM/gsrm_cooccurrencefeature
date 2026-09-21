@@ -12,10 +12,11 @@
 # etc_cof, pr, mask_*, link_env -> combine -> composites, stats.  The COF products (cof_masks/) and the track files are inputs, read
 # from cof_root and tracks_dir, not from the run's data root.
 #
-# 'slots' are CPU slots that a step takes from the runner's budget while it runs; 'est_min' orders the work and feeds --dry-run (measured:
-# UM pr from tot_pr 4.4 min; the others are estimates until a full run has been timed). The combine step holds every variable in memory
-# (about 2.3 GB per variable and 22,000 storm points: SCREAM ~76 GB, ERA5 with 66,789 points ~190 GB), so it takes many slots and only
-# two run at a time on a node with 256 CPUs and 503 GB.
+# 'slots' are CPU slots that a step takes from the runner's budget while it runs; 'est_min' orders the work and feeds --dry-run. Measured in the
+# full run of 2026-09-20 (six sources, node with 256 CPUs and 503 GB; minutes and peak resident memory of one step): pr and each mask task 4.4-6.5 min
+# and 2.4-3.1 GB for the models, 15.8-16.7 min and 7.7-10.3 GB for ERA5; etc_cof and link_env seconds; combine 1.9-2.7 min and 50-75 GB (ERA5 5.9 min, 195 GB);
+# composites 0.8-1.3 min and 22-47 GB (ERA5 2.2 min, 61 GB); stats 0.3-0.5 min (ERA5 0.8 min). The combine step holds every variable in memory (about
+# 2.3 GB per variable and 22,000 storm points), so it takes many slots and only two run at a time.
 
 defaults:
   python: /global/common/software/m1867/python/hackathon/bin/python
@@ -36,12 +37,12 @@ defaults:
 
 steps:
   etc_cof:    {slots: 1,  est_min: 1}
-  pr:         {slots: 1,  est_min: 5}
-  mask:       {slots: 1,  est_min: 5}       # each of the seven mask tasks
-  link_env:   {slots: 1,  est_min: 2}
-  combine:    {slots: 90, est_min: 10}
-  composites: {slots: 8,  est_min: 5}
-  stats:      {slots: 8,  est_min: 5}
+  pr:         {slots: 1,  est_min: 6}
+  mask:       {slots: 1,  est_min: 6}       # each of the seven mask tasks
+  link_env:   {slots: 1,  est_min: 1}
+  combine:    {slots: 90, est_min: 3}
+  composites: {slots: 8,  est_min: 2}
+  stats:      {slots: 8,  est_min: 1}
 
 # name: the source name of the Analysis 3 scripts; submit_key: its entry in extract_environments/submit_etc_extraction_jobs.py MODEL_CONFIGS
 # (track file, catalog settings, the share of storm points without a COF frame that is expected)
@@ -50,11 +51,11 @@ sources:
     aliases: [ERA5, IMERGv7, imerg, obs]
     submit_key: ERA5
     steps:                                   # 66,789 storm points: about three times the others
-      pr:         {est_min: 15}
-      mask:       {est_min: 15}
-      combine:    {est_min: 30}
-      composites: {est_min: 10}
-      stats:      {est_min: 10}
+      pr:         {est_min: 17}
+      mask:       {est_min: 17}
+      combine:    {est_min: 6}
+      composites: {est_min: 3}
+      stats:      {est_min: 1}
   scream:
     aliases: [SCREAM, scream_ne120]
     submit_key: SCREAM
