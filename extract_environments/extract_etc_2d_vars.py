@@ -47,9 +47,28 @@ from src.env_extract_utilities import (
     apply_model_fixes,
     parse_etc_track_file
 )
+from src.cof_paths import data_root
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Step 3 output: the COF masks, and the window-mean total precipitation `tot_pr` that Analyses 1, 2 and 4 use
+COF_STORE_SUFFIX = "_cofmasks_hp8_v1.zarr"
+# A time chunk of the source larger than this is not cached whole (see extract_etc_2d_variable)
+MAX_CACHED_CHUNK_BYTES = 400e6
+
+
+def cof_source_name(catalog_model):
+    """Name of the COF store (Step 3 output, `<name>_cofmasks_hp8_v1.zarr`) that belongs to a catalog model name."""
+    m = catalog_model.lower()
+    if 'scream' in m:
+        return 'scream'
+    if 'era5' in m:
+        return 'IMERGv7'
+    for name in ('nicam_gl11', 'icon_d3hp003', 'um_glm_n2560_RAL3p3', 'casesm2_10km_nocumulus'):
+        if name.lower() in m:
+            return name
+    return catalog_model
 
 
 def extract_healpix_variable_to_latlon(
@@ -223,10 +242,13 @@ def extract_etc_2d_variable(
     
     This function implements the efficient batched approach:
     1. Group storms by unique timestamps
-    2. For each timestamp batch, load data once: variable_data.sel(time=t).compute()
+    2. For each timestamp batch, load data once (from a cached whole time chunk of the source when it is small enough,
+       so that consecutive timestamps in one chunk cost one read)
     3. Extract all storms at that timestamp from the loaded time slice
     
-    This avoids redundant loading of the same time slice for multiple storms.
+    Time matching is EXACT: the track time is looked up in the source's time axis. A track time without a frame in the
+    source is never replaced by the nearest frame (which silently clamps to the first/last frame outside the record);
+    its storm points get a NaN slab, and are counted in the returned attributes (n_points_time_missing).
     
     Parameters:
     -----------
@@ -250,6 +272,8 @@ def extract_etc_2d_variable(
     Returns:
     --------
     tuple : (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, x_coords, y_coords, var_attrs)
+        var_attrs carries the source attributes plus time_match, n_points, n_points_time_missing and n_points_failed
+        (points whose slice could not be loaded or extracted: an error, unlike a missing time)
     """
     # Calculate expected grid dimensions
     ny = int(2 * radius / lat_res + 1)
@@ -280,6 +304,41 @@ def extract_etc_2d_variable(
     x_coords = np.arange(-nx_half, nx_half + 1)
     y_coords = np.arange(-ny_half, ny_half + 1)
     
+    # Exact time matching: position of each source time, by value
+    time_index = pd.DatetimeIndex(pd.to_datetime(variable_data['time'].values))
+    first_pos = pd.Series(np.arange(len(time_index)), index=time_index)
+    if not time_index.is_unique:
+        print(f"WARNING: the source time axis has {int(time_index.duplicated().sum())} repeated time stamps; the first frame of each is used")
+        first_pos = first_pos[~first_pos.index.duplicated(keep='first')]
+    missing_times = []
+    n_points_time_missing = 0
+    n_points_failed = 0
+
+    def record_storm(storm_idx, row, storm_time):
+        """Metadata of a storm point (kept for every point, also when its slab stays NaN, so that all variables share one point list)."""
+        time_array[storm_idx] = storm_time
+        storm_ids[storm_idx] = row['storm_id']
+        if unstructured_mesh:
+            grid_ids[storm_idx] = row['grid_id']
+        else:
+            # For structured mesh, store as tuple (lon_id, lat_id)
+            grid_ids[storm_idx] = (row['lon_id'], row['lat_id'])
+        storm_lats[storm_idx] = row['lat']
+        storm_lons[storm_idx] = row['lon']
+
+    # Chunk cache: when the source is chunked in time and one chunk is small, read a whole time chunk once and serve the
+    # timestamps inside it from memory (the storm times are processed in order, so a chunk of 48 frames costs one read, not 48)
+    time_axis = variable_data.dims.index('time')
+    chunk_edges = None
+    if getattr(variable_data, 'chunks', None) is not None:
+        tchunks = variable_data.chunks[time_axis]
+        other = int(np.prod([n for i, n in enumerate(variable_data.shape) if i != time_axis]))
+        if max(tchunks) * other * variable_data.dtype.itemsize <= MAX_CACHED_CHUNK_BYTES and max(tchunks) > 1:
+            chunk_edges = np.concatenate([[0], np.cumsum(tchunks)])
+    cached_chunk, cached_block = None, None
+    print(f"Time matching: exact; source has {len(time_index)} frames"
+          + (f"; caching whole time chunks of up to {max(tchunks)} frames" if chunk_edges is not None else "; no chunk cache"))
+
     # ================================================================
     # STEP 1: Group storms by timestamp (KEY OPTIMIZATION!)
     # ================================================================
@@ -318,13 +377,31 @@ def extract_etc_2d_variable(
         
         storms_at_this_time = time_to_storms[storm_time]
         
+        # Exact match: no frame at this time in the source -> NaN slabs, counted
+        pos = first_pos.get(storm_time, -1)
+        if pos < 0:
+            missing_times.append(storm_time)
+            n_points_time_missing += len(storms_at_this_time)
+            for storm_idx, row in storms_at_this_time:
+                record_storm(storm_idx, row, storm_time)
+            storms_processed += len(storms_at_this_time)
+            continue
+        pos = int(pos)
+        
         # ================================================================
         # LOAD TIME SLICE ONCE (this is the key optimization!)
         # ================================================================
         try:
             # Select time but DON'T compute yet - keep as lazy dask array
             # IMPORTANT: .squeeze() to remove extra dimensions (e.g., pressure)
-            data_at_time_lazy = variable_data.sel(time=storm_time, method='nearest').squeeze()
+            if chunk_edges is not None:
+                c = int(np.searchsorted(chunk_edges, pos, side='right') - 1)
+                if c != cached_chunk:
+                    cached_block = variable_data.isel(time=slice(int(chunk_edges[c]), int(chunk_edges[c + 1]))).compute()
+                    cached_chunk = c
+                data_at_time_lazy = cached_block.isel(time=pos - int(chunk_edges[c])).squeeze()
+            else:
+                data_at_time_lazy = variable_data.isel(time=pos).squeeze()
             
             # For efficiency: collect all pixel indices needed for all storms at this time
             # Then compute once with all pixels selected
@@ -403,6 +480,9 @@ def extract_etc_2d_variable(
             
         except Exception as e:
             print(f"  ERROR: Failed to load time slice at {storm_time}: {e}")
+            n_points_failed += len(storms_at_this_time)
+            for storm_idx, row in storms_at_this_time:
+                record_storm(storm_idx, row, storm_time)
             storms_processed += len(storms_at_this_time)
             continue
         
@@ -449,28 +529,12 @@ def extract_etc_2d_variable(
                 output_array[storm_idx, :, :] = data_gridded
                 
                 # Store metadata
-                time_array[storm_idx] = storm_time
-                storm_ids[storm_idx] = row['storm_id']
-                if unstructured_mesh:
-                    grid_ids[storm_idx] = row['grid_id']
-                else:
-                    # For structured mesh, store as tuple (lon_id, lat_id)
-                    grid_ids[storm_idx] = (row['lon_id'], row['lat_id'])
-                storm_lats[storm_idx] = row['lat']
-                storm_lons[storm_idx] = row['lon']
+                record_storm(storm_idx, row, storm_time)
                 
             except Exception as e:
                 print(f"  Warning: Failed to extract storm {row['storm_id']} at {storm_time}: {e}")
-
-                # Metadata already initialized to None, will be filled with defaults
-                time_array[storm_idx] = storm_time
-                storm_ids[storm_idx] = row['storm_id']
-                if unstructured_mesh:
-                    grid_ids[storm_idx] = row['grid_id']
-                else:
-                    grid_ids[storm_idx] = (row['lon_id'], row['lat_id'])
-                storm_lats[storm_idx] = row['lat']
-                storm_lons[storm_idx] = row['lon']
+                n_points_failed += 1
+                record_storm(storm_idx, row, storm_time)
         
         storms_processed += len(storms_at_this_time)
     
@@ -479,7 +543,16 @@ def extract_etc_2d_variable(
     print(f"Processing rate: {ntimes/elapsed:.1f} storms/second")
     print(f"Time slices loaded: {len(unique_times)} (vs {ntimes} in old approach)")
     print(f"Speedup from batching: {ntimes/len(unique_times):.1f}x fewer data loads")
+    print(f"Time matching: {ntimes - n_points_time_missing - n_points_failed} of {ntimes} storm points extracted; "
+          f"{n_points_time_missing} ({100*n_points_time_missing/max(ntimes, 1):.2f}%) have no frame in the source at their time "
+          f"({len(missing_times)} track times: {[str(t)[:13] for t in missing_times[:3]]}{' ...' if len(missing_times) > 3 else ''}); "
+          f"{n_points_failed} failed")
     sys.stdout.flush()
+    
+    var_attrs['time_match'] = 'exact: a track time without a frame in the source gives NaN, never the nearest frame'
+    var_attrs['n_points'] = int(ntimes)
+    var_attrs['n_points_time_missing'] = int(n_points_time_missing)
+    var_attrs['n_points_failed'] = int(n_points_failed)
     
     return (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, 
             x_coords, y_coords, var_attrs)
@@ -688,6 +761,17 @@ def main():
     parser.add_argument('--precomputed_dir', default=None,
                         help='Directory containing pre-computed variables')
     
+    # Precipitation source and time-matching strictness
+    parser.add_argument('--pr_source', choices=['cof_tot_pr', 'legacy'], default='cof_tot_pr',
+                        help="Source of 'pr' for the models (default cof_tot_pr): Step 1's tot_pr from the COF store "
+                             "(<data root>/cof_masks/<source>_cofmasks_hp8_v1.zarr, mm/h, window [T, T+6h) like the COF masks and "
+                             "Analyses 1, 2 and 4). 'legacy' reads the separate 6-hourly files / catalog 6-h mean as before. "
+                             "ERA5 always uses IMERG 6-hourly (tot_pr is 0 poleward of 60 deg).")
+    parser.add_argument('--max_missing_fraction', type=float, default=0.0,
+                        help='Largest share of storm points allowed to have no frame in the source at their track time (default 0: any gap '
+                             'fails the job before it writes). Points without a frame are NaN, never the nearest frame. '
+                             'Expected gaps: COF store shorter than the track period (ICON 0.145, UM 0.03, SCREAM 0.006)')
+    
     # Track file format options
     parser.add_argument('--unstructured_mesh', action='store_true', default=True,
                         help='Track file is on unstructured mesh (default: True for most models). Set to False for ERA5 lat/lon grid.')
@@ -760,6 +844,27 @@ def main():
             
             print(f"  IMERG dataset loaded successfully")
             print(f"  Variables available: {list(ds.data_vars)}")
+            sys.stdout.flush()
+        
+        elif 'pr' in args.variables and args.pr_source == 'cof_tot_pr':
+            src_name = cof_source_name(args.catalog_model)
+            cof_dir = f"{data_root()}cof_masks/{src_name}{COF_STORE_SUFFIX}"
+            print(f"Precipitation source: Step 1 tot_pr from the COF store (NOT the catalog or the 6-hourly files): {cof_dir}")
+            sys.stdout.flush()
+            ds = xr.open_zarr(cof_dir, consolidated=True).pipe(
+                egh.attach_coords, signed_lon=True
+            )
+            ds = ds.assign_coords(time=convert_time(ds.time.values))
+            tot_attrs = {k: v for k, v in ds['tot_pr'].attrs.items() if k not in ('grid_mapping', '_FillValue', 'coordinates')}
+            ds = ds[['tot_pr']].rename({'tot_pr': 'pr'})
+            ds['pr'].attrs = {
+                **tot_attrs,
+                'units': 'mm h-1',
+                'long_name': 'Total precipitation, mean over the 6-h window [T, T+6 h) (Step 1 tot_pr)',
+                'precip_source': 'cof_tot_pr',
+                'source_store': cof_dir,
+            }
+            print(f"  COF store loaded: {ds.sizes['time']} frames {str(ds.time.values[0])[:13]} to {str(ds.time.values[-1])[:13]}")
             sys.stdout.flush()
         
         elif 'scream' in args.catalog_model.lower() and 'pr' in args.variables:
@@ -866,14 +971,10 @@ def main():
             ds = apply_model_fixes(ds, args.catalog_model)
     else:
         # Read Co-occurrence Feature Mask
-        cof_root_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
-        if "scream" in args.catalog_model:
-            source = "scream"
-        elif "era5" in args.catalog_model.lower():
-            source = "IMERGv7"
-        else:
-            source = args.catalog_model
-        cof_dir = f"{cof_root_dir}{source}_cofmasks_hp8_v1.zarr"
+        cof_root_dir = f"{data_root()}cof_masks/"        # COF_DATA_ROOT (default: the production tree)
+        source = cof_source_name(args.catalog_model)
+        cof_dir = f"{cof_root_dir}{source}{COF_STORE_SUFFIX}"
+        print(f"COF masks from: {cof_dir}")
         ds = xr.open_zarr(cof_dir, consolidated=True).pipe(
             egh.attach_coords, signed_lon=True
         )
@@ -961,6 +1062,7 @@ def main():
     # =================================================================
     # PROCESS EACH VARIABLE
     # =================================================================
+    failed_variables = []      # variables that could not be extracted: the job then ends with exit status 1
     for var_idx, variable_name in enumerate(args.variables):
         var_start_time = time.time()
         
@@ -984,11 +1086,13 @@ def main():
             
             if pressure_levels is None:
                 print("ERROR: --pressure_levels required for wa to omega conversion")
+                failed_variables.append(variable_name)
                 continue
             
             # Check if required variables exist
             if 'wa' not in ds or 'ta' not in ds:
                 print(f"ERROR: Variables 'wa' and 'ta' required for omega conversion")
+                failed_variables.append(variable_name)
                 continue
             
             # Convert wa to omega (returns only omega variable, not full dataset)
@@ -1013,11 +1117,13 @@ def main():
             
             if pressure_levels is None:
                 print("ERROR: --pressure_levels required for omega to wa conversion")
+                failed_variables.append(variable_name)
                 continue
             
             # Check if required variables exist
             if 'omega' not in ds or 'ta' not in ds:
                 print(f"ERROR: Variables 'omega' and 'ta' required for wa conversion")
+                failed_variables.append(variable_name)
                 continue
             
             # Convert omega to wa (returns only wa variable, not full dataset)
@@ -1041,6 +1147,7 @@ def main():
             if variable_name not in ds:
                 print(f"ERROR: Variable '{variable_name}' not found in dataset")
                 print(f"Available variables: {list(ds.data_vars)}")
+                failed_variables.append(variable_name)
                 continue
             
             # Get variable data
@@ -1066,6 +1173,7 @@ def main():
                     print(f"WARNING: Variable '{variable_name}' has pressure dimension but no pressure levels specified")
                     print(f"Use --pressure_levels to specify pressure levels (e.g., --pressure_levels 850,500,300)")
                     print(f"Skipping {variable_name}")
+                    failed_variables.append(variable_name)
                     continue
                 
                 print(f"3D variable detected with pressure dimension")
@@ -1119,6 +1227,21 @@ def main():
             unstructured_mesh=args.unstructured_mesh
         )
         
+        # Fail before writing when points failed to load, or more points than expected have no frame in the source
+        n_pts = len(storm_df)
+        n_missing = int(var_attrs.get('n_points_time_missing', 0))
+        n_failed = int(var_attrs.get('n_points_failed', 0))
+        if n_failed > 0:
+            print(f"ERROR: {n_failed} storm points of '{variable_name}' failed to load or extract; nothing is written for this variable")
+            failed_variables.append(variable_name)
+            continue
+        if n_missing / n_pts > args.max_missing_fraction:
+            print(f"ERROR: {n_missing} of {n_pts} storm points ({100*n_missing/n_pts:.2f}%) have no frame in the source at their track time, "
+                  f"more than --max_missing_fraction {args.max_missing_fraction} ({100*args.max_missing_fraction:.2f}%); "
+                  f"nothing is written for '{variable_name}'")
+            failed_variables.append(variable_name)
+            continue
+        
         # Save to zarr
         start_str = args.start_date.replace('-', '') if args.start_date else "all"
         end_str = args.end_date.replace('-', '') if args.end_date else "all"
@@ -1166,13 +1289,15 @@ def main():
     # Print final summary
     total_elapsed_time = time.time() - total_start_time
     print("\n" + "="*60)
-    print("ALL VARIABLES COMPLETED")
+    print("ALL VARIABLES COMPLETED" if not failed_variables else f"FINISHED WITH {len(failed_variables)} FAILED VARIABLE(S): {failed_variables}")
     print("="*60)
     print(f"Processed {len(args.variables)} variable(s)")
     print(f"Total time: {total_elapsed_time:.2f} seconds ({total_elapsed_time/60:.2f} minutes)")
     if len(args.variables) > 0:
         print(f"Average per variable: {total_elapsed_time/len(args.variables):.2f} seconds")
     print("="*60)
+    if failed_variables:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
