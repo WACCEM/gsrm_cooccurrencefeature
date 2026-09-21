@@ -170,9 +170,15 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
   └─ Output:  /hackathon/etc_data/stats/
               etc_spatial_stats_{source}.nc
               (per-ETC-point spatial statistics: mean/min/max within 10°
-               circular radius; COF mask fractional area at 10° and 15°;
+               circular radius; COF mask fractional area at 10° and 15°
+               (radii in degrees: x and y of the store are grid points and are
+               converted with lon_res and lat_res; files made before 2026-09-21
+               used grid points, i.e. 2.5° and 3.75°);
                feature-specific precipitation statistics;
                overlap_flag coordinate for COF stratification)
+  └─ Domain:  ETC points in the polar region are dropped (the COF products exist only
+              equatorward of 60°): --min-lat-coverage 0.5 (centre within 60°),
+              --lat-limit 60; see src/etc_domain.py
   └─ Batch:   scripts/run_calc_etc_spatial_stats_all.sh
               (handles Steps 1, 3 & 4 for all 6 sources; Step 2 must be
                submitted separately via submit_etc_extraction_jobs.py:
@@ -181,7 +187,12 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebooks (composite figures — input: Step 3 zarr):
+  └─ Composites: scripts/create_etc_composites.py builds etc_2d_composite_{nh,sh}_{all,isolated,
+              mcs_only,ar_only,3way}.nc from the Step 3 zarr; it uses only the ETCs of which at
+              least --min-lat-coverage (default 0.8, ETC centre within 48°) of the ±20° box lies
+              within |latitude| <= --lat-limit (60°), because the COF products exist only
+              equatorward of 60°
+  └─ Notebooks (composite figures — input: composites of the Step 3 zarr):
      notebooks/plot_etc_composites.ipynb
        → 2D ETC composite fields for one data source
      notebooks/plot_etc_composites_diff.ipynb
