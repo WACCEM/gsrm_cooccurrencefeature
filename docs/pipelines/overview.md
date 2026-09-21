@@ -138,8 +138,12 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
          v  (Step 2 can run in parallel with Step 1)
 [Step 2] 2D Variable Extraction
   └─ Script:  extract_environments/extract_etc_2d_vars.py
-  └─ Method:  Batched time-slice loading; remap HEALPix → 81×81 lat-lon grid
-              centered at each ETC track point (0.25° resolution, ±10° radius)
+  └─ Method:  Batched time-slice loading with exact time matching (a track time
+              without a frame in the source is NaN, never the nearest frame); remap
+              HEALPix → 161×161 lat-lon grid centered at each ETC track point
+              (0.25° resolution, ±20° radius)
+  └─ pr:      Step 1's tot_pr from the COF store for the models (the same [T, T+6 h)
+              window as the COF masks), IMERG 6-hourly for ERA5
   └─ Submit:  extract_environments/submit_etc_extraction_jobs.py
               (Python script automating Slurm job array submission per model;
                one task per variable; serial shared-queue jobs, ~15 min each)
@@ -189,6 +193,16 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
        → ETC spatial mean statistics for all sources (paper figure)
      notebooks/plot_etc_spatialmean_stats_1source.ipynb
        → ETC spatial mean statistics for one source (prototype)
+```
+
+### Running Analysis 3 in one go
+
+`scripts/run_etc_pipeline.py` runs every step of Analysis 3 for any set of sources in dependency order on one node (ETC/COF merge, `pr`, the seven COF-mask variables, linking of the unchanged environment
+stores, combine, composites, spatial statistics), with the scheduler, markers, `--resume` and overwrite protection of `run_cof_pipeline.py`. The environment variables are not extracted again (their stores are linked).
+See [procedures/run_etc_pipeline.md](../procedures/run_etc_pipeline.md), which also documents the time matching and the precipitation source.
+
+```bash
+bash slurm/run_interactive_etc_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/etc_round1 [--sources um scream]
 ```
 
 > **Performance note:** The batched time-slice extraction in `extract_etc_2d_vars.py` achieves a ~16× speedup over naïve per-storm data loading by grouping storms by timestamp and loading only the union of required HEALPix cells per time step. See [README_BATCHED_EXTRACTION.md](../../extract_environments/README_BATCHED_EXTRACTION.md) for full details.

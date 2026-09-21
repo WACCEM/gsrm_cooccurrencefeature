@@ -8,6 +8,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 |-------|---------------|
 | End-to-end analysis pipelines | [pipelines/overview.md](pipelines/overview.md) |
 | Running Analyses 1 and 2 for all sources (dependency-aware runner) | [procedures/run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
+| Running Analysis 3 (ETC composites) for all sources; time matching and precipitation source | [procedures/run_etc_pipeline.md](procedures/run_etc_pipeline.md) |
 | MCS swath masks and cloud type classification | [procedures/mcs_swath_cloud_type.md](procedures/mcs_swath_cloud_type.md) |
 | Combined tracking mask creation | [procedures/combine_tracking_masks.md](procedures/combine_tracking_masks.md) |
 | Co-occurrence feature identification | [procedures/cof_identification.md](procedures/cof_identification.md) |
@@ -24,6 +25,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | Script / Notebook | Documentation |
 |-------------------|---------------|
 | `run_cof_pipeline.py`, `check_zarr_store.py` | [procedures/run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
+| `run_etc_pipeline.py`, `link_etc_env_stores.py` | [procedures/run_etc_pipeline.md](procedures/run_etc_pipeline.md) |
 | `make_mcs_swath_masks.py` | [procedures/mcs_swath_cloud_type.md](procedures/mcs_swath_cloud_type.md) |
 | `combine_tracking_masks.py` | [procedures/combine_tracking_masks.md](procedures/combine_tracking_masks.md) |
 | `combine_era5_imerg_tracking_masks.py` | Needs standalone documentation |
@@ -49,6 +51,7 @@ These scripts automate running one or more Python processing scripts across mode
 | `slurm/run_interactive_cof_pipeline.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | 6 sources (or a subset) | Interactive node (`salloc`, 4 h); runs all steps in dependency order in the background; see [run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
 | `slurm/slurm_run_cof_pipeline.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | 6 sources (or a subset) | One Slurm job on one node (3 h); `--export=ALL,DATA_ROOT=DIR` |
 | `slurm/slurm_run_cof_pipeline_array.sh` | A1 + A2, Steps 1-4 | `run_cof_pipeline.py` | one source per array task | `--array=1-6`, one node per source; `--export=ALL,DATA_ROOT=DIR` |
+| `slurm/run_interactive_etc_pipeline.sh` | A3, all steps | `run_etc_pipeline.py` | 6 sources (or a subset) | Interactive node (`salloc`, 4 h); ETC/COF merge, pr, COF masks, link environment stores, combine, composites, stats; see [run_etc_pipeline.md](procedures/run_etc_pipeline.md) |
 | `slurm/slurm_make_mcs_swath_masks.sh` | Shared Step 1 | `make_mcs_swath_masks.py` | 6 sources via task file | SLURM job array (`--array=1-6`); reads commands from `tasks_make_mcs_swath_masks.txt` |
 | `run_combine_tracking_masks_all.sh` | Shared Step 2 | `combine_tracking_masks.py` | scream, icon, nicam, um, casesm2 | Optionally pass a single source as argument |
 | `slurm/slurm_make_cooccurrence_masks.sh` | Shared Step 3 | `make_cooccurrence_masks.py` | 6 sources via task file | SLURM job array (`--array=1-6`); reads commands from `tasks_make_cooccurrence_masks_all.txt` |
@@ -74,7 +77,7 @@ These scripts automate running one or more Python processing scripts across mode
 | 5 (A1) | `plot_cof_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
 | 5 (A2) | `plot_cof_extreme_raintype_rank_map.ipynb` | Step 4b (A2) nc | Figures |
 | 1 (A3) | `combine_etc_cof_data.py` | ETC track text files + COF overlap tracking parquet | `/hackathon/etc_tracks/{source}_etc_cof_data.parquet` |
-| 2 (A3) | `extract_etc_2d_vars.py` | HEALPix catalog data + ETC track file | `/hackathon/etc_data/{source}/single_vars/etc_2d_{var}_{suffix}.zarr` |
+| 2 (A3) | `extract_etc_2d_vars.py` | ETC track file + HEALPix catalog data (environment variables) + the Shared Step 3 store `cof_masks/{source}_cofmasks_hp8_v1.zarr` (`tot_pr` as `pr`, the seven overlap masks; ERA5: IMERG 6-hourly `pr`) | `/hackathon/etc_data/{source}/single_vars/etc_2d_{var}_{suffix}.zarr` |
 | 3 (A3) | `combine_etc_2d_vars.py` | Step 2 (A3) zarr + Step 1 (A3) parquet | `/hackathon/etc_data/{source}/etc_2d_combined_{suffix}.zarr` |
 | 4 (A3) | `calc_etc_spatial_stats.py` | Step 3 (A3) zarr | `/hackathon/etc_data/stats/etc_spatial_stats_{source}.nc` |
 | 5 (A3) | Composite notebooks | Step 3 (A3) zarr | Figures (2D composite maps) |
