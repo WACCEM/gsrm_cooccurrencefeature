@@ -385,7 +385,8 @@ def append_chunk_to_zarr(chunk_results, chunk_times, time_start, mask_variables,
 
 
 def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, template_coords, attrs,
-                          client=None, logger=None, parallel=True, chunk_size_time=24, input_zarr_path=None):
+                          client=None, logger=None, parallel=True, chunk_size_time=24, input_zarr_path=None,
+                          return_missing=False):
     """
     Stream processing and writing to zarr without accumulating all results in memory.
     
@@ -415,10 +416,13 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
         Whether to use parallel processing
     chunk_size_time : int
         Number of time steps to process in each chunk
+    return_missing : bool
+        If True, also return the time steps that produced no result (they stay NaN in the store)
         
     Returns:
     --------
-    tuple : (int, list) - Number of successfully processed time steps and list of ETC overlap records
+    tuple : (int, list) - Number of successfully processed time steps and list of ETC overlap records;
+        (int, list, list) with the sorted time strings that received no result when return_missing is True
     """
     
     if logger is None:
@@ -432,6 +436,7 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
     # wrong write offset or a lost chunk shows up as an explicit gap instead of silently
     # leaving NaN (unwritten) data in place.
     written = np.zeros(len(time_coords), dtype=bool)
+    all_missing = []  # time strings that got no result (worker failure) or whose chunk could not be written
 
     logger.info(f"Processing {len(time_coords)} time steps in {total_chunks} chunks of {chunk_size_time}")
     
@@ -534,6 +539,7 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
                 logger=logger
             )
             written[start_idx:end_idx] = True
+            all_missing.extend(missing_times)
 
             # Update progress
             processed_this_chunk = len(chunk_results)
@@ -550,6 +556,7 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
 
         except Exception as e:
             logger.error(f"Error writing chunk {chunk_idx + 1} to zarr: {e}")
+            all_missing.extend(str(t) for t in chunk_times)
             continue
         
         # Log memory usage periodically
@@ -592,6 +599,9 @@ def stream_process_to_zarr(ds, time_coords, mask_variables, output_path, templat
             f"chunk: {gap_str}. These will read back as NaN (unwritten) data."
         )
 
+    if return_missing:
+        missing = sorted(set(all_missing) | {str(time_coords[i]) for i in unwritten_idx})
+        return total_processed, all_etc_records, missing
     return total_processed, all_etc_records
 
 

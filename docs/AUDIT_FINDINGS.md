@@ -262,3 +262,7 @@ Held on purpose while the pipeline runner and the second full round are done; no
    the time chunk (24 and 28); it only mattered for tiny test stores (a real record has more than 1400 frames). Both now skip the "make the chunks more even" adjustment when there is no full chunk
    (`chunks > 0`) and write one chunk. Every store that worked before is written with the same chunks and the same data (checked for 12 lengths from 1 to 1578 frames in each writer); the SCREAM test chain with 24 test steps that failed in round 2 now runs through Steps 1-3.
 7. **IFS** (`ifs_tco3999_rcbmf`) is in `config_sources.yaml` and has a Step 1 config but no tracking inputs yet; it is not enabled in `config/config_pipeline.yaml`.
+8. **Step 3 exit status.** *Done 2026-09-20.* `make_cooccurrence_masks.py` exited with status 0 when a frame had no result (the frame stayed NaN and only a log line said so), when its input could not be read and when its store could not
+   be written. It now lists the frames without a result and exits 1 in all three cases (`stream_process_to_zarr(return_missing=True)`, `all_time_steps_written`; `tests/test_step3_fail_loud.py`); UM on 48 real frames is bit-identical
+   to production and exits 0. All six round-2 Step 3 runs processed every frame, so nothing that ran before would fail. Found on the way and not changed: the sequential fallback of `stream_process_to_zarr` sits inside the
+   `if parallel and client` branch, so `--no-parallel` never processes a frame (the store stays all-NaN); it now fails with exit status 1 instead of exiting 0.

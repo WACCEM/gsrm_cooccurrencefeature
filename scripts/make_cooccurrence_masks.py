@@ -1133,9 +1133,38 @@ def process_single_timestep_overlaps(_ds, verbose=True):
     }
 
 
+def all_time_steps_written(n_written, n_total, missing_times, logger=None):
+    """
+    True when every time step produced a result. Otherwise log the time steps that did not.
+
+    A worker error is caught per frame and the frame stays NaN in the store, so without this check the step ended with exit
+    status 0 and the missing frames were only found downstream as NaN.
+
+    Parameters:
+    -----------
+    n_written : int
+        Number of time steps that produced a result
+    n_total : int
+        Number of time steps that were to be processed
+    missing_times : list of str
+        Time steps that produced no result (from stream_process_to_zarr(return_missing=True))
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    if n_written == n_total and not missing_times:
+        return True
+    shown = ", ".join(missing_times[:10]) + (f", ... ({len(missing_times) - 10} more)" if len(missing_times) > 10 else "")
+    logger.error("Only %d of %d time steps produced a result; %d time step(s) are NaN in the store: %s",
+                 n_written, n_total, len(missing_times), shown or "(not identified)")
+    return False
+
+
 def main():
     """
     Main function that processes the full time series dataset.
+
+    Returns the exit status: 0 when every time step was written, 1 when the input cannot be read, the store cannot be
+    written, or any time step produced no result.
     """
 
     # Set up logging
@@ -1212,12 +1241,12 @@ def main():
             print(f"  Spatial dimensions: {dict(ds.dims)}")
         except Exception as e:
             print(f"  ❌ Error loading dataset: {e}")
-            return
+            return 1
 
         if 'tot_pr' not in ds.data_vars:
             print("  ❌ Input has no 'tot_pr' (window-mean total precipitation). Rerun make_mcs_swath_masks.py "
                   "(Step 1) and combine_tracking_masks.py (Step 2) with the current scripts first.")
-            return
+            return 1
 
         # Limit time steps for testing if requested
         if args.test_steps is not None:
@@ -1299,7 +1328,7 @@ def main():
             # Stream process with chunked zarr writing
             # This will also collect ETC overlap records during processing
             logger.info("Starting streaming processing to zarr...")
-            successful_times, all_etc_records = stream_process_to_zarr(
+            successful_times, all_etc_records, missing_times = stream_process_to_zarr(
                 ds=ds,
                 time_coords=time_coords,
                 mask_variables=mask_variables,
@@ -1310,10 +1339,13 @@ def main():
                 logger=logger,
                 parallel=parallel,
                 chunk_size_time=chunk_size_time,
-                input_zarr_path=in_dir  # Pass the input zarr path for workers
+                input_zarr_path=in_dir,  # Pass the input zarr path for workers
+                return_missing=True
             )
             
-            logger.info(f"✅ Processing complete: {successful_times} time steps written to {output_path}")
+            complete = all_time_steps_written(successful_times, len(time_coords), missing_times, logger)
+            logger.info(f"{'✅' if complete else '⚠️'} Processing {'complete' if complete else 'INCOMPLETE'}: "
+                        f"{successful_times} of {len(time_coords)} time steps written to {output_path}")
             logger.info(f"✅ Collected {len(all_etc_records)} ETC overlap records during processing")
             
             # Save ETC overlap tracking information to CSV and Parquet files
@@ -1323,7 +1355,7 @@ def main():
         except Exception as e:
             logger.error(f"Error writing chunked zarr: {e}")
             print(f"  ❌ Error writing zarr: {e}")
-            return
+            return 1
         
         # Store success info to print after Dask cleanup
         success_info = {
@@ -1331,7 +1363,8 @@ def main():
             'successful_times': successful_times,
             'total_times': len(time_coords),
             'mask_variables': mask_variables,
-            'parallel': parallel
+            'parallel': parallel,
+            'complete': complete
         }
 
     finally:
@@ -1347,7 +1380,7 @@ def main():
         # Print success message after Dask cleanup (so it's always visible at the end)
         if 'success_info' in locals():
             print(f"\n{'='*80}")
-            print(f"✅ PROCESSING COMPLETE!")
+            print("✅ PROCESSING COMPLETE!" if success_info['complete'] else "⚠️ PROCESSING FINISHED WITH MISSING TIME STEPS (exit status 1)")
             print(f"{'='*80}")
             print(f"Output: {success_info['output_path']}")
             print(f"Time steps processed: {success_info['successful_times']}/{success_info['total_times']}")
@@ -1373,6 +1406,8 @@ def main():
                     print(f"  Dataset written but could not read sample statistics")
             print(f"{'='*80}\n")
 
+    return 0 if success_info['complete'] else 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
