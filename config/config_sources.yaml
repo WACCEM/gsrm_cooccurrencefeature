@@ -17,6 +17,23 @@ IR_IMERG:
   # start_datetime: 2019-08-01T00:00
   # end_datetime: 2020-08-31T23:59
 
+# GsMAP configuration (second observational product; not in the catalog, uses a local 6-hourly Zarr store; not part of the
+# COF pipeline registry -- no MCS/AR/ETC tracking, so it is run standalone through calc_extreme_precip_thresholds.py for the
+# extreme-precipitation-threshold comparison only)
+GSMAP:
+  source_name: GsMAPv8
+  catalog_location: NERSC
+  catalog_params:
+    zoom: 8
+  varname_precip_liq: hourlyPrecipRate
+  varname_precip_ice:
+  pr_convert_factor: 1.0  # Already in [mm/h]
+  # Metadata only (start_date/end_date global attrs, unless overridden by the actual data when --start_time/--end_time is
+  # given) -- the store's full extent; the 2019-2021 window matching IMERG's 6-hourly store is applied at invocation with
+  # --start_time/--end_time, not by these dates.
+  start_datetime: 2010-01-01T00:00
+  end_datetime: 2024-12-31T23:59
+
 # SCREAM model configuration
 scream_ne120:
   source_name: scream

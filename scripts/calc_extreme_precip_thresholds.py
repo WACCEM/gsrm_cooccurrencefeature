@@ -76,6 +76,13 @@ def parse_cmd_args():
     parser.add_argument('--available_memory_gb', type=float, default=None,
                         help='Memory (GB) to budget for the block size when --cell_chunk_size is not given (default: the '
                              'available memory of the node, detected with psutil)')
+    parser.add_argument('--no_annual', action='store_true',
+                        help='Skip computing per-calendar-year percentiles and the interannual IQR (default: computed '
+                             'whenever the source has at least 2 qualifying years; a ~1-year model source is left with '
+                             'just the all-period percentiles either way)')
+    parser.add_argument('--min_year_coverage_days', type=int, default=300,
+                        help='Minimum number of distinct calendar days with data required for a calendar year to be '
+                             'included in the annual/interannual-IQR calculation (default: 300)')
     parser.add_argument('--output_dir', type=str, default=None,
                         help='Output directory for NetCDF files (default: extreme_precip/ under the pipeline data root, see '
                              'src/cof_paths.py; production unless COF_DATA_ROOT is set)')
@@ -542,16 +549,182 @@ def calc_precip_percentiles(pr, percentiles=[90, 95], time_duration='6h', method
             pr_percentile.attrs['min_precip_threshold'] = f'{min_precip_threshold} mm/h'
             pr_percentile.attrs['note'] = f'Precipitation below {min_precip_threshold} mm/h excluded from calculation'
         results[p] = pr_percentile
-    
+
     return results
 
 
-def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name, 
-                 start_datetime, end_datetime, time_duration, method, 
-                 min_precip_threshold=None, logger=None, extra_attrs=None):
+#--------------------------------------------------------------------------------------------------
+# Per-year percentiles and their interannual IQR, ported from calc_extreme_precip_thresholds_1h.py. calc_precip_percentiles()
+# above does its own threshold filtering internally rather than exposing a prepared intermediate, so calc_annual_precip_percentiles
+# below does the same filtering itself (a few duplicated lines) instead of sharing one; calc_interannual_iqr is unchanged, since it
+# only operates on the (year, cell) dict calc_annual_precip_percentiles returns, regardless of time_duration.
+#--------------------------------------------------------------------------------------------------
+
+def calc_annual_precip_percentiles(pr, percentiles=[90, 95], time_duration='6h', method='linear',
+                                   min_precip_threshold=None, min_year_coverage_days=300, min_years=2,
+                                   cell_chunk_size=None, available_memory_gb=None, logger=None):
+    """
+    Calculate precipitation percentiles separately for each qualifying calendar year.
+
+    Args:
+        pr: xr.DataArray
+            Precipitation data array with dimensions (time, cell) in mm/h, as returned by load_precipitation_data() (not yet
+            threshold-filtered -- this function applies min_precip_threshold itself, the same way calc_precip_percentiles() does).
+        percentiles: list of float
+            Percentiles to compute (e.g., [90, 95] for 90th and 95th percentiles)
+        time_duration: str
+            Time duration of pr (only used here for variable attributes)
+        method: str
+            Quantile interpolation method (see calc_precip_percentiles)
+        min_precip_threshold: float, optional
+            Minimum precipitation threshold (mm/h); values below are excluded, exactly like calc_precip_percentiles(). Default None.
+        min_year_coverage_days: int
+            Minimum number of distinct calendar days with data required for a calendar year to be included in the annual
+            calculation. Default 300.
+        min_years: int
+            Minimum number of qualifying years required to compute annual percentiles at all. Default 2.
+        cell_chunk_size: int, optional
+            Number of cells processed per block; see determine_cell_chunk_size() for rationale. If None (default), sized
+            dynamically *per year* -- a single year's time span is much shorter than the full record, so this naturally lands
+            on a much larger (often native-chunk-aligned, zero redundant-read) block size than the all-period call uses.
+        available_memory_gb: float, optional
+            Forwarded to determine_cell_chunk_size() when cell_chunk_size is None.
+        logger: logging.Logger
+            Logger instance
+
+    Returns:
+        tuple: (results, years)
+            results: dict with percentile values as keys and DataArrays (year, cell) as values,
+                     e.g., {90: pr_annual_p90, 95: pr_annual_p95}
+            years: sorted list of qualifying calendar years (int)
+            Returns (None, None) if fewer than min_years calendar years qualify.
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    if min_precip_threshold is not None:
+        pr_filtered = pr.where(pr >= min_precip_threshold)
+    else:
+        pr_filtered = pr
+
+    # Determine data coverage (distinct calendar days present) for each calendar year. Counting unique days (rather than time
+    # steps) keeps this independent of time_duration and tolerant of gaps in the record; .dt.year/.dt.dayofyear work for both
+    # standard (numpy datetime64) and cftime-backed (non-standard-calendar) time coordinates alike.
+    time_da = pr_filtered['time']
+    day_keys = pd.DataFrame({'year': time_da.dt.year.values,
+                             'doy': time_da.dt.dayofyear.values}).drop_duplicates()
+    coverage_days = day_keys.groupby('year').size()
+
+    qualifying_years = sorted(int(y) for y, n in coverage_days.items() if n >= min_year_coverage_days)
+
+    for y in coverage_days.index.sort_values():
+        status = 'kept' if int(y) in qualifying_years else 'dropped (insufficient coverage)'
+        logger.info(f"  Year {int(y)}: {coverage_days[y]} days of data -> {status}")
+
+    if len(qualifying_years) < min_years:
+        logger.info(f"Only {len(qualifying_years)} year(s) meet the minimum coverage of "
+                    f"{min_year_coverage_days} days (need >= {min_years}); "
+                    f"skipping annual percentile calculation.")
+        return None, None
+
+    logger.info(f"Computing annual percentiles for {len(qualifying_years)} year(s): {qualifying_years}")
+
+    results = {p: [] for p in percentiles}
+    for year in qualifying_years:
+        logger.info(f"  Computing percentiles for year {year}...")
+        pr_year = pr_filtered.sel(time=str(year))
+        year_results = _quantile_over_time_blocked(pr_year, percentiles, method=method,
+                                                    cell_chunk_size=cell_chunk_size,
+                                                    available_memory_gb=available_memory_gb,
+                                                    logger=logger)
+        for p in percentiles:
+            results[p].append(year_results[p])
+
+    annual_results = {}
+    for p in percentiles:
+        pr_annual = xr.concat(results[p], dim=pd.Index(qualifying_years, name='year'))
+        if 'quantile' in pr_annual.coords:
+            pr_annual = pr_annual.drop_vars('quantile')
+        pr_annual.name = f'pr_annual_p{p}'
+        pr_annual.attrs['long_name'] = f'{p}th percentile precipitation for each calendar year'
+        pr_annual.attrs['units'] = 'mm/h'
+        pr_annual.attrs['time_duration'] = time_duration
+        pr_annual.attrs['percentile'] = p
+        pr_annual.attrs['method'] = method
+        pr_annual.attrs['cell_methods'] = 'time: quantile (interval: 1 year)'
+        pr_annual.attrs['comment'] = (f'Computed independently within each calendar year having '
+                                       f'at least {min_year_coverage_days} days of data')
+        pr_annual.attrs['min_year_coverage_days'] = min_year_coverage_days
+        if min_precip_threshold is not None:
+            pr_annual.attrs['min_precip_threshold'] = f'{min_precip_threshold} mm/h'
+            pr_annual.attrs['note'] = f'Precipitation below {min_precip_threshold} mm/h excluded from calculation'
+        annual_results[p] = pr_annual
+
+    return annual_results, qualifying_years
+
+
+def calc_interannual_iqr(annual_results, method='linear', logger=None):
+    """
+    Calculate the interquartile range (and quartiles) across years of the annual precipitation percentiles.
+
+    Args:
+        annual_results: dict
+            Dictionary with percentile values as keys and computed DataArrays (dims: year, cell) as values,
+            e.g., {90: pr_annual_p90, 95: pr_annual_p95}
+        method: str
+            Quantile interpolation method used for the q25/q75 calculation across years
+        logger: logging.Logger
+            Logger instance
+
+    Returns:
+        dict: Dictionary keyed by percentile, each value a dict with 'q25', 'q75', 'iqr' DataArrays (dims: cell)
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    iqr_results = {}
+    for p, pr_annual in annual_results.items():
+        logger.info(f"Computing interannual IQR of the {p}th percentile across years...")
+        n_years = pr_annual.sizes['year']
+        quartiles = pr_annual.quantile([0.25, 0.75], dim='year', method=method, skipna=True)
+        q25 = quartiles.sel(quantile=0.25, drop=True)
+        q75 = quartiles.sel(quantile=0.75, drop=True)
+        iqr = q75 - q25
+
+        for name, da_, label in [('q25', q25, '25th'), ('q75', q75, '75th')]:
+            da_.name = f'pr_{name}_p{p}'
+            da_.attrs['long_name'] = f'{label} percentile across annual {p}th percentile precipitation'
+            da_.attrs['units'] = 'mm/h'
+            da_.attrs['percentile'] = p
+            da_.attrs['method'] = method
+            da_.attrs['cell_methods'] = 'year: quantile'
+            da_.attrs['n_years'] = n_years
+            da_.attrs['comment'] = (f'{label} percentile, taken across the {n_years} annual '
+                                     f'{p}th percentile precipitation values, of the interannual '
+                                     f'distribution of the {p}th percentile threshold')
+
+        iqr.name = f'pr_iqr_p{p}'
+        iqr.attrs['long_name'] = f'Interquartile range of annual {p}th percentile precipitation'
+        iqr.attrs['units'] = 'mm/h'
+        iqr.attrs['percentile'] = p
+        iqr.attrs['method'] = method
+        iqr.attrs['cell_methods'] = 'year: quantile'
+        iqr.attrs['n_years'] = n_years
+        iqr.attrs['comment'] = (f'pr_q75_p{p} minus pr_q25_p{p}; measures the interannual spread '
+                                 f'of the {p}th percentile precipitation threshold across {n_years} years')
+
+        iqr_results[p] = {'q25': q25, 'q75': q75, 'iqr': iqr}
+
+    return iqr_results
+
+
+def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
+                 start_datetime, end_datetime, time_duration, method,
+                 min_precip_threshold=None, logger=None, extra_attrs=None,
+                 annual_results=None, iqr_results=None, years=None, min_year_coverage_days=None):
     """
     Write precipitation percentiles to a NetCDF file.
-    
+
     Args:
         results_dict: dict
             Dictionary with percentile values as keys and DataArrays as values
@@ -577,29 +750,52 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
             Logger instance
         extra_attrs: dict, optional
             Further global attributes to record, e.g. where the precipitation came from
+        annual_results: dict, optional
+            Dictionary with percentile values as keys and computed DataArrays (dims: year, cell) as values, from
+            calc_annual_precip_percentiles(). If None (default), no annual variables are written.
+        iqr_results: dict, optional
+            Dictionary keyed by percentile, each value a dict with 'q25', 'q75', 'iqr' computed DataArrays (dims: cell),
+            from calc_interannual_iqr(). If None (default), no interannual IQR variables are written.
+        years: list of int, optional
+            Qualifying calendar years corresponding to annual_results' year dimension
+        min_year_coverage_days: int, optional
+            Minimum coverage (days) required for a year to qualify, recorded as an attribute
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     logger.info(f'Preparing data for output file: {output_filename}')
-    
+
     # Create variables dictionary
     var_dict = {}
     for p, data in results_dict.items():
         var_name = f'pr_p{int(p)}'
         var_dict[var_name] = (['cell'], data.values)
-    
+
     # Create coordinates
     coord_dict = {
         'cell': (['cell'], ds_p['cell'].values),
         'lat': (['cell'], ds_p['lat'].values),
         'lon': (['cell'], ds_p['lon'].values),
     }
-    
+
     # Add crs if available
     if 'crs' in ds_p:
         coord_dict['crs'] = ds_p['crs'].values
-    
+
+    # Add annual percentile and interannual IQR variables, if provided
+    if annual_results is not None and years is not None:
+        coord_dict['year'] = (['year'], np.asarray(years, dtype='int32'))
+        for p, data in annual_results.items():
+            var_name = f'pr_annual_p{int(p)}'
+            var_dict[var_name] = (['year', 'cell'], data.values)
+
+    if iqr_results is not None:
+        for p, quartiles in iqr_results.items():
+            for name in ('q25', 'q75', 'iqr'):
+                var_name = f'pr_{name}_p{int(p)}'
+                var_dict[var_name] = (['cell'], quartiles[name].values)
+
     # Create global attributes
     gattr_dict = {
         'Title': 'Precipitation percentiles at different time scales',
@@ -619,17 +815,31 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
         gattr_dict['threshold_note'] = f'Precipitation below {min_precip_threshold} mm/h excluded from percentile calculation'
     if extra_attrs:
         gattr_dict.update(extra_attrs)
-    
+
+    if years is not None:
+        gattr_dict['annual_years'] = ', '.join(str(y) for y in years)
+        gattr_dict['n_annual_years'] = len(years)
+        if min_year_coverage_days is not None:
+            gattr_dict['min_year_coverage_days'] = min_year_coverage_days
+
     # Create output dataset
     dsout = xr.Dataset(var_dict, coords=coord_dict, attrs=gattr_dict)
-    
+
     # Add coordinate attributes
     dsout['cell'].attrs['long_name'] = 'HEALPix cell index'
     dsout['lon'].attrs['long_name'] = 'Longitude'
     dsout['lon'].attrs['units'] = 'degree'
     dsout['lat'].attrs['long_name'] = 'Latitude'
     dsout['lat'].attrs['units'] = 'degree'
-    
+    if 'year' in dsout.coords:
+        dsout['year'].attrs['long_name'] = 'Calendar year'
+        dsout['year'].attrs['description'] = (
+            f'Calendar years with at least {min_year_coverage_days} days of data, '
+            f'used for the annual percentile and interannual IQR variables'
+            if min_year_coverage_days is not None else
+            'Calendar years used for the annual percentile and interannual IQR variables'
+        )
+
     # Add variable attributes
     for p in results_dict.keys():
         var_name = f'pr_p{int(p)}'
@@ -640,7 +850,22 @@ def write_netcdf(results_dict, ds_p, output_filename, zoom, source_name,
         dsout[var_name].attrs['method'] = method
         if min_precip_threshold is not None:
             dsout[var_name].attrs['min_precip_threshold'] = f'{min_precip_threshold} mm/h'
-    
+
+    # Carry over the attributes computed on the annual and interannual-IQR source DataArrays (long_name, units, cell_methods,
+    # comment, etc.)
+    if annual_results is not None and years is not None:
+        for p, data in annual_results.items():
+            var_name = f'pr_annual_p{int(p)}'
+            dsout[var_name].attrs.update(data.attrs)
+
+    if iqr_results is not None:
+        for p, quartiles in iqr_results.items():
+            for name in ('q25', 'q75', 'iqr'):
+                var_name = f'pr_{name}_p{int(p)}'
+                dsout[var_name].attrs.update(quartiles[name].attrs)
+                if min_precip_threshold is not None:
+                    dsout[var_name].attrs['min_precip_threshold'] = f'{min_precip_threshold} mm/h'
+
     # Save the output file
     fillvalue = np.nan
     comp = dict(zlib=True, _FillValue=fillvalue, dtype='float32')
@@ -742,6 +967,15 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None, inpu
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)
     
+    elif catalog_source == "GSMAP":
+        # GSMAP is not in the catalog; use the local 6-hourly Zarr store (a temporal-mean resample of the 1-hourly store,
+        # same variable name and units, made 2026-09-21)
+        dir_healpix = "/pscratch/sd/w/wcmca1/GsMAP/healpix/"
+        in_zarr = f"{dir_healpix}GsMAPv8_6H_zoom{zoom}_20100101_20241231.zarr"
+        logger.info(f"Loading GSMAP 6-hourly dataset (NOT from catalog): {in_zarr}")
+        ds_p = xr.open_zarr(in_zarr, consolidated=True)
+        ds_p = ds_p.pipe(egh.attach_coords)
+
     elif catalog_source == "scream_ne120":
         dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
         in_basename = f"scream_pr"
@@ -861,6 +1095,8 @@ def main():
     end_time = args_dict['end_time']
     cell_chunk_size = args_dict['cell_chunk_size']
     available_memory_gb = args_dict['available_memory_gb']
+    compute_annual = not args_dict['no_annual']
+    min_year_coverage_days = args_dict['min_year_coverage_days']
 
     if (input_var is not None or input_factor is not None) and input_zarr is None:
         sys.exit("--input_var and --input_factor only apply together with --input_zarr")
@@ -892,11 +1128,17 @@ def main():
                     f"({pr.time.values[0]} to {pr.time.values[-1]})")
 
     extra_attrs = None
-    if input_zarr is not None:
-        # The period actually used goes into the file, and where the precipitation came from
+    if input_zarr is not None or start_time is not None or end_time is not None:
+        # The period actually used (after any --input_zarr and/or --start_time/--end_time subsetting) goes into the file --
+        # config's start_datetime/end_datetime would otherwise stay in the attributes even when they were never applied (e.g. a
+        # source loaded through its own elif branch in load_precipitation_data(), such as GSMAP, then subset with --start_time
+        # /--end_time: the config dates are for a source with no dedicated branch, and --start_time/--end_time is what actually
+        # subset the data here)
         start_datetime = _time_to_isoformat(pr.time.values[0])
         end_datetime = _time_to_isoformat(pr.time.values[-1])
         logger.info(f"Input time steps: {pr.sizes['time']} ({start_datetime} to {end_datetime})")
+    if input_zarr is not None:
+        # Where the precipitation came from, only recorded for an explicit --input_zarr override
         extra_attrs = {
             'input_zarr': input_zarr,
             'input_var': pr.attrs.get('input_var', ''),
@@ -929,16 +1171,35 @@ def main():
             logger.info(f"P{int(p)}: min={float(results_computed[p].min()):.3f}, "
                        f"max={float(results_computed[p].max()):.3f}, "
                        f"mean={float(results_computed[p].mean()):.3f} mm/h")
-        
+
+        # Per-calendar-year percentiles and their interannual IQR, for sources with enough qualifying years (self-gating: a
+        # ~1-year model source logs "Only 1 year(s)..." and is left with just the percentiles above)
+        annual_computed = None
+        iqr_computed = None
+        years = None
+        if compute_annual:
+            logger.info(f"Computing annual percentiles (min_year_coverage_days={min_year_coverage_days})...")
+            annual_results, years = calc_annual_precip_percentiles(
+                pr, percentiles=percentiles, time_duration=time_duration, method=method,
+                min_precip_threshold=min_precip_threshold, min_year_coverage_days=min_year_coverage_days,
+                cell_chunk_size=cell_chunk_size, available_memory_gb=available_memory_gb, logger=logger)
+            if annual_results is not None:
+                logger.info("Computing results (annual)...")
+                annual_computed = {p: data.compute() for p, data in annual_results.items()}
+                logger.info("Computing interannual IQR...")
+                iqr_computed = calc_interannual_iqr(annual_computed, method=method, logger=logger)
+
         # Create output filename
         time_str = time_duration.lower().replace('h', 'h').replace('d', 'd')
         out_basename = f"{source_name}_precip_percentiles_{time_str}_hp{zoom}_{version}.nc"
         output_filename = os.path.join(output_dir, out_basename)
-        
+
         # Write to NetCDF
         write_netcdf(results_computed, ds_p, output_filename, zoom, source_name,
                     start_datetime, end_datetime, time_duration, method,
-                    min_precip_threshold, logger, extra_attrs=extra_attrs)
+                    min_precip_threshold, logger, extra_attrs=extra_attrs,
+                    annual_results=annual_computed, iqr_results=iqr_computed, years=years,
+                    min_year_coverage_days=min_year_coverage_days if compute_annual else None)
     
     logger.info("=" * 60)
     logger.info("Extreme precipitation percentile calculation complete!")
