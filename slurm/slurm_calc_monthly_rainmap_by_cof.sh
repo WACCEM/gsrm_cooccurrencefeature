@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A m1657
+#SBATCH -A m1867
 #SBATCH -J calc_monthly_rainmap_by_cof
 #SBATCH -t 00:15:00
 #SBATCH -q regular

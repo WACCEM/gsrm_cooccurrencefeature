@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A m1657
+#SBATCH -A m1867
 #SBATCH -J make_cooccurrence_masks
 #SBATCH -t 00:20:00
 #SBATCH -q regular

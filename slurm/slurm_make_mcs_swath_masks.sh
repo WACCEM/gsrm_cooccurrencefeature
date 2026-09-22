@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A m1657
+#SBATCH -A m1867
 #SBATCH -J make_mcs_swath_masks
 #SBATCH -t 00:30:00
 #SBATCH -q regular

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A m1657
+#SBATCH -A m1867
 #SBATCH -J cof_pipeline
 #SBATCH -t 03:00:00
 #SBATCH -q regular
