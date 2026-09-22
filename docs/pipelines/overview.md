@@ -77,7 +77,7 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebook: notebooks/plot_cof_raintype_rank_map.ipynb
+  └─ Notebook: notebooks/plot_cof_total_raintype_rank_map.ipynb
   └─ Input:  Step 4 NetCDF
   └─ Output: Figures showing precipitation maps and rankings by COF type
 ```
@@ -96,7 +96,14 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
              without it, each source's own 6-hourly precipitation (catalog or local zarr)
   └─ Output: /hackathon/extreme_precip/
              {source}_precip_percentiles_6h_hp8_v1.nc
-             (per-cell P90, P95, ... thresholds; shape: cell)
+             (per-cell P90, P95, ... thresholds; shape: cell. Also, for any source with at
+              least 2 qualifying calendar years -- --min_year_coverage_days, default 300 days
+              of data; --no_annual turns it off -- per-calendar-year percentiles and their
+              interannual IQR: a year coordinate plus pr_annual_p*/pr_q25_p*/pr_q75_p*/pr_iqr_p*)
+  └─ GsMAP:  a 7th source (config_sources.yaml's GSMAP entry) can also be run through this
+             script for cross-checking IMERG. It is not in config_pipeline.yaml, so it is not
+             part of this pipeline's registry -- no s1-s3/monthly/attribution, thresholds only,
+             invoked directly or via run_cof_pipeline.py --step-args (see run_cof_pipeline.md).
 
 [Step 4b] Extreme Precipitation Attribution
   └─ Script: scripts/calc_stormtype_extreme_precip_spatial.py
@@ -108,10 +115,18 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebook: notebooks/plot_cof_extreme_raintype_rank_map.ipynb
-  └─ Input:  Step 4b NetCDF
-  └─ Output: Figures showing extreme precipitation maps and rankings by COF type
+  └─ Notebooks: notebooks/plot_cof_extreme_raintype_rank_map.ipynb (Step 4b output)
+                notebooks/plot_extreme_rain_threshold_map.ipynb (Step 4a output, multi-source
+                  incl. GsMAP; also 1-hourly: plot_extreme_rain_threshold_map_1h.ipynb)
+                notebooks/plot_extreme_rain_threshold_map_obs_interannual.ipynb (Step 4a's
+                  annual/IQR output, IMERG+GsMAP only, independent 11-year archival files)
+  └─ Input:  Step 4a and/or Step 4b NetCDF, depending on the notebook
+  └─ Output: Figures showing extreme precipitation maps, rankings, and interannual spread
 ```
+
+The 12 production notebooks (including all of the above) read a CFS copy of their inputs, identical file by file to the
+pscratch products described here (`/global/cfs/cdirs/wcm_shr/hk25/...`; the pscratch path is kept as a commented-out
+alternative in each notebook's config cell).
 
 > **Note:** Steps 4a and 4b are independent and can be run in either order or in parallel, but both must complete before Step 5.
 
@@ -119,7 +134,7 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
 
 ## Analysis 3 — ETC Composite Analysis
 
-This pipeline is independent of the COF mask pipeline (Analyses 1 and 2). It operates directly on ETC track files and HEALPix model output. Data sources include ERA5+IMERG (observations) and the same six GSRM models.
+This pipeline is independent of the COF mask pipeline (Analyses 1 and 2). It operates directly on ETC track files and HEALPix model output. Data sources include ERA5+IMERG (observations) and the same five GSRM models.
 
 ```
 ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
@@ -314,7 +329,7 @@ AR / TC / ETC NetCDF files          2a input: tot_pr / IMERG 6-h
             │            └────────────────-┘ └──────────┬────────────┘
             │                    └──────────────────────┘
             ▼                                │
-   plot_cof_raintype_                        ▼
+   plot_cof_total_raintype_                  ▼
    rank_map.ipynb              plot_cof_extreme_raintype_
                                rank_map.ipynb
 

@@ -78,6 +78,50 @@ which stops its steps cleanly.
 | `--max-slots N`, `--stagger-sec S`, `--min-free-gb G` | CPU-slot budget (default 80% of the logical CPUs), seconds between step starts (20), memory that must be available to start a step (60 GB) |
 | `--step-args STEP "ARGS"` | extra arguments for one step, for tests or a special run |
 
+Step aliases (either form works everywhere a step name does): `1`/`step1` → `s1`, `2`/`step2` → `s2`, `3`/`step3` → `s3`, `thr`/`extreme` → `thresholds`, `attr` → `attribution`.
+
+### Example: thresholds and attribution only, against a different threshold period
+
+`--step-args` appends to the command the runner already builds for that step, and a later occurrence of an option on the
+command line overrides an earlier one (plain argparse behavior) — so pointing `thresholds` at a different Zarr store needs
+no `config_sources.yaml` edit, even for IMERG, whose registry entry (`config/config_pipeline.yaml:54-56`) already passes its
+own `--input_zarr`/`--input_var`:
+
+```bash
+# Side data-root: symlink cof_masks/ to the real one so Step 3 is reused, not re-run. Thresholds+attribution land under
+# the side root only; production is untouched.
+mkdir -p /pscratch/sd/w/wcmca1/hackathon/tmp/imerg20yr
+ln -s /pscratch/sd/w/wcmca1/hackathon/cof_masks /pscratch/sd/w/wcmca1/hackathon/tmp/imerg20yr/cof_masks
+
+python scripts/run_cof_pipeline.py \
+  --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/imerg20yr \
+  --sources imerg --steps thresholds attribution \
+  --step-args thresholds "--input_zarr /path/to/IMERG_20yr_store.zarr --input_var precipitation" \
+  --dry-run          # drop --dry-run to run; expect one WARNING that s3's output has no runner marker (harmless: it's
+                      # production's own Step 3 output, reused read-only through the symlink, not something this run made)
+```
+
+```bash
+# In place: overwrites the current threshold+attribution files under production (needs --force: those files predate this
+# run and have no runner marker).
+python scripts/run_cof_pipeline.py --data-root /pscratch/sd/w/wcmca1/hackathon/ \
+  --sources imerg --steps thresholds attribution --force \
+  --step-args thresholds "--input_zarr /path/to/IMERG_20yr_store.zarr --input_var precipitation"
+```
+
+Both commands work for any source, not just IMERG — swap `--sources imerg` and the `--input_zarr` value.
+
+**Trap:** `calc_stormtype_extreme_precip_spatial.py` always reads `extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc`
+— there is no `--version`/`--threshold_file` flag on the attribution step to point it at a differently-versioned thresholds
+file. A `thresholds` run with `--step-args thresholds "--version v20yr ..."` therefore produces a file the attribution step
+will never read; leave `--version` at its default (as both commands above do) so attribution finds it. If you want the
+20-year thresholds purely as a separate, differently-named artifact instead — not meant to feed the attribution at all —
+call `scripts/calc_extreme_precip_thresholds.py` directly with `--version` and skip the runner for that step.
+
+A source with several years of qualifying data will also get the per-calendar-year percentiles and their interannual IQR
+(new `year` coordinate, `pr_annual_p*`/`pr_q25_p*`/`pr_q75_p*`/`pr_iqr_p*` variables) once at least 2 calendar years clear
+`--min_year_coverage_days` (default 300 distinct days); add `--no_annual` to the `--step-args` string above to skip that.
+
 ## Where things go, and what is protected
 
 `--data-root` is required. Every script reads `COF_DATA_ROOT` (see `src/cof_paths.py`, default the production tree), and the runner sets

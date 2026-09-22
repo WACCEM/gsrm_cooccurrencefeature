@@ -89,7 +89,7 @@ etc_bridges = {e for _, e in ar_etc} & {e for _, e in mcs_etc}   # ETC in AR-ETC
 
 - Track-level double membership exists: an AR is in both the MCS-AR and the AR-ETC list in 3.9-7.0% of AR track-frames (0.18-0.46 per 6-hourly frame), an MCS in both MCS-AR and MCS-ETC in 0.07-0.25% of MCS track-frames. Published totals are not affected (priority order); per-category track counts and the Analysis 3 and 4 flags see the categories as defined in the section above.
 - The COF categories are exclusive after the priority order of the consumers, not in the Step 3 masks themselves. `cof_identification.md` and `mcs_cof_trackstats.md` say so.
-- Step 3 exits with status 0 even when a frame fails (the frame stays NaN and only a log line says so). This is independent of the decision above and is handled separately.
+- Step 3 now lists any frame without a result and exits with status 1 (fixed 2026-09-20, `cf695bc`; previously it exited 0 with the frame left NaN and only a log line saying so). This was independent of the decision above and was handled separately.
 
 ## If this is revisited
 

@@ -60,6 +60,23 @@ bash slurm/run_interactive_etc_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
 | `--resume`, `--force`, `--dry-run`, `--preflight-only`, `--skip-preflight`, `--max-slots`, `--stagger-sec`, `--min-free-gb` | as in `run_cof_pipeline.py` |
 | `--step-args STEP "ARGS"` | extra arguments for one step, e.g. `--step-args pr "--start_date 2020-03-01 --end_date 2020-03-08"` for a short test |
 
+### Example: a subset of steps for one source
+
+There is no threshold/attribution pair to rerun here — Analysis 3 has no such steps — but `--sources`/`--steps` combine the
+same way as in `run_cof_pipeline.py`; `mask` stands for all seven `mask_<variable>` tasks:
+
+```bash
+python scripts/run_etc_pipeline.py \
+  --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/etc_round2 \
+  --sources imerg --steps composites stats \
+  --dry-run          # drop --dry-run to run; combine's output must already exist under this root, or the run stops
+```
+
+**Unlike the COF pipeline, the observations' precipitation input (the `pr` step) cannot be pointed at a different IMERG
+store through this pipeline.** `config/config_etc_pipeline.yaml`'s `imerg_6h_zarr` is read only by the preflight check;
+the `pr` step itself resolves the IMERG 6-hourly store from a hard-coded directory and filename pattern inside
+`extract_environments/extract_etc_2d_vars.py`. Editing the registry value does not change what gets read.
+
 ## Precipitation and time matching
 
 `pr` of the models is Step 1's `tot_pr`, read from `cof_masks/{source}_cofmasks_hp8_v1.zarr`: the mean of the hourly precipitation over the 6-hour window that starts at the label time T, the window

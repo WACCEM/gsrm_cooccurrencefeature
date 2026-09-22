@@ -77,7 +77,7 @@ Output: mcs_cof_trackstats_allsources.parquet
   └─ Box plots + Mann-Whitney U significance test vs. the Isolated baseline
          |
          v
-Output: Box-plot figures (PDF) + significance-test tables (HTML)
+Output: Box-plot figures (PNG) + significance-test tables (HTML)
 ```
 
 ---
@@ -213,7 +213,8 @@ track initiation), `relative_time_h`, `track_duration_h`, and `dataset` (the sou
 A single snappy-compressed parquet file:
 `/pscratch/sd/w/wcmca1/hackathon/cof_masks/stats/mcs_cof_trackstats_allsources.parquet` — one row
 per valid hourly time step per track, across all six sources, with MCS track statistics and COF
-overlap flags/partner IDs combined.
+overlap flags/partner IDs combined. Step 3's notebook reads the identical CFS copy of this file
+(`/global/cfs/cdirs/wcm_shr/hk25/cof_masks/stats/...`), not this pscratch path directly.
 
 ---
 
@@ -313,12 +314,13 @@ raw percentage of the mean would understate a physically meaningful shift.
 
 ### Output
 
-Figures and tables are written to `/global/cfs/cdirs/m1867/zfeng/hk25/figures_mcs/`:
+Figures and tables are written to `/global/cfs/cdirs/m1867/zfeng/hk25/figures_mcs_202609/`:
 
 | File pattern | Content |
 |--------------|---------|
-| `Boxplot_MCS_by4COFtypes_3x3_ocean.pdf` | 3×3 box-plot grid, ocean MCS subset |
-| `Boxplot_MCS_by4COFtypes_3x3_land.pdf` | 3×3 box-plot grid, land MCS subset |
+| `Boxplot_MCS_by4COFtypes_3x3.png` | 3×3 box-plot grid, all MCS (no ocean/land split) |
+| `Boxplot_MCS_by4COFtypes_3x3_ocean.png` | 3×3 box-plot grid, ocean MCS subset |
+| `Boxplot_MCS_by4COFtypes_3x3_land.png` | 3×3 box-plot grid, land MCS subset |
 | `Table_MCS_sig_ocean.html` | Significance-test summary table, ocean MCS subset |
 | `Table_MCS_sig_land.html` | Significance-test summary table, land MCS subset |
 

@@ -45,6 +45,10 @@ Input: --input_zarr (Step 1's tot_pr; IMERG: the non-IR 6-hourly store)
          v
 Output: {source}_precip_percentiles_6h_hp8_v1.nc
         └─ Variables: pr_p90, pr_p95, ... (shape: cell)
+        └─ For any source with >= 2 qualifying calendar years (--min_year_coverage_days, default
+           300 distinct days; --no_annual turns this off): a year coordinate plus per-year
+           pr_annual_p90/p95 (shape: year, cell) and their interannual pr_q25/q75/iqr_p90/p95
+           (shape: cell)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STAGE 2: calc_stormtype_extreme_precip_spatial.py
@@ -106,7 +110,9 @@ Two ways to give the precipitation:
   variable such as `tot_pr` is already in mm h⁻¹. A guard rejects an input whose domain-mean precipitation is outside 0.001-20 mm h⁻¹ (a wrong variable or factor). All time steps of the store are used unless
   `--start_time` / `--end_time` are given (the config's dates apply only to the normal input). The variable, the factor, the period and the number of frames are written into the file
   (`input_zarr`, `input_var`, `input_factor`, `frames_in_input`, `precipitation_source`).
-- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it).
+- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it). GSMAP (a second observational product, added 2026-09-22 for cross-checking IMERG; a `config_sources.yaml` entry but not in the COF pipeline registry, so it is not part of `config_pipeline.yaml`/`run_cof_pipeline.py`) is a third case: a dedicated loader branch reads a local 6-hourly HEALPix store directly, ignoring the config's own dates.
+
+Two more flags control the per-year percentiles and their interannual IQR (see "Output" below): `--no_annual` skips them; `--min_year_coverage_days` (default 300) is the minimum number of distinct calendar days a year needs to qualify.
 
 The quantiles are taken in blocks of cells (`--cell_chunk_size`, or sized from the available memory and the store's chunk width), which bounds the memory when several sources run on one node; the values equal
 xarray's `quantile` up to float32 round-off. The helpers come from `calc_extreme_precip_thresholds_1h.py`, whose way of making 6-hourly values from hourly ones (threshold the hourly values, then
@@ -134,7 +140,12 @@ where $Q_p$ is the empirical quantile function. Multiple percentiles (e.g., 90th
 
 ### Output
 
-NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95`, etc.
+NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95`, etc. For any source with at least 2
+qualifying calendar years (`--min_year_coverage_days`, default 300 distinct days of data; `--no_annual` turns it off), the
+file also carries a `year` coordinate, per-calendar-year percentiles `pr_annual_p90`/`pr_annual_p95` (shape `(year, cell)`),
+and their interannual spread across years `pr_q25_p*`/`pr_q75_p*`/`pr_iqr_p*` (shape `(cell,)`) — purely additive; a source
+with fewer than 2 qualifying years (e.g. most of the GSRM models, which cover about a year) gets only `pr_p90`/`pr_p95`, as
+before.
 
 ---
 
@@ -213,7 +224,7 @@ Because `tot_pr` is the precipitation the cloud types were classified with, `una
 
 ## Output Variables
 
-The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`:
+The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GsMAP (added 2026-09-22), plus, as archival references outside the pipeline (not read by attribution or by `run_cof_pipeline.py`), the 11-year IMERG and GsMAP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`.
 
 | Variable | Description |
 |----------|-------------|
@@ -238,3 +249,4 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | Min precipitation filter | 0.1 mm h⁻¹ | Exclude near-zero values from threshold computation (`--min_precip_threshold`). The value the existing threshold files record; `run_all_extreme_precip_thresholds.sh` and the pipeline runner pass it explicitly; the 1-hourly script has the same default |
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |
+| Annual/IQR gate | `--no_annual` off, `--min_year_coverage_days` 300 | Per-year percentiles + interannual IQR are computed whenever a source has >= 2 calendar years each clearing this many distinct days of data; `--no_annual` skips the computation entirely |

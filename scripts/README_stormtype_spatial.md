@@ -30,22 +30,22 @@ python calc_stormtype_extreme_precip_spatial.py \
 - `--percentiles`: Percentiles to process (default: P90)
 - `--start_date`: Start date in YYYY-MM-DD format (optional)
 - `--end_date`: End date in YYYY-MM-DD format (optional)
-- `--output_dir`: Output directory (default: /pscratch/sd/w/wcmca1/hackathon/extreme_precip)
+- `--output_dir`: Output directory (default: `None` → `extreme_precip/` under the pipeline data root, see `src/cof_paths.py`; production unless `COF_DATA_ROOT` is set)
 - `--n_workers`: Number of Dask workers (default: 8)
 - `--compute_cloud_types`: Include cloud type attribution (default: True)
 - `--skip_cloud_types`: Skip cloud type computation
 
-### 2. `run_stormtype_spatial.sh`
+### 2. `run_stormtype_extreme_precip.sh`
 
 Bash wrapper script for running the Python script on multiple data sources.
 
 **Usage:**
 ```bash
 # Process a single source
-bash run_stormtype_spatial.sh scream_ne120
+bash run_stormtype_extreme_precip.sh scream_ne120
 
 # Process all sources (when no argument provided)
-bash run_stormtype_spatial.sh
+bash run_stormtype_extreme_precip.sh
 ```
 
 ### 3. `slurm_stormtype_extreme_precip.sh `
