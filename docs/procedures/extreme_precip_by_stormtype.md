@@ -110,7 +110,7 @@ Two ways to give the precipitation:
   variable such as `tot_pr` is already in mm h⁻¹. A guard rejects an input whose domain-mean precipitation is outside 0.001-20 mm h⁻¹ (a wrong variable or factor). All time steps of the store are used unless
   `--start_time` / `--end_time` are given (the config's dates apply only to the normal input). The variable, the factor, the period and the number of frames are written into the file
   (`input_zarr`, `input_var`, `input_factor`, `frames_in_input`, `precipitation_source`).
-- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it). GSMAP (a second observational product, added 2026-09-22 for cross-checking IMERG; a `config_sources.yaml` entry but not in the COF pipeline registry, so it is not part of `config_pipeline.yaml`/`run_cof_pipeline.py`) is a third case: a dedicated loader branch reads a local 6-hourly HEALPix store directly, ignoring the config's own dates.
+- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it). GSMaP (a second observational product, added 2026-09-22 for cross-checking IMERG; a `config_sources.yaml` entry — key `GSMAP` — but not in the COF pipeline registry, so it is not part of `config_pipeline.yaml`/`run_cof_pipeline.py`) is a third case: a dedicated loader branch reads a local 6-hourly HEALPix store directly, ignoring the config's own dates.
 
 Two more flags control the per-year percentiles and their interannual IQR (see "Output" below): `--no_annual` skips them; `--min_year_coverage_days` (default 300) is the minimum number of distinct calendar days a year needs to qualify.
 
@@ -224,7 +224,7 @@ Because `tot_pr` is the precipitation the cloud types were classified with, `una
 
 ## Output Variables
 
-The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GsMAP (added 2026-09-22), plus, as archival references outside the pipeline (not read by attribution or by `run_cof_pipeline.py`), the 11-year IMERG and GsMAP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`.
+The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GSMaP (added 2026-09-22), plus, as archival references outside the pipeline (not read by attribution or by `run_cof_pipeline.py`), the 11-year IMERG and GSMaP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`.
 
 | Variable | Description |
 |----------|-------------|

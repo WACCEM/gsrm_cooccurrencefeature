@@ -100,7 +100,7 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
               least 2 qualifying calendar years -- --min_year_coverage_days, default 300 days
               of data; --no_annual turns it off -- per-calendar-year percentiles and their
               interannual IQR: a year coordinate plus pr_annual_p*/pr_q25_p*/pr_q75_p*/pr_iqr_p*)
-  └─ GsMAP:  a 7th source (config_sources.yaml's GSMAP entry) can also be run through this
+  └─ GSMaP:  a 7th source (config_sources.yaml's GSMAP entry) can also be run through this
              script for cross-checking IMERG. It is not in config_pipeline.yaml, so it is not
              part of this pipeline's registry -- no s1-s3/monthly/attribution, thresholds only,
              invoked directly or via run_cof_pipeline.py --step-args (see run_cof_pipeline.md).
@@ -117,9 +117,9 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
 [Step 5] Visualization and Analysis
   └─ Notebooks: notebooks/plot_cof_extreme_raintype_rank_map.ipynb (Step 4b output)
                 notebooks/plot_extreme_rain_threshold_map.ipynb (Step 4a output, multi-source
-                  incl. GsMAP; also 1-hourly: plot_extreme_rain_threshold_map_1h.ipynb)
+                  incl. GSMaP; also 1-hourly: plot_extreme_rain_threshold_map_1h.ipynb)
                 notebooks/plot_extreme_rain_threshold_map_obs_interannual.ipynb (Step 4a's
-                  annual/IQR output, IMERG+GsMAP only, independent 11-year archival files)
+                  annual/IQR output, IMERG+GSMaP only, independent 11-year archival files)
   └─ Input:  Step 4a and/or Step 4b NetCDF, depending on the notebook
   └─ Output: Figures showing extreme precipitation maps, rankings, and interannual spread
 ```

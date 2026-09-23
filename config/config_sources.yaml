@@ -17,11 +17,11 @@ IR_IMERG:
   # start_datetime: 2019-08-01T00:00
   # end_datetime: 2020-08-31T23:59
 
-# GsMAP configuration (second observational product; not in the catalog, uses a local 6-hourly Zarr store; not part of the
+# GSMaP configuration (second observational product; not in the catalog, uses a local 6-hourly Zarr store; not part of the
 # COF pipeline registry -- no MCS/AR/ETC tracking, so it is run standalone through calc_extreme_precip_thresholds.py for the
 # extreme-precipitation-threshold comparison only)
 GSMAP:
-  source_name: GsMAPv8
+  source_name: GSMaPv8
   catalog_location: NERSC
   catalog_params:
     zoom: 8
