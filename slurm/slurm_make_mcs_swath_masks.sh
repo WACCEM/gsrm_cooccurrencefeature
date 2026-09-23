@@ -10,11 +10,11 @@
 #SBATCH --output=/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/slurm/log/log_make_mcs_swath_masks_%A_%a.log
 #SBATCH --mail-type=END
 #SBATCH --mail-user=zhe.feng@pnnl.gov
-#SBATCH --array=1-7
+#SBATCH --array=1-6
 
 date
 # Activate Python environment
-source activate /global/common/software/m1867/python/pyflex-dev
+source activate /global/common/software/m1867/python/hackathon
 
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 

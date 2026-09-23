@@ -20,6 +20,10 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 
+# Add parent directory to path to import from src
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.etc_domain import store_in_cof_domain  # noqa: E402
+
 
 def parse_args():
     """Parse command line arguments."""
@@ -56,6 +60,21 @@ def parse_args():
         type=float,
         default=-20.0,
         help='Latitude threshold for Southern Hemisphere (default: -20)'
+    )
+    parser.add_argument(
+        '--lat-limit',
+        type=float,
+        default=60.0,
+        help='Latitude (degrees) poleward of which there are no COF products: the MCS masks, and with them the overlap flags and masks, '
+             'exist only equatorward of it (default: 60)'
+    )
+    parser.add_argument(
+        '--min-lat-coverage',
+        type=float,
+        default=0.7,
+        help='An ETC enters the composites only if at least this fraction of its storm-relative box (the +-20 degree rows) lies within '
+             '|latitude| <= --lat-limit. 0.7 keeps ETCs centred within 52 degrees, 0.5 those centred within 60 degrees, 0 keeps every ETC '
+             '(default: 0.7)'
     )
     parser.add_argument(
         '--overlap-flag',
@@ -355,7 +374,7 @@ def convert_masks_and_create_exclusive_precip(ds, overlap_category='3way'):
 
 
 def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name='isolated', 
-                     nh_lat_threshold=20.0, sh_lat_threshold=-20.0):
+                     nh_lat_threshold=20.0, sh_lat_threshold=-20.0, lat_limit=60.0, min_lat_coverage=0.7):
     """
     Create composites by hemisphere for a specific overlap flag.
     
@@ -375,20 +394,33 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
         Latitude threshold for Northern Hemisphere (default: 20.0)
     sh_lat_threshold : float
         Latitude threshold for Southern Hemisphere (default: -20.0)
+    lat_limit : float
+        Latitude (degrees) poleward of which there are no COF products (default: 60.0)
+    min_lat_coverage : float
+        Minimum fraction of the storm-relative box that must lie within |latitude| <= lat_limit for an ETC to be used, for every category
+        including 'all' (default: 0.7, ETCs centred within 52 degrees; 0 keeps every ETC). See src/etc_domain.py.
     
     Returns:
     --------
     composite_nh, composite_sh : xarray.Dataset, xarray.Dataset
-        Composite datasets for NH and SH
+        Composite datasets for NH and SH (attributes: n_points, n_points_hemisphere_before_lat_rule, lat_limit, min_lat_coverage)
     """
     print(f"\nCreating composite for overlap_flag={overlap_flag} ({overlap_name})...")
     
     # Hemisphere masks - compute to avoid dask array indexing issues
     mask_nh = (ds.cof_lat > nh_lat_threshold).compute()
     mask_sh = (ds.cof_lat < sh_lat_threshold).compute()
+    n_nh_hemisphere, n_sh_hemisphere = int(mask_nh.sum()), int(mask_sh.sum())
     
-    print(f"  Northern Hemisphere (lat > {nh_lat_threshold}): {mask_nh.sum().values} points")
-    print(f"  Southern Hemisphere (lat < {sh_lat_threshold}): {mask_sh.sum().values} points")
+    # Latitude rule: the COF products exist only equatorward of lat_limit, so the ETCs whose box lies mostly poleward of it (no reliable
+    # overlap flag or mask) are left out of every composite
+    in_domain = ds.cof_lat.copy(data=store_in_cof_domain(ds, lat_limit=lat_limit, min_coverage=min_lat_coverage)).compute()
+    mask_nh = mask_nh & in_domain
+    mask_sh = mask_sh & in_domain
+    
+    print(f"  Northern Hemisphere (lat > {nh_lat_threshold}): {n_nh_hemisphere} points, {int(mask_nh.sum())} after the latitude rule "
+          f"(>= {min_lat_coverage:g} of the box within |lat| <= {lat_limit:g})")
+    print(f"  Southern Hemisphere (lat < {sh_lat_threshold}): {n_sh_hemisphere} points, {int(mask_sh.sum())} after the latitude rule")
     
     # Convert masks and create exclusive precipitation variables
     ds_binary = convert_masks_and_create_exclusive_precip(ds, overlap_category=overlap_category)
@@ -426,6 +458,11 @@ def create_composites(ds, overlap_category='3way', overlap_flag=0, overlap_name=
         )
     
     print(f"  NH: {nh_count:6d} points, SH: {sh_count:6d} points")
+    for composite, count, n_hemisphere in ((composite_nh, nh_count, n_nh_hemisphere), (composite_sh, sh_count, n_sh_hemisphere)):
+        composite.attrs['n_points'] = int(count)
+        composite.attrs['n_points_hemisphere_before_lat_rule'] = n_hemisphere
+        composite.attrs['lat_limit'] = float(lat_limit)
+        composite.attrs['min_lat_coverage'] = float(min_lat_coverage)
     
     # Print notes about frequency and exclusive precipitation variables
     freq_vars = [v for v in ds_binary.data_vars if v.endswith('_freq')]
@@ -498,6 +535,7 @@ def main():
     print("ETC Composite Creation")
     print("="*80)
     print(f"Source: {args.source}")
+    print(f"Latitude rule: at least {args.min_lat_coverage:g} of the ETC box within |latitude| <= {args.lat_limit:g} degrees (0 = every ETC is used)")
     
     # Set up paths
     zarr_file = f"{args.zarr_path}/{args.source}/etc_2d_combined_all_all.zarr"
@@ -563,7 +601,9 @@ def main():
                 overlap_flag=overlap_flag,
                 overlap_name=overlap_name,
                 nh_lat_threshold=args.nh_lat_threshold,
-                sh_lat_threshold=args.sh_lat_threshold
+                sh_lat_threshold=args.sh_lat_threshold,
+                lat_limit=args.lat_limit,
+                min_lat_coverage=args.min_lat_coverage
             )
             
             # Save composites

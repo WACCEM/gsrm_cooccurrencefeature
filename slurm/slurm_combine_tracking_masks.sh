@@ -14,7 +14,7 @@
 
 date
 # Activate Python environment
-source activate /global/common/software/m1867/python/pyflex-dev
+source activate /global/common/software/m1867/python/hackathon
 
 # cd /global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/scripts/
 

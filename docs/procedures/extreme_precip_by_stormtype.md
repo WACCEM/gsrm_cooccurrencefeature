@@ -15,12 +15,13 @@ These two scripts together produce spatial maps of extreme precipitation attribu
 
 1. **Threshold computation** (`calc_extreme_precip_thresholds.py`): for each HEALPix cell, compute the $N$th-percentile precipitation over the full analysis period. This yields a spatially varying threshold $\tau_p(x)$ that defines what counts as "extreme" locally.
 
-2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to the storm type category it belongs to. The underlying COF masks are constructed so that each grid cell belongs to at most one category in the large majority of cases (see the note under Step 4), so this assignment is usually unambiguous; a priority order is applied as a deterministic tie-break for the residual cases where a cell could otherwise match more than one category. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file.
+2. **Attribution** (`calc_stormtype_extreme_precip_spatial.py`): at each time step and each cell, test whether precipitation exceeds $\tau_p(x)$, then assign the extreme event to the storm type category it belongs to. The underlying COF masks are constructed so that each grid cell belongs to at most one category in the large majority of cases (see the note under Step 4), so this assignment is usually unambiguous; a priority order is applied as a deterministic tie-break for the residual cases where a cell could otherwise match more than one category. Counts and precipitation amounts are accumulated over all time steps and written to a NetCDF file. The precipitation used in this stage is `tot_pr`, stored in the COF mask zarr next to the masks and the cloud types (see [monthly_precip_by_cof.md](monthly_precip_by_cof.md)); `calc_monthly_rainmap_by_cof.py` applies the same priority order, so its categories add up to the total precipitation.
 
-The analysis uses three independent input datasets:
-- **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`
-- **Percentile threshold file** (`{source_name}_precip_percentiles_6h_hp8_v1.nc`): output of `calc_extreme_precip_thresholds.py`
-- **Precipitation dataset**: intake catalog or pre-regridded local zarr (same sources as the monthly precipitation script)
+The attribution uses two input datasets:
+- **COF mask zarr** (`{source_name}_cofmasks_hp8_v1.zarr`): output of `make_cooccurrence_masks.py`, which also carries the total precipitation `tot_pr` (mm h⁻¹, written by `make_mcs_swath_masks.py`)
+- **Percentile threshold file** (`{source_name}_precip_percentiles_6h_hp8_v1.nc`): output of `calc_extreme_precip_thresholds.py`, computed from a 6-hourly precipitation product (intake catalog or pre-regridded local zarr)
+
+**Thresholds from `tot_pr` (adopted 2026-09-20).** The attribution takes the precipitation from the COF store (`tot_pr`), so the thresholds are computed from the same field: Step 1's window-mean `tot_pr`, through `calc_extreme_precip_thresholds.py --input_zarr <data root>/mcs_masks/{source}_mcs_masks_hp8.zarr --input_var tot_pr`. IMERG is the exception: its thresholds come from the non-IR 6-hourly IMERG store (`IMERG_V7_6H_zoom8_20190101_20211231.zarr`, `--input_var precipitation`), which is the same field as `tot_pr` within 60S-60N (window labels identical, correlation 0.9998 at the same label, sum ratio 1.0000; the thresholds equal the earlier production file bit for bit) and has data at all latitudes, whereas the IR-based `tot_pr` is 0 poleward of 60 (the IR input store covers 59.87S-59.87N; poleward of that `Tb` and `precipitation` are NaN). Full-record comparison of the `tot_pr`-based thresholds with the thresholds of each source's own 6-hourly product (median ratio P90 / P95; share of cells differing by more than 10% at P90): SCREAM 1.19 / 1.24 (74%), ICON 1.01 / 1.01 (45%), NICAM 1.00 / 1.00 (19%), UM 1.00 / 1.00 (2.5%), CASESM2 1.00 / 1.00 (0%), IMERG 1.00 / 1.00 (0.3%). SCREAM differs because its 6-hourly product is built from a 3-hourly data stream whose spatial processing differs from Step 1's hourly one (see `docs/AUDIT_FINDINGS.md`), is liquid only, and its windows were offset by about 3 h from Step 1's (corrected in the new file `scream_pr6h_z8_aligned.zarr`, which the thresholds no longer use); ICON's product counted snow twice. The pipeline runner (`docs/procedures/run_cof_pipeline.md`) passes these inputs.
 
 ---
 
@@ -30,28 +31,33 @@ The analysis uses three independent input datasets:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STAGE 1: calc_extreme_precip_thresholds.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Input: precipitation (catalog or local zarr)
+Input: --input_zarr (Step 1's tot_pr; IMERG: the non-IR 6-hourly store)
+       or, without it, the source's own 6-hourly precipitation (catalog or local zarr)
          |
          v
 [Step 1] Load and convert precipitation to mm/h
-[Step 2] Apply minimum precipitation threshold (default: 0.01 mm/h)
+[Step 2] Apply minimum precipitation threshold (default 0.1 mm/h; the pipeline runner passes it explicitly)
          └─ Values below threshold set to NaN (excluded from percentile)
 [Step 3] Optionally resample to target time duration (default: 6h)
-[Step 4] Compute quantile across all time steps at each cell
+[Step 4] Compute quantile across all time steps at each cell, in blocks of cells
          └─ e.g., 90th, 95th percentile
          |
          v
 Output: {source}_precip_percentiles_6h_hp8_v1.nc
         └─ Variables: pr_p90, pr_p95, ... (shape: cell)
+        └─ For any source with >= 2 qualifying calendar years (--min_year_coverage_days, default
+           300 distinct days; --no_annual turns this off): a year coordinate plus per-year
+           pr_annual_p90/p95 (shape: year, cell) and their interannual pr_q25/q75/iqr_p90/p95
+           (shape: cell)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STAGE 2: calc_stormtype_extreme_precip_spatial.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Input: COF mask zarr  +  percentile threshold file  +  precipitation
+Input: COF mask zarr (masks, cloud types, tot_pr)  +  percentile threshold file
          |
          v
-[Step 1] Load COF masks, percentile thresholds, precipitation
-[Step 2] Align calendars; select common time steps; optional date range subset
+[Step 1] Load COF masks with tot_pr and percentile thresholds (stop if tot_pr is missing)
+[Step 2] Optional date range subset
          |
          v
 [Step 3] For each percentile (P90, P95, ...):
@@ -81,11 +87,11 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 ## Key Steps at a Glance
 
-- **Stage 1, Step 1–2 — Threshold Conditioning:** Precipitation values below a minimum threshold (default 0.01 mm/h) are excluded from the percentile calculation by setting them to NaN. This prevents near-zero drizzle values from depressing the computed extreme threshold in regions with frequent light precipitation.
+- **Stage 1, Step 1–2 — Threshold Conditioning:** Precipitation values below a minimum threshold (default 0.1 mm/h) are excluded from the percentile calculation by setting them to NaN. This prevents near-zero drizzle values from depressing the computed extreme threshold in regions with frequent light precipitation.
 
 - **Stage 1, Steps 3–4 — Percentile Computation:** Precipitation is optionally resampled to a target time duration (default: retain 6-hourly resolution), then the $N$th percentile is computed independently at each HEALPix cell across all time steps using `xarray.quantile` with NaN-skipping. The result is a spatially varying threshold map.
 
-- **Stage 2, Steps 1–2 — Data Loading and Alignment:** The COF mask zarr, threshold file, and precipitation dataset are loaded and aligned to a common time coordinate, handling calendar differences between model outputs and applying an optional analysis date range.
+- **Stage 2, Steps 1–2 — Data Loading:** The COF mask zarr (with `tot_pr`) and the threshold file are loaded and an optional analysis date range is applied. Masks and precipitation share one time axis, so no calendar conversion or time intersection with a separate precipitation product is needed.
 
 - **Stage 2, Steps 3–4 — Time-Step Attribution:** For each time step, cells where precipitation exceeds the local percentile threshold are identified, then each extreme cell is assigned to the storm type category it belongs to. Because the COF masks are constructed to be mutually exclusive at each grid cell in the large majority of cases, this assignment is usually determined directly by which category's mask the cell falls in, not by the order categories are checked; a priority order (highest-order COF first) is applied only to deterministically resolve the residual cases where a cell could match more than one category, ensuring every extreme event is still counted exactly once.
 
@@ -97,11 +103,24 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 ### Input
 
-Precipitation loaded identically to other scripts: from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹.
+Two ways to give the precipitation:
+
+- **`--input_zarr STORE`** (used by the pipeline): any Zarr store on the HEALPix grid, for any source; its zoom must match `--zoom` (checked). `--input_var` names the variable
+  (default: the config's `varname_precip_liq`); when it is given the field is used as it is, with no frozen precipitation added and `--input_factor` defaulting to 1, because a named
+  variable such as `tot_pr` is already in mm h⁻¹. A guard rejects an input whose domain-mean precipitation is outside 0.001-20 mm h⁻¹ (a wrong variable or factor). All time steps of the store are used unless
+  `--start_time` / `--end_time` are given (the config's dates apply only to the normal input). The variable, the factor, the period and the number of frames are written into the file
+  (`input_zarr`, `input_var`, `input_factor`, `frames_in_input`, `precipitation_source`).
+- **Without it**: each source's own 6-hourly precipitation, from an intake catalog or a pre-regridded local zarr, with liquid and ice components summed and converted to mm h⁻¹ (the earlier way; see the status note above for why the pipeline no longer uses it). GSMAP (a second observational product, added 2026-09-22 for cross-checking IMERG; a `config_sources.yaml` entry but not in the COF pipeline registry, so it is not part of `config_pipeline.yaml`/`run_cof_pipeline.py`) is a third case: a dedicated loader branch reads a local 6-hourly HEALPix store directly, ignoring the config's own dates.
+
+Two more flags control the per-year percentiles and their interannual IQR (see "Output" below): `--no_annual` skips them; `--min_year_coverage_days` (default 300) is the minimum number of distinct calendar days a year needs to qualify.
+
+The quantiles are taken in blocks of cells (`--cell_chunk_size`, or sized from the available memory and the store's chunk width), which bounds the memory when several sources run on one node; the values equal
+xarray's `quantile` up to float32 round-off. The helpers come from `calc_extreme_precip_thresholds_1h.py`, whose way of making 6-hourly values from hourly ones (threshold the hourly values, then
+average the wet hours) is not used here: it is a different quantity from `tot_pr`.
 
 ### Minimum Precipitation Filter
 
-Before computing quantiles, values below a minimum threshold $\epsilon$ (default: $0.01\;\text{mm\,h}^{-1}$) are replaced with NaN:
+Before computing quantiles, values below a minimum threshold $\epsilon$ (default: $0.1\;\text{mm\,h}^{-1}$) are replaced with NaN:
 
 $$\tilde{P}(t, x) = \begin{cases} P(t, x) & \text{if } P(t, x) \geq \epsilon \\ \text{NaN} & \text{otherwise} \end{cases}$$
 
@@ -121,7 +140,12 @@ where $Q_p$ is the empirical quantile function. Multiple percentiles (e.g., 90th
 
 ### Output
 
-NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95`, etc.
+NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95`, etc. For any source with at least 2
+qualifying calendar years (`--min_year_coverage_days`, default 300 distinct days of data; `--no_annual` turns it off), the
+file also carries a `year` coordinate, per-calendar-year percentiles `pr_annual_p90`/`pr_annual_p95` (shape `(year, cell)`),
+and their interannual spread across years `pr_q25_p*`/`pr_q75_p*`/`pr_iqr_p*` (shape `(cell,)`) — purely additive; a source
+with fewer than 2 qualifying years (e.g. most of the GSRM models, which cover about a year) gets only `pr_p90`/`pr_p95`, as
+before.
 
 ---
 
@@ -129,14 +153,13 @@ NetCDF file with shape `(cell,)`, one variable per percentile: `pr_p90`, `pr_p95
 
 ### Step 1 — Data Loading
 
-Three datasets are loaded:
-- **COF masks**: `{source_name}_cofmasks_hp8_v1.zarr` from `/pscratch/sd/w/wcmca1/hackathon/cof_masks/`
+Two datasets are loaded:
+- **COF masks and precipitation**: `{source_name}_cofmasks_hp8_v1.zarr` from `/pscratch/sd/w/wcmca1/hackathon/cof_masks/`. The precipitation is the variable `tot_pr`; the script stops with a message if the store has none (rerun Steps 1-3 with the current scripts).
 - **Percentile thresholds**: `{source_name}_precip_percentiles_6h_hp8_v1.nc` from `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`
-- **Precipitation**: same catalog/local zarr sources as `calc_monthly_rainmap_by_cof.py`
 
-### Step 2 — Calendar and Time Alignment
+### Step 2 — Time Range
 
-The mask dataset calendar is converted to match the precipitation dataset if they differ, then a common time intersection is taken. An optional analysis date range is applied, consistent with the `start_datetime`/`end_datetime` values in `config_sources.yaml`.
+An optional analysis date range is applied, consistent with the `start_datetime`/`end_datetime` values in `config_sources.yaml`. The masks and `tot_pr` are already on the same time axis.
 
 ### Step 3 — Extreme Cell Identification
 
@@ -154,7 +177,7 @@ This mutual exclusivity is not, however, a mathematically guaranteed invariant o
 
 - A feature track can independently satisfy co-occurrence criteria with two different partner feature types without those two partners themselves being linked (three-way promotion currently only triggers when an ETC track bridges an AR pairing and an MCS pairing; the same check is not made for an MCS or AR track bridging two other pairings).
 - Two tracks of different feature types can physically share pixels while their *mutual* overlap fraction stays below the threshold needed to register a co-occurrence pair, leaving both classified as isolated despite the spatial overlap.
-- An MCS track with tropical cyclone (TC) overlap below the MCS-TC removal threshold retains all of its pixels, including any that coincide with TC pixels (AR and ETC do not have this gap, since they are excluded from TC pixels unconditionally at the pixel level, not by an overlap-fraction threshold).
+- An MCS track with tropical cyclone (TC) overlap below the MCS-TC removal threshold retains all of its pixels, including any that coincide with TC pixels; the MCS-TC test is applied once, in Step 1, and Step 3 only logs it (AR and ETC do not have this gap, since they are excluded from TC pixels unconditionally at the pixel level, not by an overlap-fraction threshold).
 
 For the residual cells affected by these situations, the priority order below acts as a deterministic tie-break — it does not represent a scientific ranking of storm-type importance, only a fixed convention (favoring three-way, then two-way, then isolated co-occurrence structure) that ensures every extreme event is still counted exactly once. Cloud types (priorities 9–12) are unaffected by any of this: they are unconditionally excluded from all eight tracked-feature categories, so the priority order between a tracked feature and a cloud type is always inert. As an optional diagnostic, the fraction of extreme cells affected by the three situations above (cells where more than one candidate category's mask is true before priority resolution) can be quantified directly from the intermediate masks in `process_single_timestep()`, to report a concrete rate rather than a qualitative "rare."
 
@@ -185,6 +208,8 @@ For each storm type $c$, counts and precipitation amounts are summed over all $N
 $$\text{count}_c(x) = \sum_{t=1}^{N_t} \mathbf{1}[E(t,x) \text{ and assigned to } c]$$
 $$\text{precip}_c(x) = \sum_{t=1}^{N_t} P(t,x) \cdot \mathbf{1}[E(t,x) \text{ and assigned to } c]$$
 
+where $P(t,x)$ is `tot_pr`.
+
 ### Step 6 — Precipitation Fraction
 
 The fraction of extreme precipitation attributed to storm type $c$ at cell $x$ is:
@@ -193,11 +218,13 @@ $$f_c(x) = \frac{\text{precip}_c(x)}{\text{precip}_{\text{total}}(x)}$$
 
 where $\text{precip}_{\text{total}}(x) = \sum_c \text{precip}_c(x)$ is the total extreme precipitation at that cell. Cells with zero total extreme precipitation are assigned a fraction value of 0.0 in the output — including `unassigned_frac`. Downstream consumers that need a true residual/unassigned category should read `unassigned_frac` directly (rather than re-deriving it as `1 - sum(other fractions)`) and mask cells where `total_extreme_count == 0`, since at those cells every `{type}_frac` is 0.0, not undefined.
 
+Because `tot_pr` is the precipitation the cloud types were classified with, `unassigned` is zero: 0.000% of the 60°S-60°N extreme precipitation at P90 and P95 for all six sources over the full records (IMERG included, since Step 1 removes the rain at pixels with missing Tb; before that rule it was 0.016%). In the earlier production files, which took the precipitation from a separate product, it was 0.10-0.32%.
+
 ---
 
 ## Output Variables
 
-The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`:
+The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GsMAP (added 2026-09-22), plus, as archival references outside the pipeline (not read by attribution or by `run_cof_pipeline.py`), the 11-year IMERG and GsMAP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`.
 
 | Variable | Description |
 |----------|-------------|
@@ -219,6 +246,7 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | HEALPix zoom | 8 | Spatial resolution |
 | Percentiles | P90 | One output file per percentile |
 | Time duration | 6h | Time resolution for threshold calculation |
-| Min precipitation filter | 0.01 mm h⁻¹ | Exclude near-zero values from threshold computation |
+| Min precipitation filter | 0.1 mm h⁻¹ | Exclude near-zero values from threshold computation (`--min_precip_threshold`). The value the existing threshold files record; `run_all_extreme_precip_thresholds.sh` and the pipeline runner pass it explicitly; the 1-hourly script has the same default |
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |
+| Annual/IQR gate | `--no_annual` off, `--min_year_coverage_days` 300 | Per-year percentiles + interannual IQR are computed whenever a source has >= 2 calendar years each clearing this many distinct days of data; `--no_annual` skips the computation entirely |

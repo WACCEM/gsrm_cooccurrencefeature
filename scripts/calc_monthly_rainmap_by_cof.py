@@ -4,6 +4,7 @@ from pathlib import Path
 # Add src directory to path for zarr_tools import
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 from zarr_tools import setup_dask_client
+from cof_paths import data_root
 import yaml
 import xarray as xr
 import pandas as pd
@@ -11,7 +12,6 @@ import time
 import psutil
 import argparse
 import cftime
-import intake
 import gc
 import logging
 import easygems.healpix as egh
@@ -298,8 +298,29 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
             chunk_ds['etc_mcs_ar_overlap_mask'],
         ])
 
-        precipitation = chunk_ds['pr']
-        
+        # Total precipitation is Step 1's window-mean tot_pr, from the same hourly data as the cloud types
+        precipitation = chunk_ds['tot_pr']
+
+        # Priority-exclusive category assignment, in the same order as calc_stormtype_extreme_precip_spatial.py:
+        # 3-way > 2-way (mcs_ar, mcs_etc, ar_etc) > isolated (mcs, ar, etc) > TC. Each pixel and time step is counted
+        # in at most one of these eight categories. Needed because the Step 3 category masks are not disjoint: a
+        # track can sit in two pair lists, and an "isolated" object can lie inside a 3-way category's whole
+        # footprint, so summing the masks as they are counts some precipitation twice.
+        assigned = xr.zeros_like(mcs_mask, dtype=bool)
+        sel = {}
+        for name, flag in [
+            ('mcs_ar_etc', mcs_ar_etc_3way_mask > 0),
+            ('mcs_ar', mcs_ar_2way_mask > 0),
+            ('mcs_etc', mcs_etc_2way_mask > 0),
+            ('ar_etc', ar_etc_2way_mask > 0),
+            ('mcs_iso', mcs_isolated_mask > 0),
+            ('ar_iso', ar_isolated_mask > 0),
+            ('etc_iso', etc_isolated_mask > 0),
+            ('tc', tc_mask > 0),
+        ]:
+            sel[name] = flag & ~assigned
+            assigned = assigned | sel[name]
+
         # Compute total precipitation - multiply by time interval to get mm
         chunk_totprecip = (precipitation * time_interval).sum(dim='time')
 
@@ -316,43 +337,43 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         chunk_etc_count_sum = (etc_mask > 0).sum(dim='time')
         chunk_etc_pcp_count_sum = (precipitation.where(etc_mask > 0) > pcp_thresh).sum(dim='time')
 
-        # Co-occurrence features
-        chunk_mcs_ar_pcp_sum = (precipitation.where(mcs_ar_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_ar_count_sum = (mcs_ar_2way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_pcp_count_sum = (precipitation.where(mcs_ar_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        # Co-occurrence features (priority-exclusive, see sel above)
+        chunk_mcs_ar_pcp_sum = (precipitation.where(sel['mcs_ar']) * time_interval).sum(dim='time')
+        chunk_mcs_ar_count_sum = sel['mcs_ar'].sum(dim='time')
+        chunk_mcs_ar_pcp_count_sum = (precipitation.where(sel['mcs_ar']) > pcp_thresh).sum(dim='time')
 
-        chunk_mcs_etc_pcp_sum = (precipitation.where(mcs_etc_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_etc_count_sum = (mcs_etc_2way_mask > 0).sum(dim='time')
-        chunk_mcs_etc_pcp_count_sum = (precipitation.where(mcs_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_etc_pcp_sum = (precipitation.where(sel['mcs_etc']) * time_interval).sum(dim='time')
+        chunk_mcs_etc_count_sum = sel['mcs_etc'].sum(dim='time')
+        chunk_mcs_etc_pcp_count_sum = (precipitation.where(sel['mcs_etc']) > pcp_thresh).sum(dim='time')
 
-        chunk_ar_etc_pcp_sum = (precipitation.where(ar_etc_2way_mask > 0) * time_interval).sum(dim='time')
-        chunk_ar_etc_count_sum = (ar_etc_2way_mask > 0).sum(dim='time')
-        chunk_ar_etc_pcp_count_sum = (precipitation.where(ar_etc_2way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_ar_etc_pcp_sum = (precipitation.where(sel['ar_etc']) * time_interval).sum(dim='time')
+        chunk_ar_etc_count_sum = sel['ar_etc'].sum(dim='time')
+        chunk_ar_etc_pcp_count_sum = (precipitation.where(sel['ar_etc']) > pcp_thresh).sum(dim='time')
 
-        chunk_mcs_ar_etc_pcp_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_ar_etc_count_sum = (mcs_ar_etc_3way_mask > 0).sum(dim='time')
-        chunk_mcs_ar_etc_pcp_count_sum = (precipitation.where(mcs_ar_etc_3way_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_ar_etc_pcp_sum = (precipitation.where(sel['mcs_ar_etc']) * time_interval).sum(dim='time')
+        chunk_mcs_ar_etc_count_sum = sel['mcs_ar_etc'].sum(dim='time')
+        chunk_mcs_ar_etc_pcp_count_sum = (precipitation.where(sel['mcs_ar_etc']) > pcp_thresh).sum(dim='time')
 
-        # Isolated features
+        # Isolated features (priority-exclusive)
         # Compute statistics for MCS - multiply by time interval to get mm
-        chunk_mcs_iso_pcp_sum = (precipitation.where(mcs_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_mcs_iso_count_sum = (mcs_isolated_mask > 0).sum(dim='time')
-        chunk_mcs_iso_pcp_count_sum = (precipitation.where(mcs_isolated_mask > 0) > pcp_thresh).sum(dim='time')
-        
-        # Compute statistics for AR - multiply by time interval to get mm
-        chunk_ar_iso_pcp_sum = (precipitation.where(ar_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_ar_iso_count_sum = (ar_isolated_mask > 0).sum(dim='time')
-        chunk_ar_iso_pcp_count_sum = (precipitation.where(ar_isolated_mask > 0) > pcp_thresh).sum(dim='time')
-        
-        # Compute statistics for ETC - multiply by time interval to get mm
-        chunk_etc_iso_pcp_sum = (precipitation.where(etc_isolated_mask > 0) * time_interval).sum(dim='time')
-        chunk_etc_iso_count_sum = (etc_isolated_mask > 0).sum(dim='time')
-        chunk_etc_iso_pcp_count_sum = (precipitation.where(etc_isolated_mask > 0) > pcp_thresh).sum(dim='time')
+        chunk_mcs_iso_pcp_sum = (precipitation.where(sel['mcs_iso']) * time_interval).sum(dim='time')
+        chunk_mcs_iso_count_sum = sel['mcs_iso'].sum(dim='time')
+        chunk_mcs_iso_pcp_count_sum = (precipitation.where(sel['mcs_iso']) > pcp_thresh).sum(dim='time')
 
-        # Compute statistics for TC - multiply by time interval to get mm
-        chunk_tc_pcp_sum = (precipitation.where(tc_mask > 0) * time_interval).sum(dim='time')
-        chunk_tc_count_sum = (tc_mask > 0).sum(dim='time')
-        chunk_tc_pcp_count_sum = (precipitation.where(tc_mask > 0) > pcp_thresh).sum(dim='time')
+        # Compute statistics for AR - multiply by time interval to get mm
+        chunk_ar_iso_pcp_sum = (precipitation.where(sel['ar_iso']) * time_interval).sum(dim='time')
+        chunk_ar_iso_count_sum = sel['ar_iso'].sum(dim='time')
+        chunk_ar_iso_pcp_count_sum = (precipitation.where(sel['ar_iso']) > pcp_thresh).sum(dim='time')
+
+        # Compute statistics for ETC - multiply by time interval to get mm
+        chunk_etc_iso_pcp_sum = (precipitation.where(sel['etc_iso']) * time_interval).sum(dim='time')
+        chunk_etc_iso_count_sum = sel['etc_iso'].sum(dim='time')
+        chunk_etc_iso_pcp_count_sum = (precipitation.where(sel['etc_iso']) > pcp_thresh).sum(dim='time')
+
+        # Compute statistics for TC (priority-exclusive: TC pixels not already assigned to a category above)
+        chunk_tc_pcp_sum = (precipitation.where(sel['tc']) * time_interval).sum(dim='time')
+        chunk_tc_count_sum = sel['tc'].sum(dim='time')
+        chunk_tc_pcp_count_sum = (precipitation.where(sel['tc']) > pcp_thresh).sum(dim='time')
         
         # Cloud types (exclude all feature masks)
         # Create combined feature mask (binary: 1 if any feature present, 0 otherwise)
@@ -527,6 +548,7 @@ def process_month_chunked(month_ds, chunk_days=5, pcp_thresh=0.1):
         del chunk_etc_pcp_sum, chunk_etc_count_sum, chunk_etc_pcp_count_sum
         del chunk_tc_pcp_sum, chunk_tc_count_sum, chunk_tc_pcp_count_sum
         del chunk_ds, mcs_isolated_mask, ar_isolated_mask, etc_isolated_mask, tc_mask, precipitation
+        del sel, assigned
         del chunk_mcs_iso_pcp_sum, chunk_mcs_iso_count_sum, chunk_mcs_iso_pcp_count_sum
         del chunk_ar_iso_pcp_sum, chunk_ar_iso_count_sum, chunk_ar_iso_pcp_count_sum
         del chunk_etc_iso_pcp_sum, chunk_etc_iso_count_sum, chunk_etc_iso_pcp_count_sum
@@ -797,6 +819,15 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
         'zoom_level': zoom,
         'time_interval': time_interval,
         'precipitation_threshold': pcp_thresh,
+        'precipitation_source': (
+            "tot_pr from Step 1 (make_mcs_swath_masks.py): window-mean of the hourly precipitation the cloud types "
+            "were classified with; each source's own pr field only, frozen precipitation ignored"
+        ),
+        'category_assignment': (
+            "Priority-exclusive per grid cell and time step: mcs_ar_etc > mcs_ar > mcs_etc > ar_etc > mcs_iso > "
+            "ar_iso > etc_iso > tc; cloud types (dc, nd, st, dz) lie outside all features. These twelve categories "
+            "add up to the total precipitation. mcs/ar/etc_precipitation are all-instances totals and overlap them."
+        ),
     }
 
     # Create output dataset
@@ -838,7 +869,7 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['etc_precipitation_count'].attrs['units'] = 'count'
 
     # TC attributes
-    dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation'
+    dsout['tc_precipitation'].attrs['long_name'] = 'TC precipitation (not already assigned to a higher-priority category)'
     dsout['tc_precipitation'].attrs['units'] = 'mm'
     dsout['tc_count'].attrs['long_name'] = 'Number of time steps TC is present'
     dsout['tc_count'].attrs['units'] = 'count'
@@ -932,6 +963,11 @@ def write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger=None):
     dsout['dz_count'].attrs['long_name'] = 'Number of time steps drizzle cloud is present'
     dsout['dz_count'].attrs['units'] = 'count'
     dsout['dz_count'].attrs['cloud_type_value'] = 4
+
+    # Mark the priority-exclusive categories (see process_month_chunked)
+    for name in ['mcs_ar_etc', 'mcs_ar', 'mcs_etc', 'ar_etc', 'mcs_iso', 'ar_iso', 'etc_iso', 'tc']:
+        for suffix in ['precipitation', 'count', 'precipitation_count']:
+            dsout[f'{name}_{suffix}'].attrs['assignment'] = 'priority-exclusive'
 
     # Save the output file
     fillvalue = np.nan
@@ -1072,6 +1108,23 @@ def subset_time_range(ds, start_datetime_str, end_datetime_str, logger=None):
     
     return ds_subset
 
+def check_budget_closure(results, logger, tol=1e-3):
+    """Warn if the twelve categories do not add up to the total precipitation in any wet cell of a month."""
+    keys = ['mcs_iso', 'ar_iso', 'etc_iso', 'tc', 'mcs_ar', 'mcs_etc', 'ar_etc', 'mcs_ar_etc', 'dc', 'nd', 'st', 'dz']
+    for r in results:
+        total = np.nan_to_num(r['totprecip'].values.astype('float64'))
+        cats = sum(np.nan_to_num(r[f'{k}_precip'].values.astype('float64')) for k in keys)
+        wet = total > 1.0  # mm per month; skip essentially dry cells
+        rel = np.abs(total - cats)[wet] / total[wet]
+        worst = float(rel.max()) if rel.size else 0.0
+        # Domain total shows how much precipitation is unattributed overall; the worst cell can be large from a single
+        # window without a cloud type (e.g. missing IR brightness temperature in observations).
+        resid = 100 * float(total[wet].sum() - cats[wet].sum()) / max(float(total[wet].sum()), 1e-12)
+        log = logger.warning if worst > tol else logger.info
+        log(f"{r['time']:%Y-%m}: categories vs total precipitation, worst wet cell differs by {100 * worst:.4f}%, "
+            f"domain total differs by {resid:.4f}%" + (" - budget does not close" if worst > tol else ""))
+
+
 def main():
     # Set up logging
     setup_logging()
@@ -1105,23 +1158,16 @@ def main():
     
     # Extract configuration variables
     source_name = config.get('source_name')
-    catalog_location = config.get('catalog_location', 'NERSC')
-    catalog_params = config.get('catalog_params', {}).copy()
-    varname_precip_liq = config.get('varname_precip_liq')
-    varname_precip_ice = config.get('varname_precip_ice')
-    pr_convert_factor = config.get('pr_convert_factor')
     start_datetime = config.get('start_datetime')
     end_datetime = config.get('end_datetime')
 
-    # Catalog parameters
-    catalog_file = "https://digital-earths-global-hackathon.github.io/catalog/catalog.yaml"
-
-    # Input combined mask file
-    in_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/"
+    # Input combined mask file (under the pipeline data root, see src/cof_paths.py)
+    data_dir = data_root(logger)
+    in_dir = f"{data_dir}cof_masks/"
     in_basename = f"{source_name}_cofmasks_hp{zoom}_{version}.zarr"
     in_zarr = f"{in_dir}{in_basename}"
 
-    output_dir = "/pscratch/sd/w/wcmca1/hackathon/cof_masks/stats/monthly/"
+    output_dir = f"{data_dir}cof_masks/stats/monthly/"
     os.makedirs(output_dir, exist_ok=True)
     output_filename = f"{output_dir}{source_name}_monthly_rainmap_cof_hp{zoom}_{version}.nc"
 
@@ -1139,129 +1185,12 @@ def main():
         ds = xr.open_zarr(in_zarr, consolidated=True)
         ds = ds.pipe(egh.attach_coords)
         
-        # Special treatment for certain datasets not in the catalog
-        if catalog_source == "IR_IMERG":
-            # Special case for IMERG data (not in catalog yet)
-            dir_healpix = "/pscratch/sd/w/wcmca1/GPM/healpix/"
-            in_basename = f"IMERG_V7_"
-            time_res = "6H"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_zoom{zoom}_20190101_20211231.zarr"
-            # Read IMERG dataset
-            print(f"Loading IMERG dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "scream_ne120":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/scream/"
-            in_basename = f"scream_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read SCREAM dataset
-            print(f"Loading SCREAM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "nicam_gl11":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/nicam_gl11/shifted/"
-            in_basename = f"NICAM_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read NICAM dataset
-            print(f"Loading NICAM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "um_glm_n2560_RAL3p3":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/um_glm_n2560_RAL3p3/"
-            in_basename = f"um_glm_n2560_RAL3p3_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read UM dataset
-            print(f"Loading UM dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        elif catalog_source == "casesm2_10km_nocumulus":
-            dir_healpix = "/pscratch/sd/w/wcmca1/hackathon/healpix/casesm2_10km_nocumulus/"
-            in_basename = f"casesm2_10km_nocumulus_pr"
-            time_res = "6h"
-            in_zarr = f"{dir_healpix}{in_basename}{time_res}_z{zoom}.zarr"
-            # Read CASESM2 dataset
-            print(f"Loading CASESM2 dataset (NOT from catalog): {in_zarr}")
-            ds_p = xr.open_zarr(in_zarr, consolidated=True)
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        else:
-            # Load the HEALPix catalog
-            print(f"Loading HEALPix catalog: {catalog_file}")
-            in_catalog = intake.open_catalog(catalog_file)
-            if catalog_location:
-                in_catalog = in_catalog[catalog_location]
-            
-            # Get the DataSet from the catalog
-            ds_p = in_catalog[catalog_source](**catalog_params).to_dask()
-            # Add lat/lon coordinates to the HEALPix DataSet
-            ds_p = ds_p.pipe(egh.attach_coords)
-
-        # Check liquid precipitaiton variable
-        if varname_precip_liq in list(ds_p.keys()):
-            # Convert liquid precipitation to mm/h
-            pr = ds_p[varname_precip_liq] * pr_convert_factor
-        # Check if the ice precipitation variable exist in the dataset
-        if varname_precip_ice in list(ds_p.keys()):
-            # Convert ice precipitation to liquid equivalent
-            prs = ds_p[varname_precip_ice] * pr_convert_factor
-            # Add ice precipitation to get total precipitation
-            pr = pr + prs
-
-        # Calendar conversion - check and convert calendars to match
-        logger.info("Checking time coordinate calendars...")
-        
-        # Determine calendar types
-        ds_p_calendar_type = type(ds_p.time.values[0]).__name__
-        ds_calendar_type = type(ds.time.values[0]).__name__
-        
-        logger.info(f"Dataset calendars: ds_p uses {ds_p_calendar_type}, ds uses {ds_calendar_type}")
-        
-        # Convert ds time to match ds_p if they differ
-        if ds_calendar_type != ds_p_calendar_type:
-            logger.info(f"Converting ds time from {ds_calendar_type} to {ds_p_calendar_type}")
-            
-            # Get the calendar details from ds_p
-            has_year_zero = True
-            if hasattr(ds_p.time.values[0], 'has_year_zero'):
-                has_year_zero = ds_p.time.values[0].has_year_zero
-            
-            # Convert datetime64 values to cftime DatetimeNoLeap objects
-            new_times = []
-            for t in ds.time.values:
-                # Convert numpy datetime64 to pandas Timestamp to get date components
-                pd_time = pd.Timestamp(t)
-                # Create a matching cftime object
-                dt_cftime = cftime.DatetimeNoLeap(
-                    pd_time.year, pd_time.month, pd_time.day,
-                    pd_time.hour, pd_time.minute, pd_time.second,
-                    has_year_zero=has_year_zero
-                )
-                new_times.append(dt_cftime)
-            
-            # Create a new dataset with the converted time coordinate
-            ds = ds.assign_coords(time=new_times)
-            logger.info("Calendar conversion complete")
-
-        # Find common time range across all datasets
-        common_times = sorted(set(ds_p['time'].values)
-                             .intersection(set(ds['time'].values)))
-        if not common_times:
-            logger.warning("No common time values between all datasets!")
+        # Total precipitation comes from the same store (tot_pr, written by Step 1 from the hourly
+        # precipitation the cloud types were classified with), so no separate product is loaded.
+        if 'tot_pr' not in ds:
+            logger.error("The COF store has no 'tot_pr'. Rerun make_mcs_swath_masks.py, "
+                         "combine_tracking_masks.py and make_cooccurrence_masks.py with the current scripts first.")
             return None
-        else:
-            # Select only the common times in all datasets
-            pr = pr.sel(time=common_times)
-            ds = ds.sel(time=common_times)
-            # Add precipitation to the dataset
-            ds["pr"] = pr
-            logger.info(f"Successfully merged datasets with {len(common_times)} common time points")
 
         # Subset to the specified time range using robust method
         if start_datetime and end_datetime:
@@ -1306,6 +1235,9 @@ def main():
                 # Process directly without Dask
                 result = process_month_chunked(month_ds, chunk_days=chunk_days, pcp_thresh=pcp_thresh)
                 results.append(result)
+
+        # Confirm the categories add up to the total precipitation
+        check_budget_closure(results, logger)
 
         # Write output to NetCDF file
         write_netcdf(results, ds, output_filename, zoom, pcp_thresh, logger)

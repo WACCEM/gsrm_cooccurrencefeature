@@ -27,11 +27,15 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Script: scripts/make_mcs_swath_masks.py
   └─ Input:  hourly MCS pixel masks + Tb + Precipitation (HEALPix zarr, catalog)
   └─ Output: /hackathon/mcs_masks/{source}_mcs_masks_hp8.zarr
-             (mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr)
+             (mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr, tot_pr)
+  └─ tot_pr is the window-mean total precipitation; every later step, and the
+     extreme-precipitation thresholds, read it instead of a separate precipitation
+     product. Rain at pixels with missing Tb is removed first (it cannot be classified).
          |
          v
 [Step 2] Combined Tracking Mask Creation
   └─ Script: scripts/combine_tracking_masks.py
+     (IMERG: scripts/combine_era5_imerg_tracking_masks.py, AR/TC/ETC masks from ERA5)
   └─ Input:  Step 1 zarr  +  AR/TC/ETC NetCDF tracking files
   └─ Output: /hackathon/all_masks/{source}_allmasks_hp8_v1.zarr
              (mcs_mask, ar_mask, tc_mask, etc_mask)
@@ -41,7 +45,18 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
   └─ Script: scripts/make_cooccurrence_masks.py
   └─ Input:  Step 2 zarr
   └─ Output: /hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr
-             (isolated masks, 2-way and 3-way overlap masks, cloud type precipitation)
+             (isolated masks, 2-way and 3-way overlap masks, cloud type precipitation, tot_pr)
+```
+
+### Running Steps 1–4 for all sources in one go
+
+`scripts/run_cof_pipeline.py` runs every step of Analyses 1 and 2 for any set of sources in dependency order on one node (Step 1 → 2 → 3 → monthly
+map; Step 1 → thresholds, Step 3 + thresholds → attribution), so a full re-process needs one allocation instead of one queue wait per step. It writes
+under a `--data-root` (a test area or production), skips finished steps with `--resume` and never overwrites outputs it did not create without `--force`.
+See [procedures/run_cof_pipeline.md](../procedures/run_cof_pipeline.md).
+
+```bash
+bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/round2 [--sources scream icon] [--analysis 1|2]
 ```
 
 ---
@@ -54,7 +69,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          v
 [Step 4] Monthly Precipitation Statistics
   └─ Script: scripts/calc_monthly_rainmap_by_cof.py
-  └─ Input:  Step 3 zarr  +  precipitation (catalog or local zarr)
+  └─ Input:  Step 3 zarr (masks and tot_pr)
   └─ Output: /hackathon/cof_masks/stats/monthly/
              {source}_monthly_rainmap_cof_hp8_v1.nc
              (monthly precipitation, count, precipitating-hour maps
@@ -62,7 +77,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebook: notebooks/plot_cof_raintype_rank_map.ipynb
+  └─ Notebook: notebooks/plot_cof_total_raintype_rank_map.ipynb
   └─ Input:  Step 4 NetCDF
   └─ Output: Figures showing precipitation maps and rankings by COF type
 ```
@@ -77,14 +92,22 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          v
 [Step 4a] Precipitation Percentile Threshold Computation
   └─ Script: scripts/calc_extreme_precip_thresholds.py
-  └─ Input:  precipitation (catalog or local zarr)
+  └─ Input:  --input_zarr: Step 1's tot_pr (models) or the non-IR 6-hourly IMERG store (IMERG);
+             without it, each source's own 6-hourly precipitation (catalog or local zarr)
   └─ Output: /hackathon/extreme_precip/
              {source}_precip_percentiles_6h_hp8_v1.nc
-             (per-cell P90, P95, ... thresholds; shape: cell)
+             (per-cell P90, P95, ... thresholds; shape: cell. Also, for any source with at
+              least 2 qualifying calendar years -- --min_year_coverage_days, default 300 days
+              of data; --no_annual turns it off -- per-calendar-year percentiles and their
+              interannual IQR: a year coordinate plus pr_annual_p*/pr_q25_p*/pr_q75_p*/pr_iqr_p*)
+  └─ GsMAP:  a 7th source (config_sources.yaml's GSMAP entry) can also be run through this
+             script for cross-checking IMERG. It is not in config_pipeline.yaml, so it is not
+             part of this pipeline's registry -- no s1-s3/monthly/attribution, thresholds only,
+             invoked directly or via run_cof_pipeline.py --step-args (see run_cof_pipeline.md).
 
 [Step 4b] Extreme Precipitation Attribution
   └─ Script: scripts/calc_stormtype_extreme_precip_spatial.py
-  └─ Input:  Step 3 zarr  +  Step 4a NetCDF  +  precipitation
+  └─ Input:  Step 3 zarr (masks and tot_pr)  +  Step 4a NetCDF
   └─ Output: /hackathon/extreme_precip/
              {source}_stormtype_spatial_{pxx}{date_suffix}.nc
              (per-cell counts, precipitation sums, and fractions
@@ -92,10 +115,18 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebook: notebooks/plot_cof_extreme_raintype_rank_map.ipynb
-  └─ Input:  Step 4b NetCDF
-  └─ Output: Figures showing extreme precipitation maps and rankings by COF type
+  └─ Notebooks: notebooks/plot_cof_extreme_raintype_rank_map.ipynb (Step 4b output)
+                notebooks/plot_extreme_rain_threshold_map.ipynb (Step 4a output, multi-source
+                  incl. GsMAP; also 1-hourly: plot_extreme_rain_threshold_map_1h.ipynb)
+                notebooks/plot_extreme_rain_threshold_map_obs_interannual.ipynb (Step 4a's
+                  annual/IQR output, IMERG+GsMAP only, independent 11-year archival files)
+  └─ Input:  Step 4a and/or Step 4b NetCDF, depending on the notebook
+  └─ Output: Figures showing extreme precipitation maps, rankings, and interannual spread
 ```
+
+The 12 production notebooks (including all of the above) read a CFS copy of their inputs, identical file by file to the
+pscratch products described here (`/global/cfs/cdirs/wcm_shr/hk25/...`; the pscratch path is kept as a commented-out
+alternative in each notebook's config cell).
 
 > **Note:** Steps 4a and 4b are independent and can be run in either order or in parallel, but both must complete before Step 5.
 
@@ -103,7 +134,7 @@ Steps 1–3 are identical for both analyses and need only be run once per model 
 
 ## Analysis 3 — ETC Composite Analysis
 
-This pipeline is independent of the COF mask pipeline (Analyses 1 and 2). It operates directly on ETC track files and HEALPix model output. Data sources include ERA5+IMERG (observations) and the same six GSRM models.
+This pipeline is independent of the COF mask pipeline (Analyses 1 and 2). It operates directly on ETC track files and HEALPix model output. Data sources include ERA5+IMERG (observations) and the same five GSRM models.
 
 ```
 ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
@@ -122,8 +153,12 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
          v  (Step 2 can run in parallel with Step 1)
 [Step 2] 2D Variable Extraction
   └─ Script:  extract_environments/extract_etc_2d_vars.py
-  └─ Method:  Batched time-slice loading; remap HEALPix → 81×81 lat-lon grid
-              centered at each ETC track point (0.25° resolution, ±10° radius)
+  └─ Method:  Batched time-slice loading with exact time matching (a track time
+              without a frame in the source is NaN, never the nearest frame); remap
+              HEALPix → 161×161 lat-lon grid centered at each ETC track point
+              (0.25° resolution, ±20° radius)
+  └─ pr:      Step 1's tot_pr from the COF store for the models (the same [T, T+6 h)
+              window as the COF masks), IMERG 6-hourly for ERA5
   └─ Submit:  extract_environments/submit_etc_extraction_jobs.py
               (Python script automating Slurm job array submission per model;
                one task per variable; serial shared-queue jobs, ~15 min each)
@@ -150,9 +185,15 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
   └─ Output:  /hackathon/etc_data/stats/
               etc_spatial_stats_{source}.nc
               (per-ETC-point spatial statistics: mean/min/max within 10°
-               circular radius; COF mask fractional area at 10° and 15°;
+               circular radius; COF mask fractional area at 10° and 15°
+               (radii in degrees: x and y of the store are grid points and are
+               converted with lon_res and lat_res; files made before 2026-09-21
+               used grid points, i.e. 2.5° and 3.75°);
                feature-specific precipitation statistics;
                overlap_flag coordinate for COF stratification)
+  └─ Domain:  ETC points in the polar region are dropped (the COF products exist only
+              equatorward of 60°): --min-lat-coverage 0.5 (centre within 60°),
+              --lat-limit 60; see src/etc_domain.py
   └─ Batch:   scripts/run_calc_etc_spatial_stats_all.sh
               (handles Steps 1, 3 & 4 for all 6 sources; Step 2 must be
                submitted separately via submit_etc_extraction_jobs.py:
@@ -161,7 +202,12 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
          |
          v
 [Step 5] Visualization and Analysis
-  └─ Notebooks (composite figures — input: Step 3 zarr):
+  └─ Composites: scripts/create_etc_composites.py builds etc_2d_composite_{nh,sh}_{all,isolated,
+              mcs_only,ar_only,3way}.nc from the Step 3 zarr; it uses only the ETCs of which at
+              least --min-lat-coverage (default 0.7, ETC centre within 52°) of the ±20° box lies
+              within |latitude| <= --lat-limit (60°), because the COF products exist only
+              equatorward of 60°
+  └─ Notebooks (composite figures — input: composites of the Step 3 zarr):
      notebooks/plot_etc_composites.ipynb
        → 2D ETC composite fields for one data source
      notebooks/plot_etc_composites_diff.ipynb
@@ -173,6 +219,18 @@ ETC track files  COF overlap parquet    ETC track files  HEALPix catalog
        → ETC spatial mean statistics for all sources (paper figure)
      notebooks/plot_etc_spatialmean_stats_1source.ipynb
        → ETC spatial mean statistics for one source (prototype)
+     (sample sizes in the legends and titles of the statistics notebooks are the average number of
+      tracks per year: count / years covered by the time stamps of the classified points)
+```
+
+### Running Analysis 3 in one go
+
+`scripts/run_etc_pipeline.py` runs every step of Analysis 3 for any set of sources in dependency order on one node (ETC/COF merge, `pr`, the seven COF-mask variables, linking of the unchanged environment
+stores, combine, composites, spatial statistics), with the scheduler, markers, `--resume` and overwrite protection of `run_cof_pipeline.py`. The environment variables are not extracted again (their stores are linked).
+See [procedures/run_etc_pipeline.md](../procedures/run_etc_pipeline.md), which also documents the time matching and the precipitation source.
+
+```bash
+bash slurm/run_interactive_etc_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/etc_round1 [--sources um scream]
 ```
 
 > **Performance note:** The batched time-slice extraction in `extract_etc_2d_vars.py` achieves a ~16× speedup over naïve per-storm data loading by grouping storms by timestamp and loading only the union of required HEALPix cells per time step. See [README_BATCHED_EXTRACTION.md](../../extract_environments/README_BATCHED_EXTRACTION.md) for full details.
@@ -245,7 +303,7 @@ This pipeline uses the COF masks zarr (Step 3 of the shared upstream pipeline) t
 ── COF ANALYSES (1 & 2) ──────────────────────────────────────────────────────
 
 Hourly MCS pixel masks
-AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
+AR / TC / ETC NetCDF files          2a input: tot_pr / IMERG 6-h 
           │                                       │
           ▼                                       │
    [Step 1] make_mcs_swath_masks.py               │
@@ -271,7 +329,7 @@ AR / TC / ETC NetCDF files          Precipitation (catalog or zarr)
             │            └────────────────-┘ └──────────┬────────────┘
             │                    └──────────────────────┘
             ▼                                │
-   plot_cof_raintype_                        ▼
+   plot_cof_total_raintype_                  ▼
    rank_map.ipynb              plot_cof_extreme_raintype_
                                rank_map.ipynb
 

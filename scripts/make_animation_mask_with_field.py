@@ -15,15 +15,15 @@ import tempfile
 ###############################################################################################
 
 # Choose feature type: "etc_ar_tc" or "mcs"
-# feature_type = "etc_ar_tc"
-feature_type = "mcs"
+feature_type = "etc_ar_tc"
+# feature_type = "mcs"
 
 # Script parameters
 source_name = "scream"
 
 start_date = "2019-08-01T00"
 end_date = "2020-08-31T23"
-# start_date = "2020-03-01T00"
+# start_date = "2020-08-01T00"
 # end_date = "2020-08-31T23"
 # start_date = "2019-10-01T00"
 # end_date = "2019-10-31T23"
@@ -37,7 +37,7 @@ output_dpi = 200
 plot_freq = '6h'  # Set to desired frequency string or None for auto-calculation
 
 # Execution control options
-run_plotting = True    # Set to False to skip plotting and use existing PNG files
+run_plotting = False    # Set to False to skip plotting and use existing PNG files
 run_ffmpeg = True     # Set to False to skip animation creation (plotting only)
 
 # FFmpeg animation parameters

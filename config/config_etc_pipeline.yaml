@@ -1,0 +1,76 @@
+---
+# Registry of the sources and steps run by scripts/run_etc_pipeline.py (Analysis 3, the ETC composites).
+#
+# Steps per source, in the order of the dependency graph (see docs/procedures/run_etc_pipeline.md):
+#   etc_cof     scripts/combine_etc_cof_data.py                   <root>/etc_tracks/{src}_etc_cof_data.parquet            (ETC tracks + Step 3 overlap flags)
+#   pr          extract_environments/extract_etc_2d_vars.py       <root>/etc_data/{src}/single_vars/etc_2d_pr_all_all.zarr   (Step 1 tot_pr; ERA5: IMERG 6-hourly)
+#   mask_<var>  extract_etc_2d_vars.py --cof_mask                  ... etc_2d_<var>_all_all.zarr   (one task for each of the seven COF mask variables)
+#   link_env    extract_environments/link_etc_env_stores.py       the unchanged environment stores, linked from etc_data/ (no copy)
+#   combine     extract_environments/combine_etc_2d_vars.py       <root>/etc_data/{src}/etc_2d_combined_all_all.zarr
+#   composites  scripts/create_etc_composites.py                  <root>/etc_data/stats/{src}/etc_2d_composite_{nh,sh}_{all,isolated,mcs_only,ar_only,3way}.nc
+#   stats       scripts/calc_etc_spatial_stats.py                 <root>/etc_data/stats/etc_spatial_stats_{src}.nc
+# etc_cof, pr, mask_*, link_env -> combine -> composites, stats.  The COF products (cof_masks/) and the track files are inputs, read
+# from cof_root and tracks_dir, not from the run's data root.
+#
+# 'slots' are CPU slots that a step takes from the runner's budget while it runs; 'est_min' orders the work and feeds --dry-run. Measured in the
+# full run of 2026-09-20 (six sources, node with 256 CPUs and 503 GB; minutes and peak resident memory of one step): pr and each mask task 4.4-6.5 min
+# and 2.4-3.1 GB for the models, 15.8-16.7 min and 7.7-10.3 GB for ERA5; etc_cof and link_env seconds; combine 1.9-2.7 min and 50-75 GB (ERA5 5.9 min, 195 GB);
+# composites 0.8-1.3 min and 22-47 GB (ERA5 2.2 min, 61 GB); stats 0.3-0.5 min (ERA5 0.8 min). The combine step holds every variable in memory (about
+# 2.3 GB per variable and 22,000 storm points), so it takes many slots and only two run at a time.
+
+defaults:
+  python: /global/common/software/m1867/python/hackathon/bin/python
+  env:
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+  # Step 3 products that Analysis 3 reads (cof_masks/<source>_cofmasks_hp8_v1.zarr, cof_masks/stats/<source>_etc_overlap_tracking.parquet)
+  cof_root: /pscratch/sd/w/wcmca1/hackathon/
+  # ETC track text files (<source>_hp8.etc_stitched_nodes.filtered_out_tcs.txt, ...) are given by extract_environments/submit_etc_extraction_jobs.py
+  # Environment stores to link (etc_data/<source>/single_vars/); they are read there, on pscratch
+  env_from: /pscratch/sd/w/wcmca1/hackathon/etc_data/
+  # ERA5's precipitation is IMERG 6-hourly (extract_etc_2d_vars.py reads this store); checked in the preflight
+  imerg_6h_zarr: /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20190101_20211231.zarr
+  # A run links at least this many environment stores per source (SCREAM 25, ERA5 20, the others 19 in the March extraction)
+  min_env_stores: 15
+  timeout_min: {etc_cof: 30, pr: 120, mask: 120, link_env: 30, combine: 240, composites: 120, stats: 120}
+
+steps:
+  etc_cof:    {slots: 1,  est_min: 1}
+  pr:         {slots: 1,  est_min: 6}
+  mask:       {slots: 1,  est_min: 6}       # each of the seven mask tasks
+  link_env:   {slots: 1,  est_min: 1}
+  combine:    {slots: 90, est_min: 3}
+  composites: {slots: 8,  est_min: 2}
+  stats:      {slots: 8,  est_min: 1}
+
+# name: the source name of the Analysis 3 scripts; submit_key: its entry in extract_environments/submit_etc_extraction_jobs.py MODEL_CONFIGS
+# (track file, catalog settings, the share of storm points without a COF frame that is expected)
+sources:
+  era5:
+    aliases: [ERA5, IMERGv7, imerg, obs]
+    submit_key: ERA5
+    steps:                                   # 66,789 storm points: about three times the others
+      pr:         {est_min: 17}
+      mask:       {est_min: 17}
+      combine:    {est_min: 6}
+      composites: {est_min: 3}
+      stats:      {est_min: 1}
+  scream:
+    aliases: [SCREAM, scream_ne120]
+    submit_key: SCREAM
+    # environment stores that are not linked: SCREAM's 'ps' is left from an older extraction (16,162 storm points, before the current track
+    # file has 22,301), it is not part of the March combined store, and the preflight and the combine step reject it
+    env_exclude: [ps]
+  icon_d3hp003:
+    aliases: [icon, ICON]
+    submit_key: ICON
+  nicam_gl11:
+    aliases: [nicam, NICAM]
+    submit_key: NICAM
+  um_glm_n2560_RAL3p3:
+    aliases: [um, UM]
+    submit_key: UM
+  casesm2_10km_nocumulus:
+    aliases: [casesm2, CASESM2]
+    submit_key: CASESM2

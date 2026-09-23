@@ -58,6 +58,29 @@ except ImportError:
         return None
 
 
+class AlignmentError(Exception):
+    """The single-variable stores do not share one list of storm points: merging them by position would mix storms."""
+
+
+def check_precip_magnitude(ds, low=0.01, high=1.0):
+    """
+    Sanity check of 'pr' after the unit standardization.
+
+    The mean over the neighbourhoods of the ETC points (161 x 161 points around each storm) is about 0.1 mm/h (0.09-0.11 in the
+    March data). A tot_pr-based 'pr' that is scaled by 3600 again, or a native flux that is not scaled, is off by three orders of
+    magnitude, so a mean outside [low, high] mm/h (or all NaN) is an error.
+    """
+    if 'pr' not in ds:
+        return
+    pr = ds['pr']
+    step = max(1, pr.sizes['time'] // 500)
+    mean = float(np.nanmean(pr.isel(time=slice(None, None, step)).values))
+    print(f"  Precipitation sanity check: mean 'pr' over {len(range(0, pr.sizes['time'], step))} sampled storm points = {mean:.4f} {pr.attrs.get('units', '')}")
+    if not (low <= mean <= high):
+        raise ValueError(f"'pr' has a mean of {mean:.6g} after the unit standardization, outside {low}-{high} mm/h: "
+                         f"wrong units or a double or missing scaling (units attribute of the input store: {pr.attrs.get('original_units')})")
+
+
 def standardize_variable_units(ds, source):
     """
     Standardize variable units according to source-specific scaling configuration.
@@ -100,6 +123,13 @@ def standardize_variable_units(ds, source):
             
             # Get original units
             original_units = ds[var_name].attrs.get('units', 'unknown')
+            
+            # A variable that already has the target units (for example 'pr' taken from Step 1's tot_pr, in mm h-1) is not scaled
+            # again: multiplying it by 3600 would be wrong by three orders of magnitude
+            if scale_factor != 1.0 and str(original_units).replace(' ', '') == str(target_units).replace(' ', ''):
+                print(f"    {var_name}: already in {target_units} (no scaling; the source-specific factor ×{scale_factor:.6g} is for native units)")
+                description = f"none: already in {target_units} ({description})"
+                scale_factor = 1.0
             
             # Apply scaling
             if scale_factor != 1.0:
@@ -312,7 +342,8 @@ def add_cof_data_to_combined(combined_ds, source, etc_path=None):
     return combined_ds
 
 
-def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1000, add_cof_data=True, etc_path=None):
+def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1000, add_cof_data=True, etc_path=None,
+                       allow_missing_variables=False):
     """
     Combine multiple zarr files into a single multi-variable zarr file.
     
@@ -332,12 +363,17 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
         Whether to add COF overlap data to the combined file (default: True)
     etc_path : str, optional
         Path to ETC COF parquet files (default: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/)
+    allow_missing_variables : bool
+        If False (default) a variable that cannot be loaded is an error (it used to be skipped with a message, which left it
+        out of the combined file without any failure). Stores whose storm points differ are always an error (AlignmentError).
     """
     print(f"\nCombining {len(file_list)} variables for suffix '{suffix}':")
     
     # Load all datasets
     datasets = {}
     reference_ds = None
+    reference_name = None
+    load_errors = []
     
     for var_name, filepath in sorted(file_list):
         print(f"  Loading {var_name} from {os.path.basename(filepath)}")
@@ -349,13 +385,22 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
             # Use first dataset as reference for coordinates and metadata
             if reference_ds is None:
                 reference_ds = ds
+                reference_name = var_name
             
-            # Check consistency
+            # Check consistency: every store must have the same storm points, in the same order (the arrays are merged by position)
+            what = f"'{var_name}' and '{reference_name}'"
+            if ds.sizes['time'] != reference_ds.sizes['time']:
+                raise AlignmentError(f"stores are not aligned: {ds.sizes['time']} storm points in {var_name}, "
+                                     f"{reference_ds.sizes['time']} in {reference_name}")
             if not np.array_equal(ds['time'].values, reference_ds['time'].values):
-                print(f"    WARNING: Time coordinates differ for {var_name}")
-            
+                raise AlignmentError(f"stores are not aligned: the time coordinates of {what} differ")
             if not np.array_equal(ds['storm_id'].values, reference_ds['storm_id'].values):
-                print(f"    WARNING: Storm IDs differ for {var_name}")
+                raise AlignmentError(f"stores are not aligned: the storm IDs of {what} differ")
+            for meta in ('storm_lat', 'storm_lon'):
+                if meta in ds and meta in reference_ds and not np.allclose(ds[meta].values, reference_ds[meta].values, equal_nan=True):
+                    raise AlignmentError(f"stores are not aligned: {meta} of {what} differ")
+            if 'grid_id' in ds and 'grid_id' in reference_ds and not np.array_equal(ds['grid_id'].values, reference_ds['grid_id'].values):
+                raise AlignmentError(f"stores are not aligned: grid_id of {what} differ")
             
             # Extract the data variable (should be the only one besides metadata)
             # Handle both unstructured mesh (grid_id) and structured mesh (lon_id, lat_id)
@@ -370,10 +415,16 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
                 if len(data_vars) > 0:
                     datasets[var_name] = ds[data_vars[0]]
         
+        except AlignmentError:
+            raise
         except Exception as e:
             print(f"    ERROR loading {var_name}: {e}")
+            load_errors.append(var_name)
             continue
     
+    if load_errors and not allow_missing_variables:
+        raise RuntimeError(f"{len(load_errors)} variable(s) could not be loaded for suffix '{suffix}': {', '.join(load_errors)} "
+                           f"(use --allow-missing-variables to combine the rest)")
     if not datasets:
         print(f"ERROR: No datasets loaded successfully for suffix '{suffix}'")
         return None
@@ -440,6 +491,7 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
     # Apply variable unit standardization if source is specified
     if source:
         combined_ds = standardize_variable_units(combined_ds, source)
+        check_precip_magnitude(combined_ds)
     else:
         print("\n  No source specified - skipping variable renaming and unit standardization")
     
@@ -587,6 +639,8 @@ Examples:
                         help='Skip adding COF overlap data')
     parser.add_argument('--etc-path', default=None,
                         help='Path to ETC COF parquet files (default: /pscratch/sd/w/wcmca1/hackathon/etc_tracks/)')
+    parser.add_argument('--allow-missing-variables', action='store_true',
+                        help='Combine the variables that can be loaded when others cannot (default: any variable that cannot be loaded is an error)')
     
     args = parser.parse_args()
     
@@ -598,7 +652,7 @@ Examples:
     # Verify input directory exists
     if not os.path.exists(args.input_dir):
         print(f"ERROR: Input directory does not exist: {args.input_dir}")
-        return
+        return 1
     
     # Set output directory - default is parent directory of input_dir
     if args.output_dir:
@@ -633,7 +687,7 @@ Examples:
     
     if not groups:
         print("ERROR: No zarr files found!")
-        return
+        return 1
     
     print(f"\nFound {len(groups)} suffix group(s):")
     for suffix, file_list in sorted(groups.items()):
@@ -649,7 +703,7 @@ Examples:
         else:
             print(f"ERROR: Suffix '{args.suffix}' not found!")
             print(f"Available suffixes: {list(groups.keys())}")
-            return
+            return 1
     
     # Process each group
     combined_files = []
@@ -666,7 +720,8 @@ Examples:
         # Combine files
         result = combine_zarr_files(file_list, output_path, suffix, 
                                    source=args.source, chunk_size=args.chunk_size,
-                                   add_cof_data=args.add_cof_data, etc_path=args.etc_path)
+                                   add_cof_data=args.add_cof_data, etc_path=args.etc_path,
+                                   allow_missing_variables=args.allow_missing_variables)
         
         if result:
             combined_files.append(result)
@@ -683,7 +738,11 @@ Examples:
     for filepath in combined_files:
         print(f"  {filepath}")
     print(f"{'='*70}")
+    if len(combined_files) != len(groups):
+        print(f"ERROR: {len(groups) - len(combined_files)} of {len(groups)} suffix group(s) could not be combined")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

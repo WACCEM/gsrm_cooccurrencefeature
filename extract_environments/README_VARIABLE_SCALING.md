@@ -75,6 +75,10 @@ This will match:
 | CESM2  | kg m⁻² s⁻¹ | 3,600 | mm h⁻¹ | ×1000 (kg→mm) × 3.6 (s→h) |
 | UM     | kg m⁻² s⁻¹ | 3,600 | mm h⁻¹ | ×1000 (kg→mm) × 3.6 (s→h) |
 
+The factors above are for the **native** fluxes of the separate 6-hourly files and catalog data (`extract_etc_2d_vars.py --pr_source legacy`). Since 2026-09-20 the default `pr` of the models is Step 1's `tot_pr`,
+which is already in mm h⁻¹ (the store's `units` attribute says so): `combine_etc_2d_vars.py` does not scale a variable whose units already equal the target units (it records a scale factor of 1.0), and it stops when
+the mean of `pr` is outside 0.01-1 mm/h after the standardization (a double or a missing scaling is off by three orders of magnitude).
+
 ### Geopotential Height (zg*)
 
 **Pattern**: `zg*` matches all variables starting with `zg` (e.g., `zg850`, `zg500`, `zg_500hPa`, `zg_850hPa`)

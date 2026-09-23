@@ -190,6 +190,20 @@ for storm_idx, storm_row in time_to_storms[storm_time]:
 
 ---
 
+## Time Matching (changed 2026-09-20)
+
+Each track point is matched to the source by its **exact** time (the track files are 6-hourly, 00/06/12/18 UTC). Earlier versions used `sel(time, method='nearest')`, which never fails: a time after the end of the record returns the last
+frame and a time before the start the first frame. Against the current COF stores, whose periods are shorter than the track periods, that would put a copy of an edge frame at the ETC points outside the COF period (ICON 14.6% of the points, UM 3.2%,
+SCREAM 0.5%; the March output has NaN `overlap_flag` at all of them, NaN masks for ICON and partly finite masks for UM and SCREAM). Now:
+
+- a track time without a frame in the source gives a NaN slab; the point keeps its metadata (all variables share one point list) and is counted in the store attributes (`n_points`, `n_points_time_missing`, `n_points_failed`);
+- `--max_missing_fraction` (default 0) fails the job *before it writes* when more points are missing than expected (`submit_etc_extraction_jobs.py` passes the expected share per model); a slice that cannot be loaded always fails the job, and so does a variable that cannot be extracted (exit status 1);
+- whole time chunks of the source (up to 400 MB) are read once instead of once per storm time (a 48-frame chunk of the COF store was read 48 times): identical results, UM `pr` in 4.4 minutes;
+- `--pr_source cof_tot_pr` (default) takes `pr` of the models from Step 1's `tot_pr` in the COF store (`<COF_DATA_ROOT>/cof_masks/<source>_cofmasks_hp8_v1.zarr`), the same [T, T+6 h) window as the COF masks; ERA5 keeps IMERG 6-hourly;
+  `--pr_source legacy` reads the separate 6-hourly files and the catalog 6-hour mean as before (SCREAM's file is centred on T, ICON's catalog mean is a full window early; see [run_etc_pipeline.md](../docs/procedures/run_etc_pipeline.md)).
+
+---
+
 ## Performance Results (NERSC Perlmutter, local scratch)
 
 - **Old approach:** 75 min for 18,225 storms (serial, redundant loads)

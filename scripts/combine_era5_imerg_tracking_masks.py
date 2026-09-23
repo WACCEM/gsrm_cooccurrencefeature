@@ -6,10 +6,16 @@ import glob
 import time
 import logging
 import sys
+import argparse
 from pathlib import Path
 # Add src directory to path for zarr_tools import
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 from zarr_tools import setup_dask_client
+from cof_paths import data_root
+
+# The AR/TC/ETC masks of IMERG come from ERA5 (already on the HEALPix grid, see remap_era5_masks_healpix.py). This input is not
+# a product of the pipeline, so it is not under the data root. The pscratch copy is the default; the CFS copy is the durable one.
+DEFAULT_ERA5_ZARR = "/pscratch/sd/w/wcmca1/hackathon/all_masks/ERA5_AR_TC_ETC_hp8_v1.zarr"
 
 #--------------------------------------------------------------------------------------
 def setup_logging():
@@ -233,11 +239,11 @@ def write_zarr(ds, out_zarr, client=None, logger=None):
     chunksize_time = 28
     chunksize_cell = 12 * 4**zoom_level
     
-    # Make time chunks more even if needed
+    # Make time chunks more even if needed (a store shorter than one time chunk is written as a single chunk)
     if isinstance(chunksize_time, (int, float)) and chunksize_time != 'auto':
         total_times = ds.sizes['time']
         chunks = total_times // chunksize_time
-        if chunks * chunksize_time < total_times:
+        if chunks > 0 and chunks * chunksize_time < total_times:
             # We have a remainder - try to make chunks more even
             if total_times % chunks == 0:
                 chunksize_time = total_times // chunks
@@ -324,19 +330,27 @@ def main():
     start_time = time.time()
     logger.info("Starting remap masks ...")
 
+    parser = argparse.ArgumentParser(description='Combine the IMERG MCS masks (Step 1) with the ERA5 AR/TC/ETC masks')
+    parser.add_argument('--workers', type=int, default=8, help='Number of Dask workers (default: 8)')
+    parser.add_argument('--threads-per-worker', type=int, default=4, help='Threads per worker (default: 4)')
+    parser.add_argument('--era5_zarr', type=str, default=DEFAULT_ERA5_ZARR,
+                        help=f'ERA5 AR/TC/ETC mask store on the HEALPix grid (default: {DEFAULT_ERA5_ZARR})')
+    args = parser.parse_args()
+
     # Define parameters
     source_name = "IMERGv7"
     zoom = 8
     version = "v1"
     parallel = True
-    n_workers = 8
-    threads_per_worker = 4
+    n_workers = args.workers
+    threads_per_worker = args.threads_per_worker
 
-    in_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
-    dir_te = f"{in_dir}ERA5_AR_TC_ETC_hp{zoom}_{version}.zarr"
-    dir_mcs = f"/pscratch/sd/w/wcmca1/hackathon/mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
+    root_dir = data_root(logger)   # pipeline data root, see src/cof_paths.py
+    dir_te = args.era5_zarr
+    dir_mcs = f"{root_dir}mcs_masks/{source_name}_mcs_masks_hp{zoom}.zarr"
+    logger.info(f"ERA5 mask store: {dir_te}")
 
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
+    out_dir = f"{root_dir}all_masks/"
     out_basename = f"{source_name}_allmasks_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)

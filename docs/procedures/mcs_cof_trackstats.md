@@ -77,7 +77,7 @@ Output: mcs_cof_trackstats_allsources.parquet
   └─ Box plots + Mann-Whitney U significance test vs. the Isolated baseline
          |
          v
-Output: Box-plot figures (PDF) + significance-test tables (HTML)
+Output: Box-plot figures (PNG) + significance-test tables (HTML)
 ```
 
 ---
@@ -102,7 +102,7 @@ Output: Box-plot figures (PDF) + significance-test tables (HTML)
   extratropical MCS — the population most relevant to AR/ETC co-occurrence.
 
 - **Step 3 — COF Type Classification:** Each track is assigned to one of four COF types (Isolated,
-  MCS+AR, MCS+ETC, MCS+AR+ETC) based on which overlap category occupied the largest fraction of its
+  MCS-AR, MCS-ETC, MCS-AR-ETC) based on which overlap category occupied the largest fraction of its
   lifetime, not merely whether it ever overlapped.
 
 - **Step 3 — Statistical Comparison:** Per-track lifetime statistics (e.g., duration, area, minimum
@@ -213,7 +213,8 @@ track initiation), `relative_time_h`, `track_duration_h`, and `dataset` (the sou
 A single snappy-compressed parquet file:
 `/pscratch/sd/w/wcmca1/hackathon/cof_masks/stats/mcs_cof_trackstats_allsources.parquet` — one row
 per valid hourly time step per track, across all six sources, with MCS track statistics and COF
-overlap flags/partner IDs combined.
+overlap flags/partner IDs combined. Step 3's notebook reads the identical CFS copy of this file
+(`/global/cfs/cdirs/wcm_shr/hk25/cof_masks/stats/...`), not this pscratch path directly.
 
 ---
 
@@ -236,17 +237,20 @@ dominates its lifetime, applied in this order:
 | Priority | COF type | Condition |
 |----------|----------|-----------|
 | 1 | Isolated | All three fractions equal 0 |
-| 2 | MCS+AR+ETC | `frac_ar_etc` is at least as large as both `frac_ar` and `frac_etc` (3-way wins ties with either 2-way type) |
-| 3 | MCS+AR | Not 3-way, and `frac_ar > frac_etc` |
-| 4 | MCS+ETC | Not 3-way, and `frac_ar ≤ frac_etc` (also the tie-break when `frac_ar == frac_etc > 0`) |
+| 2 | MCS-AR-ETC | `frac_ar_etc` is at least as large as both `frac_ar` and `frac_etc` (3-way wins ties with either 2-way type) |
+| 3 | MCS-AR | Not 3-way, and `frac_ar > frac_etc` |
+| 4 | MCS-ETC | Not 3-way, and `frac_ar ≤ frac_etc` (also the tie-break when `frac_ar == frac_etc > 0`) |
 
 This lifetime-*dominance* classification is a deliberate design choice: it assigns each track to the
 co-occurrence type it spends most of its life in, rather than to every category it ever briefly
 touches. Note that "Isolated" here is re-derived from the three fractions being zero, not read
 directly from the `cof_flag_isolated` column extracted in Step 1 — the two should agree by
-construction, since the COF mask categories are mutually exclusive at the grid-cell level (see
-[cof_identification.md](cof_identification.md)), but the notebook does not depend on that column for
-this classification.
+construction, since both come from the same track-level pair lists of Step 3 (a track is isolated in a
+frame when it is in no pair list and in no 3-way set), not because the categories are exclusive at the
+grid-cell level: they are not (an isolated MCS can lie inside a 3-way footprint; see
+[cof_identification.md](cof_identification.md) and
+[step3_bridge_promotion_future_work.md](../step3_bridge_promotion_future_work.md)). The notebook does not depend on that
+column for this classification.
 
 ### Per-Track Lifetime Statistics
 
@@ -285,12 +289,14 @@ maximum cold-cloud-shield area, minimum brightness temperature, median movement 
 major-axis length, maximum PF aspect ratio, maximum rain rate, total rain, and heavy-rain ratio)
 across the four COF types, with one box per data source per type. Boxes show the median and
 interquartile range with whiskers at the 5th/95th percentiles; outliers beyond the whiskers are not
-plotted.
+plotted. The legend gives, for each dataset, the **average number of tracks per year** in the four COF types (in the order of the x-axis): the count divided by the
+number of years covered by the dataset's time stamps (last minus first `base_time_dt`, in years of 365.25 days: OBS 3.0, SCREAM 1.09, UM 1.08, ICON, NICAM and CASESM2 1.0),
+so that the 3-year observations and the roughly 1-year models are comparable; a record that crosses a calendar year is not counted as two years.
 
 ### Significance Testing
 
 For each source and each lifetime statistic, the mean percentage difference of each non-isolated COF
-type (MCS+AR, MCS+ETC, MCS+AR+ETC) relative to the Isolated baseline is computed, together with a
+type (MCS-AR, MCS-ETC, MCS-AR-ETC) relative to the Isolated baseline is computed, together with a
 significance test:
 
 | Aspect | Choice |
@@ -308,12 +314,13 @@ raw percentage of the mean would understate a physically meaningful shift.
 
 ### Output
 
-Figures and tables are written to `/global/cfs/cdirs/m1867/zfeng/hk25/figures_mcs/`:
+Figures and tables are written to `/global/cfs/cdirs/m1867/zfeng/hk25/figures_mcs_202609/`:
 
 | File pattern | Content |
 |--------------|---------|
-| `Boxplot_MCS_by4COFtypes_3x3_ocean.pdf` | 3×3 box-plot grid, ocean MCS subset |
-| `Boxplot_MCS_by4COFtypes_3x3_land.pdf` | 3×3 box-plot grid, land MCS subset |
+| `Boxplot_MCS_by4COFtypes_3x3.png` | 3×3 box-plot grid, all MCS (no ocean/land split) |
+| `Boxplot_MCS_by4COFtypes_3x3_ocean.png` | 3×3 box-plot grid, ocean MCS subset |
+| `Boxplot_MCS_by4COFtypes_3x3_land.png` | 3×3 box-plot grid, land MCS subset |
 | `Table_MCS_sig_ocean.html` | Significance-test summary table, ocean MCS subset |
 | `Table_MCS_sig_land.html` | Significance-test summary table, land MCS subset |
 

@@ -8,11 +8,14 @@
 
 ## Overview
 
-This procedure generates temporally aggregated MCS swath masks and cloud type classifications from high-resolution global storm-resolving model (GSRM) output on a HEALPix grid. Starting from hourly tracked MCS pixel masks, brightness temperature (Tb), and precipitation (pr), each sub-daily aggregation window (e.g., 6 hours) is collapsed into a single time step describing:
+This procedure generates temporally aggregated MCS swath masks and cloud type classifications from high-resolution global storm-resolving model (GSRM) output on a HEALPix grid. Starting from hourly tracked MCS pixel masks, brightness temperature (Tb), and precipitation (pr; each model's own precipitation field, with no separate frozen-precipitation term added), each sub-daily aggregation window (e.g., 6 hours) is collapsed into a single time step describing:
 
 1. **MCS swath mask** — the spatial footprint of each MCS track over the aggregation window, with overlapping tracks resolved by coverage priority.
 2. **Cloud type classification** — a mutually exclusive, priority-based classification of non-MCS cloud areas outside the MCS swath.
 3. **Frequency-weighted mean precipitation** — mean precipitation attributed to each cloud type, weighted by how frequently that type occurred at each grid cell during the window.
+4. **Total precipitation** (`tot_pr`) — the window mean of the same hourly precipitation, not masked by the swath, so that everything derived from the cloud types can be checked against one total. Precipitation at pixels where Tb is missing is removed first (it cannot be classified), so the total and the cloud types see the same field.
+
+MCS tracks that overlap tropical cyclones are excluded before the swath is built (Step 2).
 
 The procedure operates independently on each aggregation window and produces output on the same HEALPix grid as the input.
 
@@ -30,6 +33,7 @@ Input: hourly MCS pixel masks + Tb + Precipitation (HEALPix grid)
          |
          v
 [Step 2] MCS Swath Construction
+  └─ First: exclude MCS tracks with ≥10% TC pixel overlap (hourly masks pooled over the window)
   └─ Per-track: union of pixels over all timesteps in window → swath
   └─ Per-track: count how many timesteps cover each pixel → coverage
   └─ Combine tracks: overlapping pixels assigned to track with highest coverage
@@ -57,18 +61,19 @@ Input: hourly MCS pixel masks + Tb + Precipitation (HEALPix grid)
 [Step 6] Frequency-Weighted Mean Precipitation by Cloud Type
   └─ For each type: conditional mean pr × frequency of that type
   └─ MCS swath pixels set to 0 for all cloud type precipitation
+  └─ Total precipitation tot_pr: window mean of pr, not masked by the swath
          |
          v
-Output: zarr file with mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr
+Output: zarr file with mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr, tot_pr
 ```
 
 ---
 
 ## Key Steps at a Glance
 
-- **Step 1 — Temporal Aggregation Setup:** Hourly time steps are grouped into fixed-duration aggregation windows (default: 6 hours) aligned to standard UTC boundaries (00, 06, 12, 18). Each output time step thus represents a compact swath of activity across multiple model hours.
+- **Step 1 — Temporal Aggregation Setup:** Hourly time steps are grouped into fixed-duration aggregation windows (default: 6 hours) aligned to standard UTC boundaries (00, 06, 12, 18). Each output time step thus represents a compact swath of activity across multiple model hours. A window with fewer hourly steps than the window length (start of the record, a gap in the hourly data) is averaged over the steps present.
 
-- **Step 2 — MCS Swath Construction:** For each MCS track, the union of all pixels it occupies during the window is computed to form a 2D swath footprint, along with a pixel-level count of how many timesteps it was present. Where multiple tracks overlap, the track with the highest pixel coverage count takes priority.
+- **Step 2 — MCS Swath Construction:** MCS tracks with 10% or more of their pixels on tropical cyclone pixels are removed first, before any cloud type is classified. For each remaining MCS track, the union of all pixels it occupies during the window is computed to form a 2D swath footprint, along with a pixel-level count of how many timesteps it was present. Where multiple tracks overlap, the track with the highest pixel coverage count takes priority.
 
 - **Step 3 — Latitude-Dependent Tb Threshold:** A spatially varying brightness temperature threshold is constructed that decreases poleward, reflecting the lower cloud top temperatures needed to detect deep convection at higher latitudes. This ensures physically consistent cloud detection across the globe.
 
@@ -76,7 +81,7 @@ Output: zarr file with mcs_mask, cloud_types, dc_pr, st_pr, nd_pr, dz_pr
 
 - **Step 5 — Priority-Based Aggregation:** Cloud types across all timesteps in the window are collapsed to a single value per cell using a strict priority order (deep convective > stratiform > non-deep convective > drizzle). The final cloud type map is then masked to zero wherever the MCS swath is present, enforcing mutual exclusivity between MCS and cloud type categories.
 
-- **Step 6 — Frequency-Weighted Mean Precipitation:** For each cloud type, mean precipitation is computed as the product of the conditional mean (average precipitation when the cell exhibited that type) and the type frequency (fraction of timesteps). The four contributions sum to the simple time-mean precipitation over the window, and are set to zero within MCS swath pixels.
+- **Step 6 — Frequency-Weighted Mean Precipitation:** For each cloud type, mean precipitation is computed as the product of the conditional mean (average precipitation when the cell exhibited that type) and the type frequency (fraction of timesteps). The four contributions sum to the simple time-mean precipitation over the window, and are set to zero within MCS swath pixels. The same time-mean, not masked by the swath, is written as `tot_pr`.
 
 ---
 
@@ -87,13 +92,17 @@ Hourly input time steps are grouped into aggregation windows of configurable len
 - **Boundary hours:** 00, 06, 12, 18 UTC
 - **Alignment method:** floor each input timestamp to the nearest aggregation-window boundary
 
-Each output time step aggregates all input time steps that fall within the same window. The number of input steps per window is typically equal to the aggregation window length (e.g., 6 steps for 6-hour windows from hourly data), but may differ near the start and end of the dataset.
+Each output time step aggregates all input time steps that fall within the same window. The number of input steps per window is typically equal to the aggregation window length (e.g., 6 steps for 6-hour windows from hourly data), but may differ near the start and end of the dataset and where the hourly data have gaps. The result of a window is written to the frame of its aligned output time whatever its first hourly step is (see Run Behaviour below).
 
 ---
 
 ## Step 2 — MCS Swath Construction
 
-The MCS swath for a given aggregation window is derived in two sub-steps.
+### 2.0 — MCS-TC Exclusion
+
+Before the swath is built, MCS tracks that overlap tropical cyclones are removed from the hourly MCS masks of the window. The TC track mask valid at the start of the window is held over its hourly steps. For each MCS track, the fraction of its pixels, pooled over all hourly steps of the window, that coincide with a TC pixel is computed, and tracks with a fraction of 10% or more (`MCS_TC_FILTER_THRESHOLD` in `src/mcs_tc_filter.py`) are set to zero for the whole window. This happens before the cloud types are classified, so the pixels freed by the removal are classified from Tb and precipitation instead of being left at the zero cloud-type precipitation that applies inside MCS swaths. A source whose configuration has no TC track data skips this exclusion. `make_cooccurrence_masks.py` runs the same test on the aggregated swath only to count and log it (see [cof_identification.md](cof_identification.md)).
+
+The MCS swath for a given aggregation window is then derived in two sub-steps.
 
 ### 2a — Per-Track Swath and Coverage
 
@@ -178,6 +187,12 @@ $$\sum_{c=1}^{4} \overline{P}_c(x) = \bar{P}(x) \quad \text{(simple time-mean pr
 
 After computing the four components, all are set to zero within MCS swath pixels, so that precipitation within MCS footprints is counted separately via the MCS swath mask.
 
+**Total precipitation.** The window mean
+
+$$\text{tot\_pr}(x) = \frac{1}{N_t} \sum_{t=1}^{N_t} P(t,x)$$
+
+is written as `tot_pr`, with missing values counted as zero and $N_t$ the number of hourly steps present in the window, the same denominator as in $\overline{P}_c$. It is not masked by the MCS swath. Downstream scripts use it as the only precipitation: the monthly rain map, the extreme-precipitation attribution and the budget check all read `tot_pr`, so the cloud types, the swath and the total share one precipitation definition. `P` is each model's own precipitation field as configured for Step 1; no frozen-precipitation term is added for any model. SCREAM's and ICON's `pr` already include snow, UM's is rain only.
+
 ---
 
 ## Output Variables
@@ -192,8 +207,21 @@ All output variables are saved on the HEALPix grid (1D cell dimension) at the ag
 | `st_pr` | mm h⁻¹ | Frequency-weighted mean precipitation for stratiform clouds |
 | `nd_pr` | mm h⁻¹ | Frequency-weighted mean precipitation for non-deep convective clouds |
 | `dz_pr` | mm h⁻¹ | Frequency-weighted mean precipitation for drizzle |
+| `tot_pr` | mm h⁻¹ | Window-mean total precipitation from the same hourly pr; not masked by the MCS swath |
 
-`dc_pr + st_pr + nd_pr + dz_pr` equals the time-mean precipitation at all non-MCS cells.
+`dc_pr + st_pr + nd_pr + dz_pr` equals `tot_pr` at all non-MCS cells: precipitation at pixels and hours where Tb is missing is removed before the classification (see "Missing Tb" below), so no rain is left without a cloud type.
+
+A frame that was not written is NaN in every variable (the store's fill value is NaN, so a computed zero and a missing frame stay distinguishable).
+
+---
+
+## Run Behaviour: Missing Tb, Partial Windows, Retries and Exit Status
+
+- **Missing Tb.** A pixel without Tb cannot be classified, so its precipitation is removed: `pr` is set to NaN wherever Tb is NaN, before anything is derived from it (`remove_pr_where_tb_missing`; a missing hour counts as zero with the same divisor as every other hour). `tot_pr` and the cloud-type precipitation then see the same field, and the budget closes. The rule is the same inside MCS swaths. It changes nothing for the model sources, whose Tb comes from OLR and is missing only where `pr` is missing too. It changes IMERG, whose Tb has gaps (0.30% of the cell-hours within 60S-60N): 0.33% of the whole-record rain fell there (0.1-1.4% per month, largest in early 2019), so the whole-record total precipitation is 0.33% lower (60S-60N mean 3.003 to 2.993 mm/day) and the IMERG residual, +0.14% before the rule because this rain was counted in `tot_pr` and in no category, is 0.0000% in all 36 months and every region. The removed share is logged at the end of each run ("Rain at pixels with missing Tb was removed ..."). A window in which Tb is missing everywhere is an empty window (below).
+- **Partial windows.** A window with fewer hourly steps than the aggregation length (a record that starts at 01 UTC, a gap in the hourly data, the last window) is averaged over the steps present, and `tot_pr` and the cloud-type precipitation use that number of steps as the denominator. It is written to the frame of its aligned time and listed in the end-of-run summary. Examples in the September 2026 data: SCREAM 2019-08-01T00 (5 steps), 2020-04-20T00 (1 step) and 2020-04-22T00 (5 steps, after 48 missing hourly steps, 2020-04-20 01 UTC to 2020-04-22 00 UTC), CASESM2 2020-03-01T00 (5 steps). Before this was fixed, partial windows whose first hourly step was off the aligned hour were computed and then discarded, leaving those frames NaN.
+- **Empty windows.** A window with no valid pr and no valid Tb (for example missing model output during spin-up, depending on how the data were post-processed) is not a failure: it is not retried, stays NaN and is reported as expected.
+- **Retries.** A window whose task raises (an unreadable zarr chunk, a netCDF error while reading the TC tracks, out of memory), whose worker is killed, or whose result is all zero although its input has data, is retried up to three times with a short wait. Retries are submitted with `pure=False`: with Dask's default an identical resubmission returns the first attempt's cached result or exception and nothing is re-run.
+- **Failures.** A window that still fails stays NaN and is listed with its reason in an ERROR summary at the end, and the script exits with status 1, as it also does when the input cannot be read or the store cannot be written. Frames left NaN by a failure have to be recomputed before the store is used.
 
 ---
 
@@ -209,3 +237,6 @@ All output variables are saved on the HEALPix grid (1D cell dimension) at the ag
 | Precipitation threshold | 0.5 mm h⁻¹ | Separates precipitating from non-precipitating cloud types |
 | Cloud type priority order | 1 > 2 > 3 > 4 | Deep convective takes highest priority in temporal aggregation |
 | MCS coverage tie-breaking | Max coverage count | Track with most timestep overlap takes priority at contested pixels |
+| MCS-TC exclusion | ≥ 10% of a track's pixels on TC pixels | Pooled over the window, applied before cloud-type classification |
+| Retries per window | 3 | Wait of 2 s × attempt number between attempts |
+| Frozen precipitation | Not added | Each model's own `pr` is used |

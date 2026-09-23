@@ -68,6 +68,9 @@ COF_MASK_VARS = [
 #   current_location  : catalog location key (empty string = None)
 #   structured_mesh   : True for ERA5 lat/lon grid, False for HEALPix
 #   walltime          : SLURM wallclock limit
+#   expected_missing  : share of the storm points that has no frame in the COF store (Step 3 output; source of the COF masks and of the
+#                       models' pr, tot_pr) because the COF period is shorter than the track period; those points are NaN and
+#                       the job fails if more are missing (--max_missing_fraction)
 #   job_name          : short SLURM job name
 #   log_prefix        : prefix for SLURM log filenames
 #   job_groups        : list of variable group dicts (see below)
@@ -95,6 +98,7 @@ MODEL_CONFIGS = {
         "structured_mesh": True,         # ERA5 is on lat/lon grid
         "walltime": "00:45:00",
         "job_name": "era5",
+        "expected_missing": 0.0,   # storm points with no frame in the COF store: none
         "log_prefix": "extract_etc_era5",
         "job_groups": [
             {
@@ -141,6 +145,7 @@ MODEL_CONFIGS = {
         "structured_mesh": False,
         "walltime": "00:20:00",
         "job_name": "scream",
+        "expected_missing": 0.008,   # storm points with no frame in the COF store: measured 0.0054 on 2026-09-20, plus a margin
         "log_prefix": "extract_etc_SCREAM",
         "job_groups": [
             {
@@ -203,6 +208,7 @@ MODEL_CONFIGS = {
         "structured_mesh": False,
         "walltime": "00:15:00",
         "job_name": "nicam",
+        "expected_missing": 0.0,   # storm points with no frame in the COF store: none
         "log_prefix": "extract_etc_NICAM",
         "job_groups": [
             {
@@ -278,6 +284,7 @@ MODEL_CONFIGS = {
         "structured_mesh": False,
         "walltime": "02:00:00",   # CASESM2 data is from online, needs more time
         "job_name": "casesm2_10km_nocumulus",
+        "expected_missing": 0.0,   # storm points with no frame in the COF store: none
         "log_prefix": "extract_etc_CASESM2",
         "job_groups": [
             {
@@ -350,6 +357,7 @@ MODEL_CONFIGS = {
         "structured_mesh": False,
         "walltime": "00:15:00",
         "job_name": "icon",
+        "expected_missing": 0.15,   # storm points with no frame in the COF store: measured 0.1460 on 2026-09-20, plus a margin
         "log_prefix": "extract_etc_ICON",
         "job_groups": [
             {
@@ -422,6 +430,7 @@ MODEL_CONFIGS = {
         "structured_mesh": False,
         "walltime": "01:00:00",   # UM data is from online (remote), needs more time
         "job_name": "um_glm_n2560_RAL3p3",
+        "expected_missing": 0.035,   # storm points with no frame in the COF store: measured 0.0322 on 2026-09-20, plus a margin
         "log_prefix": "extract_etc_UM",
         "job_groups": [
             {
@@ -529,6 +538,11 @@ def build_python_cmd(model_cfg, group):
     # COF mask flag
     if group.get("cof_mask"):
         parts.append("  --cof_mask")
+
+    # Points without a frame in the COF store are NaN (never the nearest frame); more than expected fails the job.
+    # Applies to the groups that read the COF store: the COF masks and the models' pr (Step 1 tot_pr by default)
+    if group.get("cof_mask") or list(group["variables"]) == ["pr"]:
+        parts.append(f'  --max_missing_fraction {model_cfg.get("expected_missing", 0.0)}')
 
     # Structured mesh (ERA5)
     if model_cfg.get("structured_mesh"):

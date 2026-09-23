@@ -22,6 +22,7 @@ CONFIG_FILE="/global/homes/f/feng045/program/waccem/gsrm_cooccurrencefeature/con
 # Update this list if you add/remove sources in the config file
 ALL_SOURCES=(
     "IR_IMERG"
+    "GSMAP"
     "scream_ne120"
     "icon_d3hp003"
     "nicam_gl11"
