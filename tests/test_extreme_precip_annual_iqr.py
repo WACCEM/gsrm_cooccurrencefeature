@@ -1,5 +1,5 @@
 """Tests of the per-calendar-year percentiles and interannual IQR added to scripts/calc_extreme_precip_thresholds.py (2026-09-21,
-ported from calc_extreme_precip_thresholds_1h.py so the 6-hourly script can compute the same interannual variability for GsMAP
+ported from calc_extreme_precip_thresholds_1h.py so the 6-hourly script can compute the same interannual variability for GSMaP
 and IMERG):
 
   - calc_annual_precip_percentiles: returns (None, None) below the qualifying-year minimum; the coverage gate counts distinct
@@ -164,7 +164,7 @@ def test_cli_defaults_and_gsmap_config_entry():
     cfg = yaml.safe_load(open(REPO / "config" / "config_sources.yaml"))
     assert "GSMAP" in cfg
     g = cfg["GSMAP"]
-    assert g["source_name"] == "GsMAPv8" and g["varname_precip_liq"] == "hourlyPrecipRate" and g["pr_convert_factor"] == 1.0
+    assert g["source_name"] == "GSMaPv8" and g["varname_precip_liq"] == "hourlyPrecipRate" and g["pr_convert_factor"] == 1.0
     assert g.get("varname_precip_ice") is None
 
 

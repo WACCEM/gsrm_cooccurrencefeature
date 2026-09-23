@@ -78,7 +78,7 @@ These scripts automate running one or more Python processing scripts across mode
 | 4 (A1) | `calc_monthly_rainmap_by_cof.py` | Step 3 zarr (masks + `tot_pr`) | `/hackathon/cof_masks/stats/monthly/{source}_monthly_rainmap_cof_hp8_v1.nc` |
 | 4a (A2) | `calc_extreme_precip_thresholds.py` | Step 1 zarr `tot_pr` via `--input_zarr` (IMERG: non-IR 6-hourly store); otherwise the source's own 6-hourly precipitation | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` |
 | 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr (masks + `tot_pr`) + Step 4a nc | `/hackathon/extreme_precip/{source}_stormtype_spatial_{pxx}{date_suffix}.nc` |
-| 4a (A2, obs-only interannual) | `plot_extreme_rain_threshold_map_obs_interannual.ipynb` reads dedicated 11-year IMERG+GsMAP archival files (`{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`), independent of the 3-year period the rest of Analysis 2 uses | Figures |
+| 4a (A2, obs-only interannual) | `plot_extreme_rain_threshold_map_obs_interannual.ipynb` reads dedicated 11-year IMERG+GSMaP archival files (`{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`), independent of the 3-year period the rest of Analysis 2 uses | Figures |
 | 5 (A1) | `plot_cof_total_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
 | 5 (A2) | `plot_cof_extreme_raintype_rank_map.ipynb` | Step 4b (A2) nc | Figures |
 | 1 (A3) | `combine_etc_cof_data.py` | ETC track text files + COF overlap tracking parquet | `/hackathon/etc_tracks/{source}_etc_cof_data.parquet` |

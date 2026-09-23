@@ -970,8 +970,8 @@ def load_precipitation_data(config_file, catalog_source, zoom, logger=None, inpu
     elif catalog_source == "GSMAP":
         # GSMAP is not in the catalog; use the local 6-hourly Zarr store (a temporal-mean resample of the 1-hourly store,
         # same variable name and units, made 2026-09-21)
-        dir_healpix = "/pscratch/sd/w/wcmca1/GsMAP/healpix/"
-        in_zarr = f"{dir_healpix}GsMAPv8_6H_zoom{zoom}_20100101_20241231.zarr"
+        dir_healpix = "/pscratch/sd/w/wcmca1/GSMaP/healpix/"
+        in_zarr = f"{dir_healpix}GSMaPv8_6H_zoom{zoom}_20100101_20241231.zarr"
         logger.info(f"Loading GSMAP 6-hourly dataset (NOT from catalog): {in_zarr}")
         ds_p = xr.open_zarr(in_zarr, consolidated=True)
         ds_p = ds_p.pipe(egh.attach_coords)

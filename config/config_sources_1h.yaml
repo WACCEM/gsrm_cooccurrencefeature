@@ -19,9 +19,9 @@ IMERG:
   start_datetime: 2001-01-01T00:00
   end_datetime: 2024-12-31T23:59
 
-# GsMAP configuration
+# GSMaP configuration
 GSMAP:
-  source_name: GsMAPv8
+  source_name: GSMaPv8
   catalog_location: NERSC
   catalog_params:
     zoom: 8
@@ -115,7 +115,7 @@ um_glm_n2560_RAL3p3:
 # happened for the v1 hp9 output before this was caught). A correct local store
 # exists instead -- run zoom 9 with an explicit --input_zarr override:
 #   /global/cfs/cdirs/wcm_shr/hk25/healpix/casesm2_10km_nocumulus/casesm2_10km_nocumulus_hourly_pr_and_rlut_hp9.zarr
-# (1 year, native chunks (24, 262144) -- same good shape as IMERG/GSMAP; has pr but
+# (1 year, native chunks (24, 262144) -- same good shape as IMERG/GSMaP; has pr but
 # not prs, same as the catalog entry, so varname_precip_ice below is already a
 # no-op for this source at either zoom). This is a manual, per-run override, not an
 # automatic redirect (unlike scream_ne120's catalog_source_name above) -- a bulk
