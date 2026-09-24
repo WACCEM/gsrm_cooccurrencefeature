@@ -6,6 +6,8 @@ Author: Zhe Feng | zhe.feng@pnnl.gov
 """
 
 import os
+import sys
+import json
 import subprocess
 import pandas as pd
 import tempfile
@@ -19,10 +21,13 @@ feature_type = "etc_ar_tc"
 # feature_type = "mcs"
 
 # Script parameters
-source_name = "scream"
+source_name = "icon_d3hp003"
+# source_name = "scream"
 
-start_date = "2019-08-01T00"
+start_date = "2020-06-01T00"
 end_date = "2020-08-31T23"
+# start_date = "2019-08-01T00"
+# end_date = "2020-08-31T23"
 # start_date = "2020-08-01T00"
 # end_date = "2020-08-31T23"
 # start_date = "2019-10-01T00"
@@ -37,7 +42,7 @@ output_dpi = 200
 plot_freq = '6h'  # Set to desired frequency string or None for auto-calculation
 
 # Execution control options
-run_plotting = False    # Set to False to skip plotting and use existing PNG files
+run_plotting = True     # Set to False to skip plotting and use existing PNG files
 run_ffmpeg = True     # Set to False to skip animation creation (plotting only)
 
 # FFmpeg animation parameters
@@ -46,12 +51,32 @@ output_framerate = 10  # (frames per second) - video playback speed (lower value
 video_quality = 20     # CRF value (lower = better quality, range 0-51, 18-28 is good)
 output_width = 1280    # Optional: output video width in pixels (e.g., 1920, 1280). None = use original size. Height scales automatically to maintain aspect ratio.
 
+# Field data of each source, from the hackathon intake catalog (NERSC): catalog model and parameters for each feature type.
+# ICON: the catalog's default time resolution is daily, so time and time_method are set to the 6-hourly instantaneous
+# fields, which are on the times of the masks. ICON has no IVT variable, so the plotting script skips the IVT shading
+# with a warning and still draws the masks and the psl contours.
+field_catalogs = {
+    "scream": {
+        "etc_ar_tc": {"model": "scream_ne120_inst", "params": {"zoom": 8}},
+        "mcs": {"model": "scream2D_hrly", "params": {"zoom": 8}},
+    },
+    "icon_d3hp003": {
+        "etc_ar_tc": {"model": "icon_d3hp003", "params": {"zoom": 8, "time": "PT6H", "time_method": "inst"}},
+        "mcs": {"model": "icon_d3hp003", "params": {"zoom": 8, "time": "PT6H", "time_method": "inst"}},
+    },
+}
+if source_name not in field_catalogs:
+    print(f"❌ Error: no field catalog is set for source '{source_name}'")
+    print(f"   Add it to field_catalogs above. Known sources: {', '.join(field_catalogs)}")
+    exit(1)
+
 # Set paths and options based on feature type
 if feature_type == "etc_ar_tc":
     # ETC + AR + TC configuration with IVT shading and PSL contours
     fig_basename = "masks_ivt_psl"
     figdir = f"/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks_field/{source_name}/"
-    catalog_model = "scream_ne120_inst"
+    catalog_model = field_catalogs[source_name][feature_type]["model"]
+    catalog_params = field_catalogs[source_name][feature_type]["params"]
     fig_width = 12
     fig_height = 6
     
@@ -78,7 +103,8 @@ elif feature_type == "mcs":
     # MCS configuration with RLUT shading
     fig_basename = "masks_mcs_rlut"
     figdir = f"/global/cfs/cdirs/m1867/zfeng/hk25/quicklooks_field/{source_name}/"
-    catalog_model = "scream2D_hrly"
+    catalog_model = field_catalogs[source_name][feature_type]["model"]
+    catalog_params = field_catalogs[source_name][feature_type]["params"]
     fig_width = 12
     fig_height = 6
     
@@ -111,7 +137,9 @@ start_date_str = start_date.split('T')[0]  # Extract YYYY-MM-DD
 end_date_str = end_date.split('T')[0]      # Extract YYYY-MM-DD
 animation_filename = f"{animation_dir}{source_name}_{fig_basename}_{start_date_str}_{end_date_str}.mp4"
 
-plotting_code = "plot_feature_masks_with_field.py"
+# The plotting script next to this one, run with the same python, so this works from any directory and from a
+# non-interactive shell (a bare 'python' or a relative path would not)
+plotting_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot_feature_masks_with_field.py")
 
 ###############################################################################################
 # Main execution
@@ -120,7 +148,7 @@ plotting_code = "plot_feature_masks_with_field.py"
 print("Make multi-feature tracking mask animation with background field")
 print(f"Feature type: {feature_type}")
 print(f"Source: {source_name}")
-print(f"Catalog model: {catalog_model}")
+print(f"Catalog model: {catalog_model} {json.dumps(catalog_params)}")
 print(f"Date range: {start_date} to {end_date}")
 print(f"Execution mode: Plotting={'✅' if run_plotting else '❌'}, FFmpeg={'✅' if run_ffmpeg else '❌'}")
 
@@ -136,9 +164,10 @@ if run_plotting:
     
     # Build base command
     cmd = [
-        'python', plotting_code,
+        sys.executable, plotting_code,
         '--source', source_name,
         '--catalog-model', catalog_model,
+        '--catalog-params', json.dumps(catalog_params),
         '--start', start_date,
         '--end', end_date,
         '--parallel', str(parallel_mode),
@@ -238,6 +267,8 @@ if run_ffmpeg:
 
     print(f"Found {len(expected_files)} PNG files within date range")
     print(f"Time range: {start_date} to {end_date} (freq: {freq_str})")
+    if len(expected_files) < len(time_range):
+        print(f"⚠️  Warning: only {len(expected_files)} of {len(time_range)} frames exist; the animation skips the missing ones")
 
     if len(expected_files) == 0:
         print("❌ No PNG files found within the specified date range!")
@@ -260,9 +291,14 @@ if run_ffmpeg:
             # Just ensure dimensions are even (required for H.264 encoding)
             scale_filter = 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
         
+        # ffmpeg from the python environment if it is there (a non-interactive shell has no PATH to it), else from PATH
+        ffmpeg_exe = os.path.join(os.path.dirname(sys.executable), 'ffmpeg')
+        if not os.path.exists(ffmpeg_exe):
+            ffmpeg_exe = 'ffmpeg'
+
         # Use FFmpeg concat demuxer with file list
         ffmpeg_cmd = [
-            'ffmpeg',
+            ffmpeg_exe,
             '-f', 'concat',
             '-safe', '0',
             '-r', str(input_framerate),  # Input framerate
