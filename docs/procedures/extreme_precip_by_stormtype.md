@@ -73,12 +73,16 @@ Input: COF mask zarr (masks, cloud types, tot_pr)  +  percentile threshold file
             > cloud types (DC > ND > ST > DZ) > unassigned
          |
          v
-[Step 5] Accumulate counts and precipitation amounts over all time steps
+[Step 5] Accumulate counts and precipitation amounts over all time steps and, in separate
+         accumulators, within each calendar year that has enough data (>= --min_year_coverage_days
+         distinct days, default 360, and at least 2 such years; --no_annual turns this off)
 [Step 6] Compute precipitation fractions per storm type
          |
          v
 Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
         └─ Per-cell total extreme precipitation plus counts and fractions for each storm type
+        └─ Per calendar year, when at least 2 years qualify: a year coordinate and the extreme
+           precipitation amount in total and for each storm type on (year, cell) (*_annual variables)
         └─ {pxx} is the lowercase percentile name (e.g. p90); {date_suffix} is empty unless
            --start_date/--end_date were given, in which case it is _{start}_{end}
 ```
@@ -95,7 +99,7 @@ Output: {source_name}_stormtype_spatial_{pxx}{date_suffix}.nc
 
 - **Stage 2, Steps 3–4 — Time-Step Attribution:** For each time step, cells where precipitation exceeds the local percentile threshold are identified, then each extreme cell is assigned to the storm type category it belongs to. Because the COF masks are constructed to be mutually exclusive at each grid cell in the large majority of cases, this assignment is usually determined directly by which category's mask the cell falls in, not by the order categories are checked; a priority order (highest-order COF first) is applied only to deterministically resolve the residual cases where a cell could match more than one category, ensuring every extreme event is still counted exactly once.
 
-- **Stage 2, Steps 5–6 — Spatial Accumulation and Fraction Calculation:** Extreme event counts and precipitation amounts are summed over all time steps at each cell. Precipitation fractions are then computed as the ratio of each storm type's extreme precipitation to the total extreme precipitation, providing a normalized measure of each type's relative contribution.
+- **Stage 2, Steps 5–6 — Spatial Accumulation and Fraction Calculation:** Extreme event counts and precipitation amounts are summed over all time steps at each cell. Precipitation fractions are then computed as the ratio of each storm type's extreme precipitation to the total extreme precipitation, providing a normalized measure of each type's relative contribution. The same amounts are also summed within each calendar year that has enough data, so the year-to-year variability of each type's contribution can be examined; these per-year sums are accumulated separately and do not enter the whole-record values or fractions.
 
 ---
 
@@ -155,7 +159,7 @@ before.
 
 Two datasets are loaded:
 - **COF masks and precipitation**: `{source_name}_cofmasks_hp8_v1.zarr` from `/pscratch/sd/w/wcmca1/hackathon/cof_masks/`. The precipitation is the variable `tot_pr`; the script stops with a message if the store has none (rerun Steps 1-3 with the current scripts).
-- **Percentile thresholds**: `{source_name}_precip_percentiles_6h_hp8_v1.nc` from `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`
+- **Percentile thresholds**: `{source_name}_precip_percentiles_6h_hp8_v1.nc` from `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/`, or the file given with `--threshold_file` (for example thresholds computed from a longer record such as `IMERGv7_precip_percentiles_6h_hp8_v1_2014_2024.nc`). The thresholds only decide which cells are extreme: the time axis, the masks and `tot_pr` still come from the COF store, so the record that is analyzed does not change. The file used is written to the output's `threshold_file` global attribute.
 
 ### Step 2 — Time Range
 
@@ -210,6 +214,12 @@ $$\text{precip}_c(x) = \sum_{t=1}^{N_t} P(t,x) \cdot \mathbf{1}[E(t,x) \text{ an
 
 where $P(t,x)$ is `tot_pr`.
 
+**Per calendar year.** The amounts are also summed within each calendar year $y$ that has enough data:
+
+$$\text{precip}_{c,y}(x) = \sum_{t \in y} P(t,x) \cdot \mathbf{1}[E(t,x) \text{ and assigned to } c]$$
+
+A year qualifies with at least `--min_year_coverage_days` (default 360) distinct calendar days of data, the rule of the per-year percentiles in `calc_extreme_precip_thresholds.py` (days rather than time steps, and `>=`), and the per-year variables are only written when at least 2 years qualify; `--no_annual` skips them. They are accumulated in arrays of their own and never feed the whole-record ones, so the whole-record variables are bit-for-bit the same with or without them. The years are those of the COF mask time axis (after any `--start_date/--end_date`), not those of the threshold file: IMERG's mask store covers 2019-2021, so its per-year variables are for 2019, 2020 and 2021 whichever threshold file is used. A model source whose record (about one year) crosses a calendar boundary has no year with enough days and gets none.
+
 ### Step 6 — Precipitation Fraction
 
 The fraction of extreme precipitation attributed to storm type $c$ at cell $x$ is:
@@ -224,7 +234,9 @@ Because `tot_pr` is the precipitation the cloud types were classified with, `una
 
 ## Output Variables
 
-The attribution output has shape `(cell,)` with one file per percentile threshold, saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GSMaP (added 2026-09-22), plus, as archival references outside the pipeline (not read by attribution or by `run_cof_pipeline.py`), the 11-year IMERG and GSMaP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`.
+The attribution output has one file per percentile threshold (whole-record variables on `(cell,)`, per-year variables on `(year, cell)`), saved to `/pscratch/sd/w/wcmca1/hackathon/extreme_precip/` (mirrored identically on CFS at `/global/cfs/cdirs/wcm_shr/hk25/extreme_precip/`). That same directory also holds the two threshold-computation products, only one of which feeds this stage: `{source}_precip_percentiles_6h_hp8_v1.nc` for all 7 sources including GSMaP (added 2026-09-22), plus the 11-year IMERG and GSMaP threshold files `{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`, outside the pipeline (`run_cof_pipeline.py` does not read them; the IMERG one is what the production IMERG attribution files were made with, see below).
+
+**Production IMERG attribution (changed 2026-09-23).** `IMERGv7_stormtype_spatial_p90.nc` and `_p95.nc` were regenerated with the 2014-2024 thresholds through `--threshold_file` (recorded in their `threshold_file` attribute) and carry the per-year variables. The masks and the analyzed record (2019-2021) are unchanged, so only the choice of extreme cells changes: the P95 threshold median goes from 2.395 to 2.488 mm/h and the number of extreme samples drops by about 4%, and the type shares of the 60°S-60°N extreme precipitation change by at most 0.25 percentage points (the regional means of the pie charts by up to 4 points, tropical-ocean MCS). The previous files (2019-2021 thresholds, whole-record variables only) are archived in `extreme_precip/_prev_production_IMERGv7_thresholds_2019_2021_20260920/` on pscratch and CFS. The model sources' files are unchanged (thresholds from their own record, no per-year variables). `run_cof_pipeline.py` builds the IMERG attribution from the default 3-year threshold file, so it reproduces the archived version, not production, unless `--step-args attribution "--threshold_file ..._2014_2024.nc"` is given.
 
 | Variable | Description |
 |----------|-------------|
@@ -235,7 +247,17 @@ The attribution output has shape `(cell,)` with one file per percentile threshol
 
 where `{type}` is one of: `mcs_isolated`, `ar_isolated`, `etc_isolated`, `tc`, `mcs_ar_2way`, `mcs_etc_2way`, `ar_etc_2way`, `mcs_ar_etc_3way`, `dc`, `nd`, `st`, `dz`, `unassigned`.
 
-Per-type precipitation sums are accumulated internally to compute `{type}_frac`, but they are not written as separate `{type}_precip` variables by the current script.
+The whole-record per-type precipitation sums are accumulated internally to compute `{type}_frac` but are not written as separate variables; only the per-year sums are (`{type}_precip_annual`, below).
+
+**Per calendar year** (written when at least 2 years qualify, see Step 5; on `(year, cell)` with an int32 `year` coordinate):
+
+| Variable | Description |
+|----------|-------------|
+| `total_extreme_count_annual` | Count of extreme precipitation occurrences (all storm types) within each year |
+| `total_extreme_precip_annual` | Sum of the extreme precipitation values within each year (same units and caveat as `total_extreme_precip`) |
+| `{type}_precip_annual` | Extreme precipitation amount attributed to each storm type within each year, for the same 13 `{type}` values (`unassigned` included) |
+
+Every extreme cell belongs to exactly one type, so the 13 `{type}_precip_annual` add up to `total_extreme_precip_annual` (up to float32 round-off), and the years add up to the whole-record values (counts exactly). A year's share of a type is `{type}_precip_annual / total_extreme_precip_annual`. The global attributes `annual_years`, `n_annual_years` and `min_year_coverage_days` record which years qualified and the gate; `threshold_file` (always written) records the threshold file that was used. Per-year counts by type are not written.
 
 ---
 
@@ -250,3 +272,5 @@ Per-type precipitation sums are accumulated internally to compute `{type}_frac`,
 | Quantile method | `linear` | Interpolation method for `xarray.quantile` |
 | Dask workers | 8 | Workers for parallel time-step processing |
 | Annual/IQR gate | `--no_annual` off, `--min_year_coverage_days` 300 | Per-year percentiles + interannual IQR are computed whenever a source has >= 2 calendar years each clearing this many distinct days of data; `--no_annual` skips the computation entirely |
+| Threshold file (Stage 2) | `--threshold_file` unset: `{source}_precip_percentiles_6h_hp8_v1.nc` under the data root | Reads another threshold file instead (e.g. from a longer record); recorded in the output's `threshold_file` attribute |
+| Per-year gate (Stage 2) | `--no_annual` off, `--min_year_coverage_days` 360 | Per-year amounts by storm type are written whenever at least 2 calendar years of the mask time axis each have this many distinct days of data; `--no_annual` skips them |

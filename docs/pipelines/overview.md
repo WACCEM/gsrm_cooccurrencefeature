@@ -110,8 +110,13 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
   └─ Input:  Step 3 zarr (masks and tot_pr)  +  Step 4a NetCDF
   └─ Output: /hackathon/extreme_precip/
              {source}_stormtype_spatial_{pxx}{date_suffix}.nc
-             (per-cell counts, precipitation sums, and fractions
-              for each storm type at each percentile level)
+             (per-cell total extreme precipitation and, for each storm type, counts and
+              fractions at each percentile level. Also, for a source with at least 2 calendar
+              years of the mask record having >= --min_year_coverage_days days of data
+              (default 360; --no_annual turns it off): a year coordinate plus the extreme
+              precipitation amount in total and by storm type for each year, *_annual variables.
+              --threshold_file reads another threshold file instead of the default one; the
+              production IMERG files use the 2014-2024 file, see extreme_precip_by_stormtype.md)
          |
          v
 [Step 5] Visualization and Analysis

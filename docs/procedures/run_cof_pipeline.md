@@ -111,16 +111,39 @@ python scripts/run_cof_pipeline.py --data-root /pscratch/sd/w/wcmca1/hackathon/ 
 
 Both commands work for any source, not just IMERG — swap `--sources imerg` and the `--input_zarr` value.
 
-**Trap:** `calc_stormtype_extreme_precip_spatial.py` always reads `extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc`
-— there is no `--version`/`--threshold_file` flag on the attribution step to point it at a differently-versioned thresholds
-file. A `thresholds` run with `--step-args thresholds "--version v20yr ..."` therefore produces a file the attribution step
-will never read; leave `--version` at its default (as both commands above do) so attribution finds it. If you want the
-20-year thresholds purely as a separate, differently-named artifact instead — not meant to feed the attribution at all —
-call `scripts/calc_extreme_precip_thresholds.py` directly with `--version` and skip the runner for that step.
+**Trap:** by default `calc_stormtype_extreme_precip_spatial.py` reads `extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc`
+under the data root. A `thresholds` run with `--step-args thresholds "--version v20yr ..."` therefore writes a file the
+attribution step does not read unless you point it there: leave `--version` at its default (as both commands above do) so the
+attribution finds it, or give the attribution the file explicitly with `--threshold_file` (the way to use an existing
+threshold file with another name, such as `IMERGv7_precip_percentiles_6h_hp8_v1_2014_2024.nc`):
+
+```bash
+# Attribution alone, against another threshold file. The masks and the analyzed record are unchanged; the thresholds only
+# decide which cells are extreme, and the file used is written to the output's `threshold_file` attribute.
+python scripts/calc_stormtype_extreme_precip_spatial.py --catalog_source IR_IMERG --percentiles P90 P95 \
+  --threshold_file /pscratch/sd/w/wcmca1/hackathon/extreme_precip/IMERGv7_precip_percentiles_6h_hp8_v1_2014_2024.nc \
+  --output_dir /pscratch/sd/w/wcmca1/hackathon/tmp/imerg_attribution_11yr
+```
+
+Through the runner the same option goes in `--step-args attribution "--threshold_file ..."`; the runner still checks that the
+default-named thresholds file exists under `--data-root` as a prerequisite of the step (a symlink to any threshold file is enough;
+the one named by `--threshold_file` is the one that is read). If you want the 20-year thresholds purely as a separate,
+differently-named artifact — not meant to feed the attribution at all — call `scripts/calc_extreme_precip_thresholds.py`
+directly with `--version` and skip the runner for that step.
+
+The production IMERG attribution files (since 2026-09-23) were made that way, with the 2014-2024 file above. A plain
+`run_cof_pipeline.py ... --sources imerg --steps attribution` uses the default 3-year thresholds instead and reproduces the
+archived files in `extreme_precip/_prev_production_IMERGv7_thresholds_2019_2021_20260920/`, so pass the `--step-args attribution
+"--threshold_file ..."` above to rebuild production.
 
 A source with several years of qualifying data will also get the per-calendar-year percentiles and their interannual IQR
 (new `year` coordinate, `pr_annual_p*`/`pr_q25_p*`/`pr_q75_p*`/`pr_iqr_p*` variables) once at least 2 calendar years clear
 `--min_year_coverage_days` (default 300 distinct days); add `--no_annual` to the `--step-args` string above to skip that.
+
+The attribution step also writes per-calendar-year extreme precipitation amounts by storm type (`year` coordinate and `*_annual`
+variables; see `extreme_precip_by_stormtype.md`) for a source whose mask record has at least 2 years with at least
+`--min_year_coverage_days` (default 360 distinct days) of data; `--step-args attribution "--no_annual"` skips them. The
+whole-record variables are unaffected either way.
 
 ## Where things go, and what is protected
 
