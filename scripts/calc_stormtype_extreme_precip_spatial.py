@@ -61,6 +61,16 @@ def load_config(config_file, catalog_source):
     return config[catalog_source]
 
 
+def default_threshold_file(config, root_dir):
+    """
+    The percentile threshold file read when --threshold_file is not given:
+    {root_dir}/extreme_precip/{source_name}_precip_percentiles_6h_hp8_{version}.nc, the version being the source's
+    'threshold_version' in config_sources.yaml (v1, the thresholds script's default, when it has none).
+    """
+    version = config.get('threshold_version', 'v1')
+    return f"{root_dir}/extreme_precip/{config['source_name']}_precip_percentiles_6h_hp8_{version}.nc"
+
+
 def create_union_mask(mask_list):
     """
     Create a union mask from multiple mask variables.
@@ -808,8 +818,9 @@ def parse_args():
     
     parser.add_argument('--threshold_file', type=str, default=None,
                        help='Percentile threshold file (calc_extreme_precip_thresholds.py output with pr_p90, pr_p95, ...) '
-                            'to use instead of extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc under the '
-                            'pipeline data root, e.g. thresholds computed from a longer record. It sets which cells are '
+                            'to use instead of the default, extreme_precip/{source_name}_precip_percentiles_6h_hp8_'
+                            '{threshold_version}.nc under the pipeline data root (threshold_version of the source in '
+                            'config_sources.yaml, v1 when it has none; IMERG: v1_2014_2024). It sets which cells are '
                             'extreme; the time axis and the masks still come from the COF mask store')
 
     parser.add_argument('--no_annual', action='store_true',
@@ -873,7 +884,7 @@ def main():
     logger.info(f"Loaded mask dataset with {len(ds.time)} time steps")
     
     # Load extreme precipitation thresholds
-    extreme_file = args.threshold_file or f"{root_dir}/extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc"
+    extreme_file = args.threshold_file or default_threshold_file(config, root_dir)
     print(f"📂 Loading extreme precipitation thresholds from: {extreme_file}")
     dsx = xr.open_dataset(extreme_file)
     

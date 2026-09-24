@@ -33,7 +33,7 @@ python calc_stormtype_extreme_precip_spatial.py \
 - `--end_date`: End date in YYYY-MM-DD format (optional)
 - `--output_dir`: Output directory (default: `None` → `extreme_precip/` under the pipeline data root, see `src/cof_paths.py`; production unless `COF_DATA_ROOT` is set)
 - `--n_workers`: Number of Dask workers (default: 8)
-- `--threshold_file`: Percentile threshold file to use instead of the default `extreme_precip/<source_name>_precip_percentiles_6h_hp8_v1.nc` under the data root, e.g. thresholds computed from a longer record. It only decides which cells are extreme; the record and masks are unchanged. Recorded in the output's `threshold_file` attribute
+- `--threshold_file`: Percentile threshold file to use instead of the default `extreme_precip/<source_name>_precip_percentiles_6h_hp8_<threshold_version>.nc` under the data root (`threshold_version` of the source in `config_sources.yaml`: `v1` unless set; IMERG: `v1_2014_2024`), e.g. thresholds computed from a longer record. It only decides which cells are extreme; the record and masks are unchanged. Recorded in the output's `threshold_file` attribute
 - `--no_annual`: Skip the per-calendar-year amounts (otherwise written whenever at least 2 years qualify)
 - `--min_year_coverage_days`: Minimum number of distinct calendar days with data for a calendar year to get per-year amounts (default: 360)
 - `--compute_cloud_types`: Include cloud type attribution (default: True)

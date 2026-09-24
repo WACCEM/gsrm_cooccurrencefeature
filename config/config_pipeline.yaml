@@ -9,10 +9,12 @@
 #   thresholds  calc_extreme_precip_thresholds.py     extreme_precip/{name}_precip_percentiles_6h_hp8_v1.nc             (Analysis 2)
 #   attribution calc_stormtype_extreme_precip_spatial.py  extreme_precip/{name}_stormtype_spatial_p90.nc, ..._p95.nc   (Analysis 2)
 # s1 -> s2 -> s3 -> monthly;  s3 + thresholds -> attribution;  thresholds needs s1 when it reads Step 1's tot_pr and nothing when
-# it reads an input store of its own (IMERG).
+# it reads an input store of its own (IMERG). A source whose 'thresholds' has a 'version' (IMERG: v1_2014_2024) gets that version in the
+# name of its thresholds file, {name}_precip_percentiles_6h_hp8_{version}.nc, and its attribution reads that file (--threshold_file).
 #
 # 'slots' are CPU slots (workers x threads) that a step takes from the runner's budget while it runs; 'est_min' is the wall time
-# measured in the full run of 2026-09-20 (all six sources at once on one 503 GB node, 204 slots, 94.6 min in total) and only orders the
+# measured in the full run of 2026-09-20 (all six sources at once on one 503 GB node, 204 slots, 94.6 min in total; IMERG's thresholds:
+# 2026-09-23, 11-year store, alone on the node) and only orders the
 # work and feeds --dry-run: the runner starts the longest remaining chain first. Change a number here to change how a source is run;
 # adding a source needs no code change.
 
@@ -49,11 +51,17 @@ sources:
     source_name: IMERGv7                   # names the product files
     mcs_config: config_mcs_tbpf_IMERGv7.yml
     step2: era5_imerg                      # AR/TC/ETC from ERA5, not from tracking files
-    # Thresholds from the non-IR 6-hourly IMERG store: same field as tot_pr within 60S-60N (bit for bit the production thresholds),
-    # and data at all latitudes (the IR-based tot_pr is 0 poleward of 60)
+    # Thresholds from a non-IR 6-hourly IMERG store, which has data at all latitudes (the IR-based tot_pr is 0 poleward of 60).
+    # Since 2026-09-23 the 11-year store (2014-2024, a temporal-only mean of the hourly IMERG made with coarsen_healpix.py) and no
+    # longer the 3-year one (IMERG_V7_6H_zoom8_20190101_20211231.zarr, the record of the COF masks): the attribution still analyzes the
+    # record of the masks and only takes which cells are extreme from these thresholds. The two stores are two constructions of IMERG V07
+    # (see docs/AUDIT_FINDINGS.md item 18). The version puts _v1_2014_2024 in the name of the thresholds file, which the attribution
+    # reads (--threshold_file), so the plain 3-year IMERGv7_precip_percentiles_6h_hp8_v1.nc that the threshold-map notebooks read is
+    # neither overwritten nor made by the runner (to make it, see docs/procedures/run_cof_pipeline.md).
     thresholds:
-      input_zarr: /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20190101_20211231.zarr
+      input_zarr: /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20140101_20241231.zarr
       input_var: precipitation
+      version: v1_2014_2024
     # Other input stores to check before the run (the IR store that Step 1 reads Tb and precipitation from)
     check_stores: [/pscratch/sd/w/wcmca1/GPM/healpix/IR_IMERG_V7_1H_zoom8_20190101_20211231.zarr]
     steps:
@@ -61,7 +69,7 @@ sources:
       s2:          {slots: 32, est_min: 1}
       s3:          {slots: 32, est_min: 21}
       monthly:     {est_min: 3}
-      thresholds:  {est_min: 3}
+      thresholds:  {est_min: 21}           # the 11-year store (3 min with the 3-year one)
       attribution: {est_min: 18}
 
   scream:

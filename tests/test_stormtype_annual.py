@@ -13,6 +13,7 @@ scripts/calc_stormtype_extreme_precip_spatial.py (2026-09-23), after the per-yea
     their encoding, the extra global attributes come after the standard ones
   - the command line: defaults (360 days, per-year output on, default threshold file), --threshold_file, --no_annual and
     --min_year_coverage_days, end to end through main() on a tiny synthetic data root
+  - the default threshold file follows the source's threshold_version in config_sources.yaml (v1 when it has none)
 
 Run:  python tests/test_stormtype_annual.py      (or pytest tests/)
 """
@@ -221,6 +222,13 @@ def test_save_writes_year_int32_compressed_amounts_and_the_extra_attributes_last
                 assert np.array_equal(a[name].values, b[name].values, equal_nan=True), name
 
 
+def test_default_threshold_file_follows_the_threshold_version_of_the_source():
+    norm = os.path.normpath
+    assert norm(sp.default_threshold_file({"source_name": "x"}, "/r/")) == "/r/extreme_precip/x_precip_percentiles_6h_hp8_v1.nc"
+    assert (norm(sp.default_threshold_file({"source_name": "x", "threshold_version": "v9"}, "/r/"))
+            == "/r/extreme_precip/x_precip_percentiles_6h_hp8_v9.nc")
+
+
 def test_cli_defaults():
     old = sys.argv
     try:
@@ -249,13 +257,13 @@ def make_root(root, times, n_cells=48, seed=3):
     store.to_zarr(f"{root}/cof_masks/testsrc_cofmasks_hp8_v1.zarr", consolidated=True)
     xr.Dataset({"pr_p90": ("cell", np.full(n_cells, np.inf, "float32"))}).to_netcdf(
         f"{root}/extreme_precip/testsrc_precip_percentiles_6h_hp8_v1.nc")
-    (Path(root) / "config.yaml").write_text("TEST:\n  source_name: testsrc\n")
+    (Path(root) / "config.yaml").write_text("TEST:\n  source_name: testsrc\nTESTV:\n  source_name: testsrc\n  threshold_version: v7\n")
     return pr, ds, thr
 
 
-def run_main(root, output_dir, *extra_args):
+def run_main(root, output_dir, *extra_args, source="TEST"):
     old_argv, old_env = sys.argv, os.environ.get("COF_DATA_ROOT")
-    sys.argv = ["calc_stormtype_extreme_precip_spatial.py", "--catalog_source", "TEST", "--config_file", f"{root}/config.yaml",
+    sys.argv = ["calc_stormtype_extreme_precip_spatial.py", "--catalog_source", source, "--config_file", f"{root}/config.yaml",
                 "--percentiles", "P90", "--output_dir", output_dir, "--n_workers", "2", "--batch_size", "7", *extra_args]
     os.environ["COF_DATA_ROOT"] = root
     try:
@@ -303,6 +311,14 @@ def test_main_threshold_file_no_annual_and_min_year_coverage_days_end_to_end():
             for name, values in whole_record.items():
                 assert np.array_equal(o[name].values, values, equal_nan=True), name
 
+        # no --threshold_file: the default file follows the source's threshold_version (TESTV: v7), not the v1 file that
+        # makes nothing extreme
+        xr.Dataset({"pr_p90": ("cell", thr)}).to_netcdf(f"{root}/extreme_precip/testsrc_precip_percentiles_6h_hp8_v7.nc")
+        f5 = run_main(root, f"{root}/out_version", "--min_year_coverage_days", "10", source="TESTV")
+        with xr.open_dataset(f5) as o:
+            assert o.attrs["threshold_file"] == f"{root}/extreme_precip/testsrc_precip_percentiles_6h_hp8_v7.nc"
+            assert np.array_equal(o["total_extreme_count"].values, ref["total_extreme_count"].values)
+
         # a gate no year meets (12 days < 13): no per-year variables either, and no error
         f3 = run_main(root, f"{root}/out_strict", "--threshold_file", alt, "--min_year_coverage_days", "13")
         with xr.open_dataset(f3) as o:
@@ -318,6 +334,7 @@ if __name__ == "__main__":
     test_whole_record_values_equal_a_plain_step_by_step_accumulation()
     test_annual_totals_match_direct_sums_and_close_the_whole_record()
     test_save_writes_year_int32_compressed_amounts_and_the_extra_attributes_last()
+    test_default_threshold_file_follows_the_threshold_version_of_the_source()
     test_cli_defaults()
     test_main_threshold_file_no_annual_and_min_year_coverage_days_end_to_end()
     print("test_stormtype_annual: all checks passed")

@@ -92,10 +92,10 @@ bash slurm/run_interactive_cof_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
          v
 [Step 4a] Precipitation Percentile Threshold Computation
   └─ Script: scripts/calc_extreme_precip_thresholds.py
-  └─ Input:  --input_zarr: Step 1's tot_pr (models) or the non-IR 6-hourly IMERG store (IMERG);
+  └─ Input:  --input_zarr: Step 1's tot_pr (models) or the 11-year (2014-2024) non-IR 6-hourly IMERG store (IMERG);
              without it, each source's own 6-hourly precipitation (catalog or local zarr)
   └─ Output: /hackathon/extreme_precip/
-             {source}_precip_percentiles_6h_hp8_v1.nc
+             {source}_precip_percentiles_6h_hp8_v1.nc   (IMERG: ..._v1_2014_2024.nc)
              (per-cell P90, P95, ... thresholds; shape: cell. Also, for any source with at
               least 2 qualifying calendar years -- --min_year_coverage_days, default 300 days
               of data; --no_annual turns it off -- per-calendar-year percentiles and their
