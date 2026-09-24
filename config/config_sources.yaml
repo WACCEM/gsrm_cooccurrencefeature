@@ -16,6 +16,12 @@ IR_IMERG:
   end_datetime: 2021-12-31T23:59
   # start_datetime: 2019-08-01T00:00
   # end_datetime: 2020-08-31T23:59
+  # Percentile thresholds that calc_stormtype_extreme_precip_spatial.py reads when --threshold_file is not given:
+  # extreme_precip/{source_name}_precip_percentiles_6h_hp8_{threshold_version}.nc under the data root (v1, the thresholds script's
+  # default, when this key is absent). Since 2026-09-23 the 2014-2024 thresholds for IMERG (the pipeline registry,
+  # config_pipeline.yaml, makes that file; tests/test_run_cof_pipeline_thresholds.py checks that the two agree). The plain 3-year
+  # IMERGv7_precip_percentiles_6h_hp8_v1.nc is kept for the threshold-map notebooks.
+  threshold_version: v1_2014_2024
 
 # GSMaP configuration (second observational product; not in the catalog, uses a local 6-hourly Zarr store; not part of the
 # COF pipeline registry -- no MCS/AR/ETC tracking, so it is run standalone through calc_extreme_precip_thresholds.py for the

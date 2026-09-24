@@ -33,7 +33,7 @@ s3 -------------------------------------------------/
 | `s2` | `combine_tracking_masks.py` (IMERG: `combine_era5_imerg_tracking_masks.py`) | `all_masks/{source}_allmasks_hp8_v1.zarr` | `s1` |
 | `s3` | `make_cooccurrence_masks.py` | `cof_masks/{source}_cofmasks_hp8_v1.zarr` | `s2` |
 | `monthly` | `calc_monthly_rainmap_by_cof.py` | `cof_masks/stats/monthly/{source}_monthly_rainmap_cof_hp8_v1.nc` | `s3` |
-| `thresholds` | `calc_extreme_precip_thresholds.py` | `extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` | `s1` for the models (they read Step 1's `tot_pr`); nothing for IMERG (the non-IR 6-hourly store) |
+| `thresholds` | `calc_extreme_precip_thresholds.py` | `extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc`; IMERG: `..._v1_2014_2024.nc` | `s1` for the models (they read Step 1's `tot_pr`); nothing for IMERG (the 11-year non-IR 6-hourly store) |
 | `attribution` | `calc_stormtype_extreme_precip_spatial.py` | `extreme_precip/{source}_stormtype_spatial_p90.nc`, `..._p95.nc` | `s3` and `thresholds` |
 
 A step starts only when every step it needs has finished with exit status 0. A failed step skips the later steps of its own source
@@ -84,8 +84,8 @@ Step aliases (either form works everywhere a step name does): `1`/`step1` → `s
 
 `--step-args` appends to the command the runner already builds for that step, and a later occurrence of an option on the
 command line overrides an earlier one (plain argparse behavior) — so pointing `thresholds` at a different Zarr store needs
-no `config_sources.yaml` edit, even for IMERG, whose registry entry (`config/config_pipeline.yaml:54-56`) already passes its
-own `--input_zarr`/`--input_var`:
+no `config_sources.yaml` edit, even for IMERG, whose registry entry (`config/config_pipeline.yaml`) already passes its own
+`--input_zarr` (the 11-year 2014-2024 store), `--input_var` and `--version v1_2014_2024`:
 
 ```bash
 # Side data-root: symlink cof_masks/ to the real one so Step 3 is reused, not re-run. Thresholds+attribution land under
@@ -109,18 +109,55 @@ python scripts/run_cof_pipeline.py --data-root /pscratch/sd/w/wcmca1/hackathon/ 
   --step-args thresholds "--input_zarr /path/to/IMERG_20yr_store.zarr --input_var precipitation"
 ```
 
-Both commands work for any source, not just IMERG — swap `--sources imerg` and the `--input_zarr` value.
+Both commands work for any source, not just IMERG — swap `--sources imerg` and the `--input_zarr` value. The thresholds file keeps
+the name the registry gives it (for IMERG `IMERGv7_precip_percentiles_6h_hp8_v1_2014_2024.nc`) whatever the store, and the
+attribution reads that file from the same `--data-root`; the period of a special run is in the file's `input_zarr`, `start_date`
+and `end_date` attributes. For a differently named file add `--version NAME` to the `thresholds` `--step-args` and
+`--threshold_file <data root>/extreme_precip/<source>_precip_percentiles_6h_hp8_NAME.nc` to the `attribution` `--step-args`.
 
-**Trap:** `calc_stormtype_extreme_precip_spatial.py` always reads `extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc`
-— there is no `--version`/`--threshold_file` flag on the attribution step to point it at a differently-versioned thresholds
-file. A `thresholds` run with `--step-args thresholds "--version v20yr ..."` therefore produces a file the attribution step
-will never read; leave `--version` at its default (as both commands above do) so attribution finds it. If you want the
-20-year thresholds purely as a separate, differently-named artifact instead — not meant to feed the attribution at all —
-call `scripts/calc_extreme_precip_thresholds.py` directly with `--version` and skip the runner for that step.
+### Which thresholds the attribution reads
+
+The runner gives the attribution the thresholds file of its own source: for a source with a `thresholds: version` in the registry
+(IMERG: `v1_2014_2024`) that file, through `--threshold_file`; for the others the default
+`extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc`. The attribution script reads the same file by default:
+`extreme_precip/{source_name}_precip_percentiles_6h_hp8_{threshold_version}.nc`, the `threshold_version` of the source in
+`config_sources.yaml` (`v1` when it has none; IMERG: `v1_2014_2024`). A direct call, `run_stormtype_extreme_precip.sh` and the
+slurm wrappers therefore agree with the runner, and `tests/test_run_cof_pipeline_thresholds.py` checks that the registry and
+`config_sources.yaml` name the same file for every source. To use another threshold file give the option:
+
+```bash
+python scripts/calc_stormtype_extreme_precip_spatial.py --catalog_source IR_IMERG --percentiles P90 P95 \
+  --threshold_file /pscratch/sd/w/wcmca1/hackathon/extreme_precip/IMERGv7_precip_percentiles_6h_hp8_v1_2014_2024.nc \
+  --output_dir DIR
+```
+
+The masks and the analyzed record are unchanged; the thresholds only decide which cells are extreme, and the file used is written
+to the output's `threshold_file` attribute. Through the runner the same option goes in `--step-args attribution "--threshold_file ..."`.
+
+**IMERG default (since 2026-09-23).** The IMERG entry of the registry computes the thresholds from the 11-year non-IR 6-hourly store
+(`IMERG_V7_6H_zoom8_20140101_20241231.zarr`, `version: v1_2014_2024`) and its attribution reads that file (also its default in
+`config_sources.yaml`, `threshold_version`), so the runner reproduces the production IMERG files: a run of both steps in a scratch
+data root gave a thresholds file byte-identical to the existing 11-year one and attribution files byte-identical to production
+(except `created_on` and the path in `threshold_file`). The plain 3-year `IMERGv7_precip_percentiles_6h_hp8_v1.nc`, which the threshold-map notebooks read, is
+no longer made by the runner and is left as it is. To make it, call the script directly (give `--output_dir` unless it should go to
+the data root's `extreme_precip/`):
+
+```bash
+python scripts/calc_extreme_precip_thresholds.py --catalog_source IR_IMERG --percentiles 90 95 --min_precip_threshold 0.1 \
+  --input_zarr /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20190101_20211231.zarr --input_var precipitation --output_dir DIR
+```
+
+If you want a threshold file purely as a separate, differently named artifact — not meant to feed the attribution at all — call
+`scripts/calc_extreme_precip_thresholds.py` directly with `--version` and skip the runner for that step.
 
 A source with several years of qualifying data will also get the per-calendar-year percentiles and their interannual IQR
 (new `year` coordinate, `pr_annual_p*`/`pr_q25_p*`/`pr_q75_p*`/`pr_iqr_p*` variables) once at least 2 calendar years clear
 `--min_year_coverage_days` (default 300 distinct days); add `--no_annual` to the `--step-args` string above to skip that.
+
+The attribution step also writes per-calendar-year extreme precipitation amounts by storm type (`year` coordinate and `*_annual`
+variables; see `extreme_precip_by_stormtype.md`) for a source whose mask record has at least 2 years with at least
+`--min_year_coverage_days` (default 360 distinct days) of data; `--step-args attribution "--no_annual"` skips them. The
+whole-record variables are unaffected either way.
 
 ## Where things go, and what is protected
 
@@ -161,12 +198,14 @@ IMERG's Step 1 is the critical path; after about 35 min only IMERG's steps run. 
 
 | Source | s1 | s2 | s3 | monthly | thresholds | attribution |
 |--------|----|----|----|---------|------------|-------------|
-| IMERGv7 (48 workers in Step 1) | 55 (87) | 0.6 (2) | 21 (21) | 3.0 (94) | 3.0 (4) | 18 (31) |
+| IMERGv7 (48 workers in Step 1) | 55 (87) | 0.6 (2) | 21 (21) | 3.0 (94) | 21 (18) † | 18 (31) |
 | SCREAM (32 workers) | 35 (78) | 0.8 (27) | 9.7 (16) | 1.9 (39) | 1.7 (2) | 9.7 (33) |
 | ICON | 34 (64) | 0.8 (7) | 9.2 (16) | 1.8 (36) | 1.5 (2) | 8.2 (32) |
 | NICAM | 32 (59) | 0.8 (26) | 9.3 (15) | 1.7 (35) | 1.8 (2) | 8.8 (31) |
 | UM | 34 (55) | 0.7 (22) | 9.8 (15) | 1.6 (41) | 1.6 (2) | 8.2 (31) |
 | CASESM2 | 29 (44) | 1.1 (16) | 9.6 (15) | 1.3 (34) | 2.0 (2) | 8.9 (33) |
+
+† IMERG's thresholds have read the 11-year (2014-2024) store since 2026-09-23: 21.0 min and 17.5 GB peak measured with the runner alone on the node (8 workers), against 3.0 min and 4 GB for the 3-year store in the run above.
 
 Running the sources together costs time per step: with five chains at once (the earlier test run) the models' Step 1 took 23-27 min, with all six 29-35 min and IMERG's 55 min instead of 46. The memory of Step 1 is larger
 than a first snapshot suggested (about 2 GB per worker in steady state, not 0.6 GB). Each Dask cluster sizes its worker memory limit from the total node memory (80% / workers), so several

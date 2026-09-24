@@ -14,6 +14,7 @@ Main Python script that processes precipitation and storm mask data to attribute
 - Supports multiple percentile thresholds (P90, P95, P99, etc.)
 - Outputs per-cell precipitation fractions and occurrence counts for each storm type
 - Calculates fractions based on actual precipitation amounts, not occurrence counts
+- Also saves the extreme precipitation amounts by storm type for each calendar year that has enough data (`*_annual` variables), for the year-to-year variability of each type's contribution
 
 **Usage:**
 ```bash
@@ -32,6 +33,9 @@ python calc_stormtype_extreme_precip_spatial.py \
 - `--end_date`: End date in YYYY-MM-DD format (optional)
 - `--output_dir`: Output directory (default: `None` → `extreme_precip/` under the pipeline data root, see `src/cof_paths.py`; production unless `COF_DATA_ROOT` is set)
 - `--n_workers`: Number of Dask workers (default: 8)
+- `--threshold_file`: Percentile threshold file to use instead of the default `extreme_precip/<source_name>_precip_percentiles_6h_hp8_<threshold_version>.nc` under the data root (`threshold_version` of the source in `config_sources.yaml`: `v1` unless set; IMERG: `v1_2014_2024`), e.g. thresholds computed from a longer record. It only decides which cells are extreme; the record and masks are unchanged. Recorded in the output's `threshold_file` attribute
+- `--no_annual`: Skip the per-calendar-year amounts (otherwise written whenever at least 2 years qualify)
+- `--min_year_coverage_days`: Minimum number of distinct calendar days with data for a calendar year to get per-year amounts (default: 360)
 - `--compute_cloud_types`: Include cloud type attribution (default: True)
 - `--skip_cloud_types`: Skip cloud type computation
 
@@ -131,14 +135,21 @@ For each grid cell:
 - `<stormtype>_count`: Count of extreme precipitation occurrences attributed to this storm type
 - `<stormtype>_frac`: Precipitation fraction attributed to this storm type
 
+*Per calendar year (when at least 2 years have >= `--min_year_coverage_days` days of data; dimensions `(year, cell)`):*
+- `total_extreme_count_annual`: Count of extreme precipitation occurrences within each year
+- `total_extreme_precip_annual`: Sum of the extreme precipitation amounts (mm/h) within each year
+- `<stormtype>_precip_annual`: Extreme precipitation amount attributed to this storm type within each year (13 storm types, `unassigned` included); they add up to `total_extreme_precip_annual`, and the years add up to the whole-record values
+
 *Coordinates:*
 - `lat`, `lon`: HEALPix cell coordinates (from mask dataset)
+- `year`: int32 calendar years of the per-year variables (only with them)
 
 **Variable details:**
 - Counts: int32, compressed (number of time steps exceeding threshold)
 - Fractions: float32, values between 0-1 (precipitation-weighted contributions)
 - Total precipitation: float32 (mm/h accumulated over all extreme events)
-- Shape: `(cell,)` for all variables
+- Per-year amounts: float32 (mm/h summed over the extreme time steps of each year), compressed; per-year count int32
+- Shape: `(cell,)` for the whole-record variables, `(year, cell)` for the `*_annual` ones
 
 **Fraction calculation:**
 Each `<stormtype>_frac` is calculated as:

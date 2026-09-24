@@ -141,6 +141,15 @@ class Task:
         return f"{self.source}/{self.step}"
 
 
+def thresholds_file(src, root):
+    """
+    The thresholds file of a source, extreme_precip/{name}_precip_percentiles_6h_hp8_{version}.nc. The version is the 'thresholds:
+    version' of the source in the registry (IMERG: v1_2014_2024) and v1, the script's default, when it has none.
+    """
+    version = (src.get("thresholds") or {}).get("version", "v1")
+    return f"{root}extreme_precip/{src['source_name']}_precip_percentiles_6h_hp8_{version}.nc"
+
+
 def step_outputs(src, step, root, pcts):
     """Output paths of one step of one source (they decide what counts as done and what would be overwritten)."""
     sname = src["source_name"]
@@ -148,7 +157,7 @@ def step_outputs(src, step, root, pcts):
             "s2": [f"{root}all_masks/{sname}_allmasks_hp8_v1.zarr"],
             "s3": [f"{root}cof_masks/{sname}_cofmasks_hp8_v1.zarr"],
             "monthly": [f"{root}cof_masks/stats/monthly/{sname}_monthly_rainmap_cof_hp8_v1.nc"],
-            "thresholds": [f"{root}extreme_precip/{sname}_precip_percentiles_6h_hp8_v1.nc"],
+            "thresholds": [thresholds_file(src, root)],
             "attribution": [f"{root}extreme_precip/{sname}_stormtype_spatial_p{p}.nc" for p in pcts]}[step]
 
 
@@ -198,11 +207,16 @@ def build_tasks(sources_sel, steps_sel, sources, defaults, root, python, era5_za
                         "--input_zarr", in_zarr]
                 if in_var:
                     argv += ["--input_var", in_var]
+                if (src.get("thresholds") or {}).get("version"):
+                    argv += ["--version", src["thresholds"]["version"]]
                 outs = step_outputs(src, step, root, pcts)
                 deps = [(name, "s1")] if src.get("thresholds", {}).get("from_step1") else []
             else:  # attribution
                 argv = [python, str(SCRIPTS / "calc_stormtype_extreme_precip_spatial.py"), "--catalog_source", key, "--config_file", cfg_sources,
                         "--percentiles", *[f"P{p}" for p in pcts], "--n_workers", w, "--output_dir", f"{root}extreme_precip"]
+                if (src.get("thresholds") or {}).get("version"):
+                    # the thresholds of this source have a version in their name: read that file, not the default one
+                    argv += ["--threshold_file", thresholds_file(src, root)]
                 outs = step_outputs(src, step, root, pcts)
                 deps = [(name, "s3"), (name, "thresholds")]
             argv = argv + list((extra_args or {}).get(step, []))

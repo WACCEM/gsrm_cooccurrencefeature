@@ -6,6 +6,12 @@ This script processes precipitation and storm mask data to attribute extreme pre
 events to specific storm types (MCS, AR, ETC, TC, co-occurrences, and cloud types).
 The processing is parallelized over the time dimension using Dask for efficiency.
 
+Besides the whole-record counts and fractions, the extreme precipitation amounts by storm type are also
+saved for each calendar year (`*_annual` variables on (year, cell)), following the per-year percentiles of
+calc_extreme_precip_thresholds.py: a year is included when it has at least --min_year_coverage_days distinct
+days of data, and only when at least 2 years qualify (--no_annual turns this off). The per-year totals are
+accumulated separately and the whole-record values do not depend on them.
+
 Author: Zhe Feng (zhe.feng@pnnl.gov)
 Date: December 2025
 """
@@ -53,6 +59,16 @@ def load_config(config_file, catalog_source):
                         f"Available sources: {list(config.keys())}")
     
     return config[catalog_source]
+
+
+def default_threshold_file(config, root_dir):
+    """
+    The percentile threshold file read when --threshold_file is not given:
+    {root_dir}/extreme_precip/{source_name}_precip_percentiles_6h_hp8_{version}.nc, the version being the source's
+    'threshold_version' in config_sources.yaml (v1, the thresholds script's default, when it has none).
+    """
+    version = config.get('threshold_version', 'v1')
+    return f"{root_dir}/extreme_precip/{config['source_name']}_precip_percentiles_6h_hp8_{version}.nc"
 
 
 def create_union_mask(mask_list):
@@ -384,8 +400,116 @@ def process_single_timestep(pr_t, ds_t, pr_threshold, compute_cloud_types=True):
     return results
 
 
+def qualifying_years(time_da, min_year_coverage_days=360, min_years=2, logger=None):
+    """
+    Calendar years with enough data to get per-year totals.
+
+    The rule of calc_annual_precip_percentiles in calc_extreme_precip_thresholds.py: a year qualifies when it has at
+    least min_year_coverage_days distinct calendar days with data (days rather than time steps, so the rule does not
+    depend on the time step and tolerates gaps), and the per-year output is only made when at least min_years years
+    qualify.
+
+    Parameters:
+    -----------
+    time_da : xr.DataArray
+        Time coordinate of the data to process (numpy datetime64 or cftime)
+    min_year_coverage_days : int
+        Minimum number of distinct calendar days with data for a year to qualify
+    min_years : int
+        Minimum number of qualifying years; with fewer, no year is returned
+    logger : logging.Logger, optional
+
+    Returns:
+    --------
+    list of int : the qualifying years in ascending order, empty when fewer than min_years qualify
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    # .dt.year/.dt.dayofyear work for numpy datetime64 and cftime-backed time coordinates alike
+    day_keys = pd.DataFrame({'year': time_da.dt.year.values,
+                             'doy': time_da.dt.dayofyear.values}).drop_duplicates()
+    coverage_days = day_keys.groupby('year').size()
+
+    years = sorted(int(y) for y, n in coverage_days.items() if n >= min_year_coverage_days)
+    for y in coverage_days.index.sort_values():
+        status = 'kept' if int(y) in years else 'dropped (insufficient coverage)'
+        logger.info(f"  Year {int(y)}: {coverage_days[y]} days of data -> {status}")
+
+    if len(years) < min_years:
+        logger.info(f"Only {len(years)} year(s) have at least {min_year_coverage_days} days of data "
+                    f"(need >= {min_years}); no per-year output.")
+        return []
+    return years
+
+
+def add_annual_variables(ds_out, years, annual_counts, annual_precip,
+                         storm_type_order, storm_type_names, percentile_name):
+    """
+    Add the per-calendar-year totals to the spatial result: a `year` coordinate and, on (year, cell), the count of
+    extreme time steps and the extreme precipitation amount in total and for each storm type.
+
+    Parameters:
+    -----------
+    ds_out : xr.Dataset
+        Whole-record result of process_timeseries_dask. It is not modified; a new Dataset is returned.
+    years : list of int
+        Calendar years, in the order of the year dimension
+    annual_counts : dict
+        {year: DataArray (cell,)} number of extreme time steps
+    annual_precip : dict
+        {year: {'total_extreme' or storm type key: DataArray (cell,)}} sum of the extreme precipitation (mm/h)
+    storm_type_order, storm_type_names : list of str
+        Storm type keys and their long names, in storm_type_code order
+    percentile_name : str
+        Name of percentile (e.g., 'P90')
+
+    Returns:
+    --------
+    xr.Dataset : ds_out plus the year coordinate and the *_annual variables
+    """
+    ds_out = ds_out.assign_coords(year=xr.DataArray(
+        np.asarray(years, dtype='int32'), dims='year',
+        attrs={'long_name': 'Calendar year',
+               'description': 'Calendar years with enough data for per-year totals (see the min_year_coverage_days '
+                              'global attribute); the *_annual variables are totals within each of these years'}))
+
+    precip_note = ('Sum of instantaneous precipitation rate (mm/h) over the extreme time steps (pr > threshold) of each '
+                   'calendar year. This is a sum over samples, not time-integrated by the sampling interval, so it is '
+                   'not a physical accumulated depth.')
+
+    def stack(arrays):
+        # (year, cell); float32 like the whole-record accumulators
+        return np.stack([a.values for a in arrays])
+
+    ds_out['total_extreme_count_annual'] = (('year', 'cell'), stack([annual_counts[y] for y in years]))
+    ds_out['total_extreme_count_annual'].attrs = {
+        'long_name': 'Total count of extreme precipitation occurrences, for each calendar year',
+        'units': 'count',
+        'percentile': percentile_name
+    }
+    ds_out['total_extreme_precip_annual'] = (('year', 'cell'), stack([annual_precip[y]['total_extreme'] for y in years]))
+    ds_out['total_extreme_precip_annual'].attrs = {
+        'long_name': 'Total extreme precipitation amount, for each calendar year',
+        'units': 'mm/h',
+        'percentile': percentile_name,
+        'description': precip_note
+    }
+    for i, (key, name) in enumerate(zip(storm_type_order, storm_type_names)):
+        ds_out[f'{key}_precip_annual'] = (('year', 'cell'), stack([annual_precip[y][key] for y in years]))
+        ds_out[f'{key}_precip_annual'].attrs = {
+            'long_name': f'Extreme precipitation amount from {name}, for each calendar year',
+            'units': 'mm/h',
+            'percentile': percentile_name,
+            'storm_type_code': i + 1,
+            'description': precip_note
+        }
+    return ds_out
+
+
 def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
-                             compute_cloud_types=True, n_workers=8, batch_size=200):
+                             compute_cloud_types=True, n_workers=8, batch_size=200,
+                             annual_years=None):
     """
     Process all time steps using Dask for parallel processing.
     
@@ -405,6 +529,10 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
         Number of Dask workers
     batch_size : int
         Number of time steps to process per batch. Reduce if running out of memory.
+    annual_years : list of int, optional
+        Calendar years (see qualifying_years) whose extreme precipitation amounts by storm type are also
+        accumulated separately, which adds the `year` coordinate and the `*_annual` variables to the result.
+        The whole-record variables are the same with or without it. None or empty: no per-year variables.
     
     Returns:
     --------
@@ -425,6 +553,16 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
     accumulated_counts = {k: xr.zeros_like(template) for k in ['total_extreme'] + storm_type_keys}
     accumulated_precip = {k: xr.zeros_like(template) for k in ['total_extreme'] + storm_type_keys}
     
+    # Per-calendar-year totals: accumulators of their own, filled next to (never instead of) the whole-record ones above,
+    # so the whole-record values are the same with or without them. Counts are kept for the total only.
+    annual_years = [int(y) for y in annual_years] if annual_years else []
+    step_year = pr['time'].dt.year.values
+    annual_counts = {y: xr.zeros_like(template) for y in annual_years}
+    annual_precip = {y: {k: xr.zeros_like(template) for k in ['total_extreme'] + storm_type_keys}
+                     for y in annual_years}
+    if annual_years:
+        print(f"Per-year totals for {len(annual_years)} year(s): {annual_years}")
+
     # Process in batches to avoid holding all results in memory simultaneously
     for batch_idx in range(n_batches):
         t_start = batch_idx * batch_size
@@ -444,12 +582,19 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
             batch_results = dask.compute(*delayed_results, scheduler='threads', num_workers=n_workers)
         
         # Accumulate and immediately discard batch results
-        for result in batch_results:
+        for t, result in zip(range(t_start, t_end), batch_results):
             accumulated_counts['total_extreme'] += result['extreme_mask']
             accumulated_precip['total_extreme'] += result['total_extreme_pr']
             for key in storm_type_keys:
                 accumulated_counts[key] += result[key]
                 accumulated_precip[key] += result[f'{key}_pr']
+            # The same time step, added to the totals of its calendar year
+            year = int(step_year[t])
+            if year in annual_precip:
+                annual_counts[year] += result['extreme_mask']
+                annual_precip[year]['total_extreme'] += result['total_extreme_pr']
+                for key in storm_type_keys:
+                    annual_precip[year][key] += result[f'{key}_pr']
         del batch_results
     
     print("\n✅ All batches complete!")
@@ -533,6 +678,11 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
         ds_out['lat'] = ds.lat
         ds_out['lon'] = ds.lon
     
+    # Per-calendar-year amounts by storm type, after all whole-record variables
+    if annual_years:
+        ds_out = add_annual_variables(ds_out, annual_years, annual_counts, annual_precip,
+                                      storm_type_order, storm_type_names, percentile_name)
+
     # Global attributes
     ds_out.attrs = {
         'title': f'Spatial distribution of extreme precipitation by storm type ({percentile_name})',
@@ -546,7 +696,7 @@ def process_timeseries_dask(pr, pr_threshold, ds, percentile_name='P90',
 
 
 def save_spatial_results(ds_spatial, output_file, source_name, 
-                          start_date, end_date, percentile_name):
+                          start_date, end_date, percentile_name, extra_attrs=None):
     """
     Save spatial results to NetCDF with compression.
     
@@ -564,6 +714,8 @@ def save_spatial_results(ds_spatial, output_file, source_name,
         End date
     percentile_name : str
         Percentile name
+    extra_attrs : dict, optional
+        More global attributes, added after the standard ones
     """
     # Update attributes
     ds_spatial.attrs.update({
@@ -576,12 +728,17 @@ def save_spatial_results(ds_spatial, output_file, source_name,
         'contact': 'Zhe Feng, zhe.feng@pnnl.gov',
         'description': 'Per-cell counts and fractions of extreme precipitation by storm type.'
     })
+    if extra_attrs:
+        ds_spatial.attrs.update(extra_attrs)
 
     # Setup encoding
     encoding = {}
     for var in ds_spatial.data_vars:
         if 'count' in var or var == 'total_extreme':
             encoding[var] = {'dtype': 'int32', 'zlib': True, 'complevel': 4}
+        elif var.endswith('_annual'):
+            # per-year amounts stay float32 like the whole-record ones; compressed (lossless) as most cells are 0 for most types
+            encoding[var] = {'zlib': True, 'complevel': 4}
     
     # Save
     print(f"\nSaving results to: {output_file}")
@@ -596,6 +753,9 @@ def save_spatial_results(ds_spatial, output_file, source_name,
     print(f"Mean extreme precip count per cell: {float(ds_spatial['total_extreme_count'].mean().values):.2f}")
     print(f"Max extreme precip count: {int(ds_spatial['total_extreme_count'].max().values)}")
     print(f"Total extreme precipitation amount: {float(ds_spatial['total_extreme_precip'].sum().values):.2f} mm/h")
+    if 'year' in ds_spatial.coords:
+        print(f"Per-year totals saved for {ds_spatial.sizes['year']} year(s): "
+              f"{[int(y) for y in ds_spatial['year'].values]}")
     
     # Storm type fraction statistics (global averages)
     print(f"\nGlobal Precipitation Fractions by Storm Type:")
@@ -656,6 +816,21 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=200,
                        help='Number of time steps per processing batch. Reduce if OOM. (default: 200)')
     
+    parser.add_argument('--threshold_file', type=str, default=None,
+                       help='Percentile threshold file (calc_extreme_precip_thresholds.py output with pr_p90, pr_p95, ...) '
+                            'to use instead of the default, extreme_precip/{source_name}_precip_percentiles_6h_hp8_'
+                            '{threshold_version}.nc under the pipeline data root (threshold_version of the source in '
+                            'config_sources.yaml, v1 when it has none; IMERG: v1_2014_2024). It sets which cells are '
+                            'extreme; the time axis and the masks still come from the COF mask store')
+
+    parser.add_argument('--no_annual', action='store_true',
+                       help='Skip the per-calendar-year extreme precipitation amounts by storm type (otherwise they are '
+                            'written whenever at least 2 years qualify, see --min_year_coverage_days)')
+
+    parser.add_argument('--min_year_coverage_days', type=int, default=360,
+                       help='Minimum number of distinct calendar days with data for a calendar year to get per-year totals '
+                            '(360 allows at most a few missing days)')
+
     parser.add_argument('--compute_cloud_types', action='store_true', default=True,
                        help='Compute cloud type contributions')
     
@@ -709,7 +884,7 @@ def main():
     logger.info(f"Loaded mask dataset with {len(ds.time)} time steps")
     
     # Load extreme precipitation thresholds
-    extreme_file = f"{root_dir}/extreme_precip/{source_name}_precip_percentiles_6h_hp8_v1.nc"
+    extreme_file = args.threshold_file or default_threshold_file(config, root_dir)
     print(f"📂 Loading extreme precipitation thresholds from: {extreme_file}")
     dsx = xr.open_dataset(extreme_file)
     
@@ -752,6 +927,23 @@ def main():
         logger.error(f"   Masks: {len(ds.time)} time steps")
         return None
     
+    # Calendar years that get per-year totals, from the time axis that is processed (after any --start_date/--end_date)
+    if args.no_annual:
+        annual_years = []
+        print("Per-year totals: off (--no_annual)")
+    else:
+        annual_years = qualifying_years(pr['time'], args.min_year_coverage_days, logger=logger)
+        print(f"Per-year totals: {annual_years if annual_years else 'none (fewer than 2 qualifying years)'}")
+
+    # Global attributes of the output beyond the standard ones: the thresholds it was made with and the per-year settings
+    extra_attrs = {'threshold_file': os.path.abspath(extreme_file)}
+    if annual_years:
+        extra_attrs.update({
+            'annual_years': ', '.join(str(y) for y in annual_years),
+            'n_annual_years': len(annual_years),
+            'min_year_coverage_days': args.min_year_coverage_days,
+        })
+
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -778,7 +970,8 @@ def main():
             percentile_name=pname,
             compute_cloud_types=args.compute_cloud_types,
             n_workers=args.n_workers,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            annual_years=annual_years
         )
         elapsed = time.time() - start_time
         print(f"\n⏱️  Processing time: {elapsed/60:.2f} minutes")
@@ -787,7 +980,8 @@ def main():
         output_file = f"{args.output_dir}/{source_name}_stormtype_spatial_{pname.lower()}{date_suffix}.nc"
         save_spatial_results(
             ds_spatial, output_file, source_name,
-            args.start_date, args.end_date, pname
+            args.start_date, args.end_date, pname,
+            extra_attrs=extra_attrs
         )
     
     print("\n" + "="*80)

@@ -76,7 +76,7 @@ These scripts automate running one or more Python processing scripts across mode
 | 2 | `combine_tracking_masks.py` (IMERG: `combine_era5_imerg_tracking_masks.py`) | Step 1 zarr + AR/TC/ETC NetCDF (IMERG: ERA5 masks) | `/hackathon/all_masks/{source}_allmasks_hp8_v1.zarr` |
 | 3 | `make_cooccurrence_masks.py` | Step 2 zarr | `/hackathon/cof_masks/{source}_cofmasks_hp8_v1.zarr` |
 | 4 (A1) | `calc_monthly_rainmap_by_cof.py` | Step 3 zarr (masks + `tot_pr`) | `/hackathon/cof_masks/stats/monthly/{source}_monthly_rainmap_cof_hp8_v1.nc` |
-| 4a (A2) | `calc_extreme_precip_thresholds.py` | Step 1 zarr `tot_pr` via `--input_zarr` (IMERG: non-IR 6-hourly store); otherwise the source's own 6-hourly precipitation | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` |
+| 4a (A2) | `calc_extreme_precip_thresholds.py` | Step 1 zarr `tot_pr` via `--input_zarr` (IMERG: the 11-year non-IR 6-hourly store); otherwise the source's own 6-hourly precipitation | `/hackathon/extreme_precip/{source}_precip_percentiles_6h_hp8_v1.nc` (IMERG: `..._v1_2014_2024.nc`) |
 | 4b (A2) | `calc_stormtype_extreme_precip_spatial.py` | Step 3 zarr (masks + `tot_pr`) + Step 4a nc | `/hackathon/extreme_precip/{source}_stormtype_spatial_{pxx}{date_suffix}.nc` |
 | 4a (A2, obs-only interannual) | `plot_extreme_rain_threshold_map_obs_interannual.ipynb` reads dedicated 11-year IMERG+GSMaP archival files (`{source}_precip_percentiles_6h_hp8_v1_2014_2024.nc`), independent of the 3-year period the rest of Analysis 2 uses | Figures |
 | 5 (A1) | `plot_cof_total_raintype_rank_map.ipynb` | Step 4 (A1) nc | Figures |
