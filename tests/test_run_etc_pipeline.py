@@ -7,6 +7,8 @@
   - an output that exists without a marker is a conflict (protection) and no conflict with --force
   - --tracks-dir (every command reads the track file from that folder) and --extract-env (one env_<store> task per environment variable, named
     as the production stores, in place of link_env; the dependencies of combine; the step selection; link_env and env exclude each other)
+  - --reuse-env: the same env_<store> tasks, each running subset_etc_env_store.py from the old store (--env-from) with the registry's track file as the
+    old one and the --tracks-dir file as the new one; needs --tracks-dir; excludes --extract-env
   - the engine: the runner's data root is always COF_DATA_ROOT, whatever the caller's environment says, unless a task sets its own
 
 Run:  python tests/test_run_etc_pipeline.py      (or pytest tests/)
@@ -122,6 +124,40 @@ def test_tracks_dir_and_extract_env():
     assert {k[1] for k in rp.select(tasks, ["combine"])} == {"combine"}
 
 
+def test_reuse_env_tasks():
+    rp.expected_points = lambda mc: 1000
+    defaults, sources = rp.load_registry(str(REPO / "config" / "config_etc_pipeline.yaml"))
+    ext, _ = rp.build_tasks(["icon_d3hp003", "scream"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", extract_env=True)
+    reu, infos = rp.build_tasks(["icon_d3hp003", "scream"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", reuse_env=True)
+    assert set(reu) == set(ext), "the same steps as --extract-env, with the same outputs and dependencies"
+    for k, t in reu.items():
+        assert t.outputs == ext[k].outputs and t.deps == ext[k].deps and t.slots == ext[k].slots
+    icon = [t for k, t in reu.items() if k[0] == "icon_d3hp003" and k[1].startswith("env_")]
+    assert len(icon) == 19
+    for t in icon:
+        store = t.step[4:]
+        assert t.argv[1].endswith("extract_environments/subset_etc_env_store.py") and "extract_etc_2d_vars.py" not in " ".join(t.argv)
+        assert opt(t.argv, "--src-store") == f"/env_from/icon_d3hp003/single_vars/etc_2d_{store}_all_all.zarr"
+        assert opt(t.argv, "--dst-store") == t.outputs[0] and t.outputs[0] == f"{ROOT}etc_data/icon_d3hp003/single_vars/etc_2d_{store}_all_all.zarr"
+        assert opt(t.argv, "--new-track-file") == "/new/tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
+        assert opt(t.argv, "--old-track-file") == "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
+    assert {k[1][4:] for k in reu if k[0] == "scream" and k[1].startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not built"
+    assert infos["scream"]["old_points"] == 1000 and ("scream", "link_env") not in reu
+    # pr, masks and etc_cof are unchanged: the new track file, the catalog / COF store
+    assert opt(reu[("scream", "pr")].argv, "--trackfile").startswith("/new/tracks/") and "extract_etc_2d_vars.py" in " ".join(reu[("scream", "pr")].argv)
+
+
+def test_reuse_env_option_rules():
+    import subprocess
+    base = [sys.executable, str(REPO / "scripts" / "run_etc_pipeline.py"), "--data-root", "/tmp/etc_test_root", "--dry-run"]
+    bad = subprocess.run(base + ["--reuse-env"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "needs --tracks-dir" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--reuse-env", "--extract-env", "--tracks-dir", "/tmp"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--reuse-env", "--tracks-dir", "/tmp", "--steps", "link_env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+
+
 def test_link_env_and_env_exclude_each_other():
     import subprocess
     base = [sys.executable, str(REPO / "scripts" / "run_etc_pipeline.py"), "--data-root", "/tmp/etc_test_root", "--dry-run"]
@@ -175,6 +211,7 @@ def test_engine_data_root_environment():
 
 
 if __name__ == "__main__":
-    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_tracks_dir_and_extract_env(); test_link_env_and_env_exclude_each_other()
+    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_tracks_dir_and_extract_env(); test_reuse_env_tasks(); test_reuse_env_option_rules()
+    test_link_env_and_env_exclude_each_other()
     test_protection_of_outputs_without_marker(); test_engine_data_root_environment()
     print("test_run_etc_pipeline: all checks passed")

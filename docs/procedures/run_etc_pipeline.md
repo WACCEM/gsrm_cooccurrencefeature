@@ -29,7 +29,7 @@ mask_<variable> x 7 (the COF masks) --------+--> combine --> composites
 link_env (unchanged environment stores) ---/             \-> stats
 ```
 
-With `--extract-env` (new track files, see below) `link_env` is replaced by one `env_<store>` step per environment variable, and `combine` waits for all of them.
+With `--extract-env` or `--reuse-env` (new track files, see below) `link_env` is replaced by one `env_<store>` step per environment variable, and `combine` waits for all of them.
 
 | Step | Script | Output (under `--data-root`) |
 |------|--------|-------------------------------|
@@ -37,7 +37,7 @@ With `--extract-env` (new track files, see below) `link_env` is replaced by one 
 | `pr` | `extract_etc_2d_vars.py` | `etc_data/{src}/single_vars/etc_2d_pr_all_all.zarr` |
 | `mask_<variable>` | `extract_etc_2d_vars.py --cof_mask` | `.../etc_2d_<variable>_all_all.zarr`, one task for each of `mcs_ar_etc_overlap_mask`, `ar_mcs_etc_overlap_mask`, `etc_mcs_ar_overlap_mask`, `etc_ar_overlap_mask`, `etc_mcs_overlap_mask`, `mcs_etc_overlap_mask`, `ar_etc_overlap_mask` |
 | `link_env` | `link_etc_env_stores.py` | symbolic links to the environment stores (`huss`, `tas`, `psl`, winds, humidity, geopotential, ...) |
-| `env_<store>` (only with `--extract-env`, instead of `link_env`) | `extract_etc_2d_vars.py` | `.../etc_2d_<store>_all_all.zarr`, `<store>` = the variable plus `_<level>hPa` for a pressure level (`tas`, `ua_850hPa`, `wa_500hPa`, ...); 19 per model, 24 for SCREAM (its stale `ps` is not extracted) |
+| `env_<store>` (only with `--extract-env` or `--reuse-env`, instead of `link_env`) | `extract_etc_2d_vars.py` (`--extract-env`) or `subset_etc_env_store.py` (`--reuse-env`) | `.../etc_2d_<store>_all_all.zarr`, `<store>` = the variable plus `_<level>hPa` for a pressure level (`tas`, `ua_850hPa`, `wa_500hPa`, ...); 19 per model, 24 for SCREAM (its stale `ps` is not built) |
 | `combine` | `combine_etc_2d_vars.py` | `etc_data/{src}/etc_2d_combined_all_all.zarr` |
 | `composites` | `create_etc_composites.py` | `etc_data/stats/{src}/etc_2d_composite_{nh,sh}_{all,isolated,mcs_only,ar_only,3way}.nc` |
 | `stats` | `calc_etc_spatial_stats.py` | `etc_data/stats/etc_spatial_stats_{src}.nc` |
@@ -60,6 +60,7 @@ bash slurm/run_interactive_etc_pipeline.sh --data-root /pscratch/sd/w/wcmca1/hac
 | `--env-from DIR` | folder with `<source>/single_vars/` environment stores to link (default `/pscratch/sd/w/wcmca1/hackathon/etc_data/`) |
 | `--tracks-dir DIR` | read the ETC track files from `DIR` (the file names of the registry, `<src>_hp8.etc_stitched_nodes.filtered_out_tcs.txt`), for a re-tracking whose storm points differ; also where `etc_cof` reads them |
 | `--extract-env` | extract every environment variable again (`env_<store>` steps) instead of linking the old stores; needed when the storm points changed. `link_env` and `env` cannot both be selected |
+| `--reuse-env` | instead of `--extract-env`: build each new environment store from the old one (`--env-from`, the stores of the registry's track files) by selecting the rows of the points that are in the new track file (`subset_etc_env_store.py`). Needs `--tracks-dir`; fails for a variable when a new point is not in the old file |
 | `--sources um scream` | only these sources (names or aliases such as `imerg`, `obs`, `icon`) |
 | `--steps combine composites stats`, `--from combine` | only these steps (`mask` stands for the seven mask tasks) |
 | `--resume`, `--force`, `--dry-run`, `--preflight-only`, `--skip-preflight`, `--max-slots`, `--stagger-sec`, `--min-free-gb` | as in `run_cof_pipeline.py` |
@@ -127,6 +128,17 @@ bash slurm/run_interactive_etc_pipeline.sh --data-root DIR --cof-root DIR --trac
 ```
 
 The extraction reads the catalogs online (all 19-24 environment variables per source, in parallel, 4 CPU slots each). Check first that the mask netCDF of the new tracking and the track file agree (every ETC ID and time in the mask is in the file).
+
+**Prefer `--reuse-env` when the new tracking only removed points.** An environment value depends only on the time and position of the storm point (and the catalog), not on the storm ID or on the other points. When every point of the new file is in the old file
+(the re-tracking of 2026-09-25 kept all but 3-5 % of the points, and added none), the new store is a selection of rows of the old store, matched by (time, lon, lat), written with the extractor's own `save_to_zarr()` with the new file's storm IDs; it takes about 15 s per store
+instead of minutes to hours. Checked on ICON: all 19 stores made this way were identical to a fresh extraction (values, storm IDs, grid IDs, positions, times, dimensions). The script refuses a store that does not belong to the old track file and any new point that is not in the old file (then use
+`--extract-env` for that source). Points that two storms share have one row per storm in the old store; the first is used. A point whose time has no frame in the catalog keeps the value that the old extraction gave it.
+
+Notes on `--extract-env` from the same re-run:
+- The catalogs of NICAM, UM and CASESM2 are online only and are the bottleneck: CASESM2's 19 variables ran at 1.4 storms/s each with 17 in parallel (about 24 storms/s in total, the same total as March with 4 in parallel), so they need 3-4 hours and the
+  `env` timeout of the registry (120 min) is too short for them. Use `--reuse-env`, or raise `timeout_min: env` and expect hours.
+- SCREAM's 3D catalog (`scream_ne120`) has no frame at the first track time (2019-08-01 00), so 9 of 21,459 points have no frame, and the extraction stops for those variables (`--max_missing_fraction` is 0 by default and is only set for `pr` and the COF masks).
+  Pass `--step-args env "--max_missing_fraction 0.001"` to accept them as NaN.
 
 ## Preflight
 
