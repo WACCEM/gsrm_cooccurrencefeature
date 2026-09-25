@@ -25,8 +25,9 @@ Optional arguments:
 --no-ar-labels disable AR track labels (enabled by default)
 --no-etc-labels disable ETC track labels (enabled by default)
 --no-tc-labels disable TC track labels (enabled by default)
---shade-var variable name for shading (default: IVT)
---contour-var variable name for contours (default: psl)
+--shade-var variable name for shading (default: IVT; skipped with a warning if not in the field data,
+    IVT is taken as present when uivt and vivt are)
+--contour-var variable name for contours (default: psl; skipped with a warning if not in the field data)
 --no-shading disable background shading
 --no-contour disable contours
 
@@ -89,6 +90,35 @@ def get_colormap(cmap_name):
         print(f"Warning: Colormap '{cmap_name}' not found, using default")
         return None
 
+
+def resolve_field_layers(field_vars, shade_var, contour_var, plot_shading, plot_contour):
+    """
+    Check the requested background layers against the variables of the field dataset.
+
+    A requested layer whose variable is not in the data is skipped, with a warning, instead of failing every frame; the frames
+    are still drawn with the masks and any layer that exists. IVT counts as present when uivt and vivt are, because
+    process_single_time derives it from them.
+
+    Parameters:
+    - field_vars: names of the variables of the field dataset
+    - shade_var, contour_var: requested variable names for the shading and the contours
+    - plot_shading, plot_contour: whether each layer was requested
+
+    Returns:
+    - (plot_shading, plot_contour) after the check
+    """
+    field_vars = set(field_vars)
+    if plot_shading:
+        has_shade = shade_var in field_vars or (shade_var == 'IVT' and {'uivt', 'vivt'} <= field_vars)
+        if not has_shade:
+            print(f"⚠️  Warning: shading variable '{shade_var}' is not in the field data; skipping the background shading")
+            plot_shading = False
+    if plot_contour and contour_var not in field_vars:
+        print(f"⚠️  Warning: contour variable '{contour_var}' is not in the field data; skipping the contours")
+        plot_contour = False
+    return plot_shading, plot_contour
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -144,13 +174,13 @@ def parse_args():
     
     # Field plotting options
     parser.add_argument("--shade-var", type=str, default="IVT",
-                       help="Variable name for background shading (must exist in field dataset)")
+                       help="Variable name for background shading (skipped with a warning if not in the field dataset)")
     parser.add_argument("--shade-cmap", type=str, default=None,
                        help="Colormap name for shading (e.g., 'viridis', 'gray_r', 'blue_medb717b')")
     parser.add_argument("--shade-levels", type=str, default=None,
                        help="Shade levels as 'min,max,step' (e.g., '80,320,5' for np.arange(80, 320, 5))")
     parser.add_argument("--contour-var", type=str, default="psl",
-                       help="Variable name for contours (must exist in field dataset)")
+                       help="Variable name for contours (skipped with a warning if not in the field dataset)")
     parser.add_argument("--no-shading", action="store_true", default=False,
                        help="Disable background shading")
     parser.add_argument("--no-contour", action="store_true", default=False,
@@ -583,16 +613,9 @@ def process_single_time(mask_path, field_info, time_step_str, source_name,
         
         _ds = field_dataset.sel(time=field_time_to_select, method='nearest')
         
-        # Compute IVT if shade_var is 'IVT' and it doesn't exist
-        if shade_var == 'IVT' and 'IVT' not in _ds:
-            if 'uivt' in _ds and 'vivt' in _ds:
-                _uivt = _ds.uivt
-                _vivt = _ds.vivt
-                _ivt = np.sqrt(_uivt**2 + _vivt**2)
-                _ds['IVT'] = _ivt
-            else:
-                print(f"Warning: IVT requested but uivt/vivt not found for {time_step_str}")
-                return 0
+        # Derive IVT from uivt and vivt if it is the shading variable and not in the data (main() has checked that they exist)
+        if plot_shading and shade_var == 'IVT' and 'IVT' not in _ds:
+            _ds['IVT'] = np.sqrt(_ds.uivt**2 + _ds.vivt**2)
         
         # Attach Healpix coordinates to both datasets
         _ds = _ds.pipe(egh.attach_coords)
@@ -616,7 +639,7 @@ def process_single_time(mask_path, field_info, time_step_str, source_name,
             track_fontsize=10,
             plot_mcs=plot_mcs,
             plot_ar=plot_ar,
-            plot_etc=plot_tc,
+            plot_etc=plot_etc,
             plot_tc=plot_tc,
             show_mcs_labels=show_mcs_labels,
             show_ar_labels=show_ar_labels,
@@ -738,12 +761,17 @@ def main():
         ds_field_test = cat[catalog_model](**catalog_params).to_dask().pipe(egh.attach_coords, signed_lon=True)
         print(f"  ✅ Field dataset catalog validated successfully")
         print(f"  Time steps: {len(ds_field_test.time)}")
-        print(f"  Data variables: {list(ds_field_test.data_vars)}")
+        field_vars = list(ds_field_test.data_vars)
+        print(f"  Data variables: {field_vars}")
         del ds_field_test  # Free memory
     except Exception as e:
         print(f"  ❌ Error accessing field dataset catalog: {e}")
         return
-    
+
+    # Skip a requested shading or contour layer whose variable is not in the field data (one warning here, not one per frame)
+    plot_shading, plot_contour = resolve_field_layers(
+        field_vars, args.shade_var, args.contour_var, not args.no_shading, not args.no_contour)
+
     # Determine time frequency for plotting
     if args.plot_freq is not None:
         freq_str = args.plot_freq
@@ -775,8 +803,8 @@ def main():
     print(f"Total time steps: {len(time_range)}")
     print(f"Figure size: {figsize}, DPI: {dpi}")
     print(f"Output directory: {figdir}")
-    print(f"Shading: {not args.no_shading} ({args.shade_var if not args.no_shading else 'N/A'})")
-    print(f"Contours: {not args.no_contour} ({args.contour_var if not args.no_contour else 'N/A'})")
+    print(f"Shading: {plot_shading} ({args.shade_var if plot_shading else 'N/A'})")
+    print(f"Contours: {plot_contour} ({args.contour_var if plot_contour else 'N/A'})")
     
     if run_parallel == 0:
         # Serial processing
@@ -790,7 +818,7 @@ def main():
                 args.shade_var, args.contour_var,
                 args.plot_mcs, args.plot_ar, args.plot_etc, args.plot_tc,
                 args.show_mcs_labels, args.show_ar_labels, args.show_etc_labels, args.show_tc_labels,
-                not args.no_shading, not args.no_contour,
+                plot_shading, plot_contour,
                 shade_cmap, shade_levels, mcs_cmap, mcs_levels
             )
             success_count += result
@@ -831,7 +859,7 @@ def main():
                         args.shade_var, args.contour_var,
                         args.plot_mcs, args.plot_ar, args.plot_etc, args.plot_tc,
                         args.show_mcs_labels, args.show_ar_labels, args.show_etc_labels, args.show_tc_labels,
-                        not args.no_shading, not args.no_contour,
+                        plot_shading, plot_contour,
                         shade_cmap, shade_levels, mcs_cmap, mcs_levels
                     )
                     futures.append(future)
