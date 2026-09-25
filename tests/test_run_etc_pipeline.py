@@ -5,6 +5,8 @@
     data root, the COF products read from the COF root, the expected share of missing storm points per source
   - the step selection ('mask' stands for the seven mask tasks), --step-args, source aliases
   - an output that exists without a marker is a conflict (protection) and no conflict with --force
+  - --tracks-dir (every command reads the track file from that folder) and --extract-env (one env_<store> task per environment variable, named
+    as the production stores, in place of link_env; the dependencies of combine; the step selection; link_env and env exclude each other)
   - the engine: the runner's data root is always COF_DATA_ROOT, whatever the caller's environment says, unless a task sets its own
 
 Run:  python tests/test_run_etc_pipeline.py      (or pytest tests/)
@@ -80,6 +82,57 @@ def test_selection_extra_args_and_aliases():
     assert rp.resolve_sources(["um", "UM", "obs", "icon"], sources) == ["um_glm_n2560_RAL3p3", "era5", "icon_d3hp003"]
 
 
+ICON_ENV = {"tas", "huss", "ps", "psl", "uas", "vas", "prw",
+            *[f"{v}_{l}hPa" for l in (850, 500) for v in ("ua", "va", "hus", "hur", "zg", "wa")]}       # the 19 environment stores of the March extraction
+# SCREAM's production stores without pr, the seven masks and the stale ps (not extracted again)
+SCREAM_ENV = {"hus_500hPa", "hus_850hPa", "huss", "omega500", "omega_500hPa", "omega850", "omega_850hPa", "psl", "rh500", "rh850", "tas", "ua500",
+              "ua_500hPa", "ua850", "ua_850hPa", "uas", "uivt", "va500", "va_500hPa", "va850", "va_850hPa", "vas", "vivt", "zg500"}
+
+
+def test_tracks_dir_and_extract_env():
+    rp.expected_points = lambda mc: 1000
+    defaults, sources = rp.load_registry(str(REPO / "config" / "config_etc_pipeline.yaml"))
+    tasks, infos = rp.build_tasks(list(sources), sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", extract_env=True)
+    for name in sources:
+        steps = [k[1] for k in tasks if k[0] == name]
+        env = [s for s in steps if s.startswith("env_")]
+        assert env
+        assert "link_env" not in steps and steps[:2] == ["etc_cof", "pr"] and steps[-3:] == ["combine", "composites", "stats"]
+        comb = tasks[(name, "combine")]
+        assert set(comb.deps) == {(name, s) for s in ["etc_cof", "pr", *[f"mask_{v}" for v in rp.MASK_VARS], *env]}
+        for s in env:                                                     # extracted from the catalog, one variable each, into the run's single_vars
+            t = tasks[(name, s)]
+            assert t.deps == [] and opt(t.argv, "--output_dir") == f"{ROOT}etc_data/{infos[name]['a3']}/single_vars/" and "--cof_mask" not in t.argv
+            assert t.outputs == [f"{ROOT}etc_data/{infos[name]['a3']}/single_vars/etc_2d_{s[4:]}_all_all.zarr"]
+            assert opt(t.argv, "--trackfile").startswith("/new/tracks/") and opt(t.argv, "--trackfile").endswith(".etc_stitched_nodes.filtered_out_tcs.txt")
+        for s in ("pr", "mask_etc_ar_overlap_mask"):
+            assert opt(tasks[(name, s)].argv, "--trackfile").startswith("/new/tracks/")
+        assert opt(tasks[(name, "etc_cof")].argv, "--etc_dir") == "/new/tracks/"
+        assert all(t.slots == 4 for t in tasks.values() if t.step.startswith("env_")) and tasks[(name, env[0])].est_min > 0
+    assert {t.step[4:] for k, t in tasks.items() if k[0] == "icon_d3hp003" and t.step.startswith("env_")} == ICON_ENV
+    assert {t.step[4:] for k, t in tasks.items() if k[0] == "scream" and t.step.startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not extracted"
+    assert len({t.step[4:] for k, t in tasks.items() if k[0] == "casesm2_10km_nocumulus" and t.step.startswith("env_")}) == 19
+    # the default graph (no options) still reads the registry's track files and links
+    tasks0, _ = rp.build_tasks(["icon_d3hp003"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {})
+    assert ("icon_d3hp003", "link_env") in tasks0 and not any(k[1].startswith("env_") for k in tasks0)
+    assert opt(tasks0[("icon_d3hp003", "pr")].argv, "--trackfile").startswith("/pscratch/sd/w/wcmca1/hackathon/etc_tracks/")
+    # selection: 'env' stands for the env_<store> tasks and nothing else
+    sel = rp.select(tasks, ["env"])
+    assert sel and all(k[1].startswith("env_") for k in sel) and len([k for k in sel if k[0] == "icon_d3hp003"]) == 19
+    assert {k[1] for k in rp.select(tasks, ["combine"])} == {"combine"}
+
+
+def test_link_env_and_env_exclude_each_other():
+    import subprocess
+    base = [sys.executable, str(REPO / "scripts" / "run_etc_pipeline.py"), "--data-root", "/tmp/etc_test_root", "--dry-run"]
+    bad = subprocess.run(base + ["--extract-env", "--steps", "link_env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--steps", "env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--tracks-dir", "/no/such/folder"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "not a folder" in (bad.stdout + bad.stderr)
+
+
 def test_protection_of_outputs_without_marker():
     tmp = tempfile.mkdtemp(prefix="etc_prot_")
     try:
@@ -122,5 +175,6 @@ def test_engine_data_root_environment():
 
 
 if __name__ == "__main__":
-    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_protection_of_outputs_without_marker(); test_engine_data_root_environment()
+    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_tracks_dir_and_extract_env(); test_link_env_and_env_exclude_each_other()
+    test_protection_of_outputs_without_marker(); test_engine_data_root_environment()
     print("test_run_etc_pipeline: all checks passed")

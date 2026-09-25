@@ -6,6 +6,7 @@
 #   pr          extract_environments/extract_etc_2d_vars.py       <root>/etc_data/{src}/single_vars/etc_2d_pr_all_all.zarr   (Step 1 tot_pr; ERA5: IMERG 6-hourly)
 #   mask_<var>  extract_etc_2d_vars.py --cof_mask                  ... etc_2d_<var>_all_all.zarr   (one task for each of the seven COF mask variables)
 #   link_env    extract_environments/link_etc_env_stores.py       the unchanged environment stores, linked from etc_data/ (no copy)
+#   env_<store> extract_etc_2d_vars.py (--extract-env, in place of link_env)  each environment variable extracted again, for new track files
 #   combine     extract_environments/combine_etc_2d_vars.py       <root>/etc_data/{src}/etc_2d_combined_all_all.zarr
 #   composites  scripts/create_etc_composites.py                  <root>/etc_data/stats/{src}/etc_2d_composite_{nh,sh}_{all,isolated,mcs_only,ar_only,3way}.nc
 #   stats       scripts/calc_etc_spatial_stats.py                 <root>/etc_data/stats/etc_spatial_stats_{src}.nc
@@ -33,13 +34,14 @@ defaults:
   imerg_6h_zarr: /pscratch/sd/w/wcmca1/GPM/healpix/IMERG_V7_6H_zoom8_20190101_20211231.zarr
   # A run links at least this many environment stores per source (SCREAM 25, ERA5 20, the others 19 in the March extraction)
   min_env_stores: 15
-  timeout_min: {etc_cof: 30, pr: 120, mask: 120, link_env: 30, combine: 240, composites: 120, stats: 120}
+  timeout_min: {etc_cof: 30, pr: 120, mask: 120, link_env: 30, env: 120, combine: 240, composites: 120, stats: 120}
 
 steps:
   etc_cof:    {slots: 1,  est_min: 1}
   pr:         {slots: 1,  est_min: 6}
   mask:       {slots: 1,  est_min: 6}       # each of the seven mask tasks
   link_env:   {slots: 1,  est_min: 1}
+  env:        {slots: 4,  est_min: 8}       # each environment variable, with --extract-env (3D variables read more data than pr; not measured yet)
   combine:    {slots: 90, est_min: 3}
   composites: {slots: 8,  est_min: 2}
   stats:      {slots: 8,  est_min: 1}

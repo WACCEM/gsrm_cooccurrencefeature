@@ -8,6 +8,7 @@ Per source (see config/config_etc_pipeline.yaml and docs/procedures/run_etc_pipe
     pr                                                 precipitation around every ETC point         -> <root>/etc_data/<src>/single_vars/etc_2d_pr_all_all.zarr
     mask_<variable>  (seven COF mask variables)        COF masks around every ETC point             -> ... etc_2d_<variable>_all_all.zarr
     link_env                                           the unchanged environment stores, linked from etc_data/ (no copy, checked first)
+    env_<store>      (with --extract-env, not link_env)  every environment variable extracted again around every ETC point -> ... etc_2d_<store>_all_all.zarr
     combine     (needs the four above)                 one multi-variable store                     -> <root>/etc_data/<src>/etc_2d_combined_all_all.zarr
     composites, stats   (need combine)                 composites and spatial statistics            -> <root>/etc_data/stats/
 
@@ -15,11 +16,15 @@ It reuses the engine of run_cof_pipeline.py (CPU-slot budget, memory gate, marke
 logs and status.json). The COF products (cof_masks/) and the track files are inputs, read from --cof-root (default: the production tree) and
 the registry, not from --data-root, which receives the new products and is required: use a test area first.
 
+New ETC track files (a re-tracking that changes the storm points): --tracks-dir DIR reads the track files from DIR (same file names as the registry's) and
+--extract-env extracts the environment variables again instead of linking the old stores, which no longer match the points.
+
 Examples:
   python scripts/run_etc_pipeline.py --data-root /pscratch/sd/w/wcmca1/hackathon/tmp/etc_round1 --dry-run
   python scripts/run_etc_pipeline.py --data-root DIR --sources um scream          # names or aliases from the registry
   python scripts/run_etc_pipeline.py --data-root DIR --steps combine composites stats --resume
   python scripts/run_etc_pipeline.py --data-root DIR --step-args pr "--start_date 2020-03-01 --end_date 2020-03-08"    # a short test
+  python scripts/run_etc_pipeline.py --data-root DIR --cof-root DIR --tracks-dir DIR/etc_tracks --extract-env --sources icon   # new track files
 
 Exit status: 0 all steps done; 1 a step failed, was skipped after a failure, or the run was interrupted; 2 usage error, refused
 overwrite, missing prerequisite or failed preflight.
@@ -48,7 +53,7 @@ import run_cof_pipeline as eng                          # noqa: E402  the engine
 import submit_etc_extraction_jobs as sub                # noqa: E402  track files, catalog settings, COF mask variables, expected gaps
 from check_zarr_store import scan_store, summarize      # noqa: E402
 
-STEP_NAMES = ["etc_cof", "pr", "mask", "link_env", "combine", "composites", "stats"]
+STEP_NAMES = ["etc_cof", "pr", "mask", "link_env", "env", "combine", "composites", "stats"]
 MASK_VARS = list(sub.COF_MASK_VARS)
 COMPOSITE_FILES = [f"etc_2d_composite_{h}_{o}.nc" for h in ("nh", "sh") for o in ("all", "isolated", "mcs_only", "ar_only", "3way")]
 
@@ -103,9 +108,13 @@ def normalize_steps(names):
 # ---------------------------------------------------------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------------------------------------------------------
-def source_info(src):
-    """(model config of submit_etc_extraction_jobs, the source name of the scripts, the name of its COF store)."""
+def source_info(src, tracks_dir=None):
+    """(model config of submit_etc_extraction_jobs, the source name of the scripts, the name of its COF store).
+
+    With tracks_dir the config is a copy whose ETC track file is the file of the same name in that folder."""
     mc = sub.MODEL_CONFIGS[src["submit_key"]]
+    if tracks_dir:
+        mc = dict(mc, track_file=str(Path(tracks_dir) / Path(mc["track_file"]).name))
     a3 = Path(mc["output_dir"]).parent.name              # scream, icon_d3hp003, ..., era5
     return mc, a3, ("IMERGv7" if a3 == "era5" else a3)
 
@@ -130,6 +139,26 @@ def extract_argv(python, mc, group, variable, out_dir):
     return toks
 
 
+def env_variables(mc, exclude=()):
+    """[(store, group, variable)] of the environment variables of a model config: every variable of the groups that are not COF masks, as the
+    store name etc_2d_<store>_all_all.zarr (the variable, plus _<level>hPa for a pressure level), except pr (its own step) and the excluded stores."""
+    out, seen = [], set()
+    for g in mc["job_groups"]:
+        if g.get("cof_mask"):
+            continue
+        levels = [int(x) for x in str(g["pressure_levels"]).split(",")] if g.get("pressure_levels") else []
+        suffix = "" if not levels else (f"_{levels[0]}hPa" if len(levels) == 1 else "_avg" + "-".join(map(str, levels)) + "hPa")
+        for v in g["variables"]:
+            store = f"{v}{suffix}"
+            if store == "pr" or store in exclude:
+                continue
+            if store in seen:
+                raise SystemExit(f"{mc['job_name']}: two extraction groups give the store etc_2d_{store}_all_all.zarr")
+            seen.add(store)
+            out.append((store, g, v))
+    return out
+
+
 def expected_points(mc):
     """Number of storm points the extraction keeps: valid positions within 90 - radius degrees of the equator (as extract_etc_2d_vars.py)."""
     from src.env_extract_utilities import parse_etc_track_file
@@ -139,13 +168,15 @@ def expected_points(mc):
     return int(df.dropna(subset=["lat", "lon"])["lat"].between(-90 + radius, 90 - radius).sum())
 
 
-def build_tasks(names, sources, defaults, root, python, cof_root, env_from, extra):
-    """The full graph for the given sources (all steps): {(source, step): Task}, and per-source information."""
+def build_tasks(names, sources, defaults, root, python, cof_root, env_from, extra, tracks_dir=None, extract_env=False):
+    """The full graph for the given sources (all steps): {(source, step): Task}, and per-source information.
+
+    tracks_dir: read the ETC track files from this folder. extract_env: one env_<store> task per environment variable in place of link_env."""
     tasks, infos = {}, {}
     base_env = dict(defaults["env"])
     for name in names:
         src = sources[name]
-        mc, a3, cof = source_info(src)
+        mc, a3, cof = source_info(src, tracks_dir)
         cfgs = src["step_cfg"]
         single = f"{root}etc_data/{a3}/single_vars/"
         n_pts = expected_points(mc)
@@ -166,13 +197,20 @@ def build_tasks(names, sources, defaults, root, python, cof_root, env_from, extr
         mask_group = find_group(mc, "cof_mask")
         for v in MASK_VARS:
             add(f"mask_{v}", "mask", extract_argv(python, mc, mask_group, v, single), [f"{single}etc_2d_{v}_all_all.zarr"], [], cof_env)
-        add("link_env", "link_env",
-            [python, str(EXTRACT_DIR / "link_etc_env_stores.py"), "--src-dir", f"{env_from}{a3}/single_vars", "--dst-dir", single,
-             "--exclude", *env_exclude, "--expected-points", str(n_pts), "--min-stores", str(defaults["min_env_stores"])], [], [])
+        if extract_env:
+            env_steps = []
+            for store, group, variable in env_variables(mc, src.get("env_exclude", [])):
+                add(f"env_{store}", "env", extract_argv(python, mc, group, variable, single), [f"{single}etc_2d_{store}_all_all.zarr"], [])
+                env_steps.append(f"env_{store}")
+        else:
+            add("link_env", "link_env",
+                [python, str(EXTRACT_DIR / "link_etc_env_stores.py"), "--src-dir", f"{env_from}{a3}/single_vars", "--dst-dir", single,
+                 "--exclude", *env_exclude, "--expected-points", str(n_pts), "--min-stores", str(defaults["min_env_stores"])], [], [])
+            env_steps = ["link_env"]
         add("combine", "combine",
             [python, str(EXTRACT_DIR / "combine_etc_2d_vars.py"), "--source", a3, "--input_dir", single, "--output_dir", f"{root}etc_data/{a3}",
              "--etc-path", f"{root}etc_tracks/"],
-            [f"{root}etc_data/{a3}/etc_2d_combined_all_all.zarr"], ["etc_cof", "pr", *[f"mask_{v}" for v in MASK_VARS], "link_env"])
+            [f"{root}etc_data/{a3}/etc_2d_combined_all_all.zarr"], ["etc_cof", "pr", *[f"mask_{v}" for v in MASK_VARS], *env_steps])
         add("composites", "composites",
             [python, str(SCRIPTS / "create_etc_composites.py"), "--source", a3, "--zarr-path", f"{root}etc_data/", "--out-dir", f"{root}etc_data/stats/{a3}"],
             [f"{root}etc_data/stats/{a3}/{f}" for f in COMPOSITE_FILES], ["combine"])
@@ -184,9 +222,9 @@ def build_tasks(names, sources, defaults, root, python, cof_root, env_from, extr
 
 
 def select(all_tasks, steps):
-    """The tasks of the chosen steps ('mask' stands for the seven mask_<variable> tasks), in build order."""
-    keep = set(steps) - {"mask"} | ({f"mask_{v}" for v in MASK_VARS} if "mask" in steps else set())
-    return {k: t for k, t in all_tasks.items() if k[1] in keep}
+    """The tasks of the chosen steps ('mask' stands for the seven mask_<variable> tasks, 'env' for the env_<store> tasks), in build order."""
+    keep = set(steps) - {"mask", "env"} | ({f"mask_{v}" for v in MASK_VARS} if "mask" in steps else set())
+    return {k: t for k, t in all_tasks.items() if k[1] in keep or ("env" in steps and k[1].startswith("env_"))}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -237,7 +275,10 @@ def preflight(tasks, infos, defaults, python, cof_root, env_from):
         if "pr" in steps and a3 == "era5":
             if check(defaults["imerg_6h_zarr"], f"{name}: IMERG 6-hourly store (precipitation)"):
                 notes.append(f"{name}: IMERG 6-hourly store complete")
-        if "link_env" in steps or "combine" in steps:
+        n_extract = sum(1 for s in steps if s.startswith("env_"))
+        if n_extract:
+            notes.append(f"{name}: {n_extract} environment stores are extracted again from the catalog (--extract-env)")
+        if "link_env" in steps or ("combine" in steps and not n_extract):
             src_dir = Path(f"{env_from}{a3}/single_vars") if "link_env" in steps else Path(info["single"])
             if not src_dir.is_dir():
                 problems.append(f"{name}: environment stores folder missing: {src_dir}")
@@ -260,6 +301,10 @@ def parse_args():
     p.add_argument("--data-root", required=False, help="root that receives the new products (etc_tracks/, etc_data/); use a test area first")
     p.add_argument("--cof-root", default=None, help="root of the Step 3 products that are read (cof_masks/; default: the registry's, the production tree)")
     p.add_argument("--env-from", default=None, help="folder with <source>/single_vars/ environment stores to link (default: the registry's)")
+    p.add_argument("--tracks-dir", default=None, help="folder with the ETC track files (same file names as the registry's; default: the registry's folder), "
+                                                     "for a re-tracking with new storm points")
+    p.add_argument("--extract-env", action="store_true", help="extract every environment variable again (steps env_<store>) instead of linking the old "
+                                                              "stores (link_env); needed when the storm points changed, e.g. with --tracks-dir")
     p.add_argument("--sources", nargs="*", default=None, help="sources to run, names or aliases (default: all in the registry)")
     p.add_argument("--steps", nargs="*", default=None, help=f"only these steps ({', '.join(STEP_NAMES)}); the steps they need must exist")
     p.add_argument("--from", dest="from_step", default=None, help="only this step and the ones after it in the order " + " ".join(STEP_NAMES))
@@ -293,8 +338,13 @@ def main():
     python = args.python or defaults["python"]
     cof_root = (args.cof_root or defaults["cof_root"]).rstrip("/") + "/"
     env_from = (args.env_from or defaults["env_from"]).rstrip("/") + "/"
+    tracks_dir = args.tracks_dir.rstrip("/") + "/" if args.tracks_dir else None
+    if tracks_dir and not os.path.isdir(tracks_dir):
+        sys.exit(f"--tracks-dir is not a folder: {tracks_dir}")
     names = resolve_sources(args.sources, sources)
-    steps = normalize_steps(args.steps) if args.steps else list(STEP_NAMES)
+    steps = normalize_steps(args.steps) if args.steps else [s for s in STEP_NAMES if s != ("link_env" if args.extract_env else "env")]
+    if args.extract_env and "link_env" in steps or not args.extract_env and "env" in steps:
+        sys.exit("link_env (link the old environment stores) and env (extract them again, --extract-env) exclude each other")
     if args.from_step:
         first = normalize_steps([args.from_step])[0]
         steps = [s for s in steps if STEP_NAMES.index(s) >= STEP_NAMES.index(first)]
@@ -303,11 +353,13 @@ def main():
     for step_name, step_args in args.step_args:
         extra.setdefault(normalize_steps([step_name])[0], []).extend(shlex.split(step_args))
 
-    all_tasks, infos = build_tasks(names, sources, defaults, root, python, cof_root, env_from, extra)
+    all_tasks, infos = build_tasks(names, sources, defaults, root, python, cof_root, env_from, extra, tracks_dir, args.extract_env)
     tasks = select(all_tasks, steps)
     conflicts, missing, warnings = eng.prepare_plan(tasks, root, args.resume, args.force, lambda d: all_tasks[d].outputs if d in all_tasks else [])
 
-    print(f"Data root: {root}\nCOF products read from: {cof_root}\nEnvironment stores linked from: {env_from}\nSources: {', '.join(names)}\n"
+    print(f"Data root: {root}\nCOF products read from: {cof_root}\n"
+          + (f"ETC track files read from: {tracks_dir}\nEnvironment variables: extracted again (--extract-env)\n" if tracks_dir or args.extract_env else "")
+          + (f"Environment stores linked from: {env_from}\n" if not args.extract_env else "") + f"Sources: {', '.join(names)}\n"
           f"Steps: {', '.join(steps)}\nPython: {python}\nSlot budget: {max_slots} of {logical} logical CPUs")
     for w in warnings:
         print(f"WARNING: {w}")
