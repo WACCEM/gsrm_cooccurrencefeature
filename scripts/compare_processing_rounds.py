@@ -67,12 +67,21 @@ def compare_netcdf(old_path, new_path):
 
 
 def compare_parquet(old_path, new_path):
-    """(identical, description)."""
+    """(identical, description). A table whose rows are the same in another order counts as identical (Step 3 writes its rows in the order in which
+    its parallel windows finish); the description then says so."""
     a, b = pd.read_parquet(old_path), pd.read_parquet(new_path)
     if a.shape != b.shape or list(a.columns) != list(b.columns):
         return False, f"shape {a.shape} vs {b.shape}"
     if a.equals(b):
         return True, ""
+    cols_all = list(a.columns)
+    for by in (cols_all, cols_all[:2]):
+        try:
+            a2, b2 = a.sort_values(by, kind="mergesort").reset_index(drop=True), b.sort_values(by, kind="mergesort").reset_index(drop=True)
+        except TypeError:                                            # a column that cannot be sorted (lists): try the leading columns only
+            continue
+        if a2.equals(b2):
+            return True, "the rows are the same, in another order"
     cols = [c for c in a.columns if not a[c].equals(b[c])]
     return False, f"columns that differ: {cols[:8]}"
 
@@ -126,7 +135,7 @@ def run(old_root, new_root, sources, only=("stores", "netcdf", "parquet"), worke
                 n_diff += 0 if same else 1
             elif kind == "parquet" and "parquet" in only:
                 same, why = compare_parquet(o, n)
-                out(f"  {'IDENTICAL' if same else 'DIFFERS  '} {rel}" + ("" if same else f": {why}"))
+                out(f"  {'IDENTICAL' if same else 'DIFFERS  '} {rel}" + (f" ({why})" if same and why else "" if same else f": {why}"))
                 n_diff += 0 if same else 1
     return n_diff
 

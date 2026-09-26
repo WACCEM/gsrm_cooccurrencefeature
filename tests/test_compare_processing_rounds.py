@@ -3,6 +3,7 @@
   - identical roots: nothing differs, exit status 0 with --expect identical
   - a store with changed cells: the variable, the number of differing cell-times and the two footprints are reported, an unchanged variable is not
   - a netCDF variable and a parquet column that changed, a product that exists in one root only, exit status 1 with --expect identical
+  - a parquet table with the same rows in another order is identical (Step 3 writes rows in the order its parallel windows finish)
 
 Run:  python tests/test_compare_processing_rounds.py      (or pytest tests/)
 """
@@ -64,6 +65,30 @@ def test_identical_and_different_roots():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_parquet_rows_in_another_order_are_identical():
+    tmp = Path(tempfile.mkdtemp(prefix="cmpr_"))
+    try:
+        df = pd.DataFrame({"etc_track": [3, 1, 2, 1], "time": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-01", "2020-01-01"]),
+                           "overlap_flag": [1, 0, 1, 0], "mcs_tracks": ["4,5", "", "7", ""]})
+        df.to_parquet(tmp / "a.parquet")
+        df.iloc[[2, 3, 0, 1]].to_parquet(tmp / "b.parquet")                           # the same rows, another order
+        same, why = cmp.compare_parquet(str(tmp / "a.parquet"), str(tmp / "b.parquet"))
+        assert same and "another order" in why
+        changed = df.copy(); changed.loc[0, "overlap_flag"] = 0
+        changed.iloc[[2, 3, 0, 1]].to_parquet(tmp / "c.parquet")
+        same, why = cmp.compare_parquet(str(tmp / "a.parquet"), str(tmp / "c.parquet"))
+        assert not same and "overlap_flag" in why
+        # the product line says so
+        (tmp / "o" / "cof_masks" / "stats").mkdir(parents=True); (tmp / "n" / "cof_masks" / "stats").mkdir(parents=True)
+        df.to_parquet(tmp / "o" / "cof_masks" / "stats" / f"{SRC}_etc_overlap_tracking.parquet")
+        df.iloc[[2, 3, 0, 1]].to_parquet(tmp / "n" / "cof_masks" / "stats" / f"{SRC}_etc_overlap_tracking.parquet")
+        lines = []
+        assert cmp.run(str(tmp / "o") + "/", str(tmp / "n") + "/", [SRC], out=lines.append) == 0
+        assert any("IDENTICAL" in l and "another order" in l for l in lines), lines
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_exit_status_with_expect_identical():
     tmp = Path(tempfile.mkdtemp(prefix="cmpr_"))
     try:
@@ -81,5 +106,5 @@ def test_exit_status_with_expect_identical():
 
 
 if __name__ == "__main__":
-    test_identical_and_different_roots(); test_exit_status_with_expect_identical()
+    test_identical_and_different_roots(); test_parquet_rows_in_another_order_are_identical(); test_exit_status_with_expect_identical()
     print("test_compare_processing_rounds: all checks passed")
