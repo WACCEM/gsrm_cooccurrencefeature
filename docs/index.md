@@ -9,6 +9,7 @@ Start with the [README](../README.md) for the project overview, then use the [an
 | End-to-end analysis pipelines | [pipelines/overview.md](pipelines/overview.md) |
 | Running Analyses 1 and 2 for all sources (dependency-aware runner) | [procedures/run_cof_pipeline.md](procedures/run_cof_pipeline.md) |
 | Running Analysis 3 (ETC composites) for all sources; time matching and precipitation source | [procedures/run_etc_pipeline.md](procedures/run_etc_pipeline.md) |
+| Re-running after a tracking update (TC, ETC or AR masks changed): what depends on what, which steps to redo, environment routes, checks | [procedures/rerun_after_tracking_update.md](procedures/rerun_after_tracking_update.md) |
 | MCS swath masks and cloud type classification | [procedures/mcs_swath_cloud_type.md](procedures/mcs_swath_cloud_type.md) |
 | Combined tracking mask creation | [procedures/combine_tracking_masks.md](procedures/combine_tracking_masks.md) |
 | Co-occurrence feature identification | [procedures/cof_identification.md](procedures/cof_identification.md) |
