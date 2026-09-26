@@ -33,7 +33,8 @@ Analysis 4 under 1 min per source.
 
 ## Procedure
 
-0. **Check the inputs** for every source (`scripts/check_tracking_inputs.py`, see its help): new ETC file vs the old one and vs the previous round's, ETC masks vs the file. It prints the environment route. Do not go on with a `MISMATCH`.
+0. **Check the inputs** for every source (`scripts/check_tracking_inputs.py`, see its help): new ETC file vs the old one and vs the previous round's, ETC masks vs the file. It prints the environment route. With `--tc-track-file` it also checks the TC side: how each raw TC storm was treated (input | unchanged | trimmed | split | removed | output, the terms of Bryce's logs `<src>_qs_log_TCs_<criteria>.csv`) and the TC masks against the TC stitched-node file, in the first, the last and the first changed month. Do not go on with a `MISMATCH`.
+   **Verify the content, not the file name.** Several versions of a track file coexist (`tc_stitched_nodes.qs_filter_r30_d48_wrong.txt`, `r30_d48`, `r15_d48`, `r15_d96`) and the name of the file in a list or a script is not proof of which one the masks were built from. On 2026-09-25 the list of input files named the `r30_d48` TC files, while the TC masks in use were built from `r15_d96` (Bryce's final TC criteria: 1.5 GCD and 96 h, plus the TC minima); the check told them apart at once (pointed at `r30_d48` it reports `MISMATCH`, exit status 1).
 1. **New data root**, e.g. `/pscratch/sd/w/wcmca1/hackathon/tmp/<name>/`. For an ETC/AR-only update link the unchanged `mcs_masks/` into it.
 2. **COF pipeline:** `bash slurm/run_interactive_cof_pipeline.sh --data-root ROOT --sources ... --analysis both` (all steps; steps that are present are not run again with `--resume`).
 3. **Analysis 3** per route (the environment stores depend on the ETC file only):

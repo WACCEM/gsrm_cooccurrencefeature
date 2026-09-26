@@ -4,6 +4,8 @@
     not in the old file, order kept
   - the environment route: link (identical to the previous round's file), reuse (every point is in the old file), extract (new points)
   - the ETC masks against the track file: consistent, or a mask ID / time that the track file does not have (exit status 1)
+  - the TC side: what happened to each raw TC storm (unchanged / trimmed / split / removed, as in Bryce's logs), the TC masks against the file, and the
+    month picks (the first month with a removed point is included, since all later IDs shift from there); a mask numbered like the raw file fails
 
 Run:  python tests/test_check_tracking_inputs.py      (or pytest tests/)
 """
@@ -135,6 +137,78 @@ def test_command_line_and_exit_status():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def tc_files(tmp):
+    A = [P(i, 6 * i) for i in range(5)]                      # removed entirely
+    B = [P(10 + i, 6 * i) for i in range(4)]                 # trimmed: the first two points are kept
+    C = [P(20 + i, 6 * i) for i in range(6)]                 # split into points 0-1 and 3-5
+    D = [P(30 + i, 6 * i) for i in range(2)]                 # unchanged
+    write(tmp / "tc_raw.txt", [A, B, C, D])
+    write(tmp / "tc_new.txt", [B[:2], C[:2], C[3:], D])
+    return A, B, C, D
+
+
+def write_tc_masks(tmp, ids_by_time, name="TC_test_tracks_x_y.202001.nc"):
+    times = np.array([np.datetime64("2020-01-01T00:00") + np.timedelta64(6 * h, "h") for h in range(len(ids_by_time))], dtype="datetime64[ns]")
+    tc = np.zeros((len(times), 6), dtype="float32")
+    for k, ids in enumerate(ids_by_time):
+        for c, i in enumerate(ids):
+            tc[k, c] = i
+    xr.Dataset({"TC_int_tag": (("time", "cell"), tc)}, coords={"time": times}).to_netcdf(tmp / name)
+
+
+def test_tc_storm_actions_and_raw_file_name():
+    tmp = Path(tempfile.mkdtemp(prefix="chk_"))
+    try:
+        tc_files(tmp)
+        old, new = chk.load_all_points(str(tmp / "tc_raw.txt")), chk.load_all_points(str(tmp / "tc_new.txt"))
+        assert chk.storm_actions(old, new) == {"unchanged": 1, "trimmed": 1, "split": 1, "removed": 1}
+        assert old.storm_id.nunique() == 4 and new.storm_id.nunique() == 4                      # 4 - 1 removed + 1 split = 4
+        assert chk.derive_raw_tc_file("/d/x_hp8.tc_stitched_nodes.qs_filter_r15_d96.txt") == "/d/x_hp8.tc_stitched_nodes.qs_filter_r15_d96.txt".replace(".qs_filter_r15_d96", "")
+        assert chk.derive_raw_tc_file("/d/x_hp8.tc_stitched_nodes.qs_filter_r30_d48_wrong.txt") == "/d/x_hp8.tc_stitched_nodes.txt"
+        assert chk.derive_raw_tc_file("/d/other.txt") is None
+        # the month picks: the first and the last month, and the first month with a removed point
+        for m in ("202001", "202003", "202005"):
+            write_tc_masks(tmp, [[]], name=f"TC_test_tracks_x_y.{m}.nc")
+        assert chk.pick_tc_months(str(tmp), "TC_test_tracks_x_y", old, new) == ["202001", "202005"]        # A is removed in January: nothing extra
+        new_keys = set(new.key)
+        old2 = old.copy(); old2.loc[[k not in new_keys for k in old2.key], "base_time"] = np.datetime64("2020-03-05T00:00")     # every removed point lies in March
+        old2["key"] = chk.point_keys(old2)
+        assert chk.pick_tc_months(str(tmp), "TC_test_tracks_x_y", old2, new) == ["202001", "202003", "202005"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_tc_masks_against_the_file_and_the_command_line():
+    tmp = Path(tempfile.mkdtemp(prefix="chk_"))
+    try:
+        tc_files(tmp)
+        new = chk.load_all_points(str(tmp / "tc_new.txt"))
+        # numbering of the new file: 1 = B kept, 2 = C first part, 3 = C second part, 4 = D
+        write_tc_masks(tmp, [[1, 2, 4], [1, 2, 4], [], [3], [3], [3]])
+        ok, res = chk.check_masks(str(tmp), "TC_test_tracks_x_y", new, ["202001"], var="TC_int_tag")
+        assert ok and res[0]["in_mask_not_track"] == 0 and res[0]["ids_mask"] == 4, res
+        args = [sys.executable, SCRIPT, "--source", "icon", "--tc-track-file", str(tmp / "tc_new.txt"), "--tc-raw-file", str(tmp / "tc_raw.txt"),
+                "--mask-dir", str(tmp), "--tc-mask-basename", "TC_test_tracks_x_y", "--json", str(tmp / "tc.json")]
+        r = subprocess.run(args, capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "TC storms vs the raw file: input 4 | unchanged 1 | trimmed 1 | split 1 | removed 1 | output 4" in r.stdout and "RESULT: CONSISTENT" in r.stdout, r.stdout
+        import json
+        j = json.load(open(tmp / "tc.json"))
+        assert j["tc"]["removed"] == 1 and j["tc"]["output_storms"] == 4 and j["relation"] is None and j["ok"]
+        # masks numbered like the RAW file (A=1, B=2, C=3, D=4) do not belong to the new file
+        write_tc_masks(tmp, [[2, 3, 4], [2, 3, 4], [2, 3], [3], [3], [3]])
+        r = subprocess.run(args, capture_output=True, text=True)
+        assert r.returncode == 1 and "MISMATCH" in r.stdout, r.stdout
+        # neither ETC nor TC file: usage error; a raw file that cannot be derived
+        r = subprocess.run([sys.executable, SCRIPT, "--source", "icon"], capture_output=True, text=True)
+        assert r.returncode == 2
+        r = subprocess.run([sys.executable, SCRIPT, "--source", "icon", "--tc-track-file", str(tmp / "tc_new.txt")], capture_output=True, text=True)
+        assert r.returncode == 2 and "raw TC file" in r.stdout
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_relation_of_the_new_file_to_the_old_one(); test_route_link_reuse_or_extract(); test_masks_against_the_track_file(); test_command_line_and_exit_status()
+    test_tc_storm_actions_and_raw_file_name(); test_tc_masks_against_the_file_and_the_command_line()
     print("test_check_tracking_inputs: all checks passed")
