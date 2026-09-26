@@ -73,6 +73,18 @@ sources:
   um_glm_n2560_RAL3p3:
     aliases: [um, UM]
     submit_key: UM
+    # Online-only catalog: reading from the remote server loses data silently when many readers run at once (CASESM2, 2026-09-25: 17 parallel readers gave
+    # NaN cells and rows in 3-7 % of the points that a single reader does not; a single reader reproduces the March values exactly, and the job reported
+    # 0 failed). So at most 4 at a time (48 of the 195 slots), the speed of the March extraction (45-50 min per 3D variable) and a timeout for it. Prefer
+    # --reuse-env (docs/procedures/run_etc_pipeline.md).
+    steps:
+      env: {slots: 48, est_min: 50, timeout_min: 240}
   casesm2_10km_nocumulus:
     aliases: [casesm2, CASESM2]
     submit_key: CASESM2
+    # Online-only catalog: reading from the remote server loses data silently when many readers run at once (CASESM2, 2026-09-25: 17 parallel readers gave
+    # NaN cells and rows in 3-7 % of the points that a single reader does not; a single reader reproduces the March values exactly, and the job reported
+    # 0 failed). So at most 4 at a time (48 of the 195 slots), the speed of the March extraction (45-50 min per 3D variable) and a timeout for it. Prefer
+    # --reuse-env (docs/procedures/run_etc_pipeline.md).
+    steps:
+      env: {slots: 48, est_min: 50, timeout_min: 240}

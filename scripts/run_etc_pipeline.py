@@ -210,6 +210,11 @@ def build_tasks(names, sources, defaults, root, python, cof_root, env_from, extr
                 if reuse_env:
                     argv = [python, str(EXTRACT_DIR / "subset_etc_env_store.py"), "--src-store", f"{env_from}{a3}/single_vars/etc_2d_{store}_all_all.zarr",
                             "--dst-store", out_store, "--old-track-file", mc["registry_track_file"], "--new-track-file", mc["track_file"], "--radius", sub.RADIUS]
+                    # the catalog of the variable (only its time axis is read): points without an exact frame become NaN, as in the extraction
+                    ext = extract_argv(python, mc, group, variable, single)
+                    for opt in ("--catalog_url", "--catalog_model", "--catalog_params", "--current_location"):
+                        if opt in ext:
+                            argv += [opt.replace("_", "-"), ext[ext.index(opt) + 1]]
                 else:
                     argv = extract_argv(python, mc, group, variable, single)
                 add(f"env_{store}", "env", argv, [out_store], [])

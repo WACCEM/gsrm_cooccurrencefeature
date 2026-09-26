@@ -110,7 +110,10 @@ def test_tracks_dir_and_extract_env():
         for s in ("pr", "mask_etc_ar_overlap_mask"):
             assert opt(tasks[(name, s)].argv, "--trackfile").startswith("/new/tracks/")
         assert opt(tasks[(name, "etc_cof")].argv, "--etc_dir") == "/new/tracks/"
-        assert all(t.slots == 4 for t in tasks.values() if t.step.startswith("env_")) and tasks[(name, env[0])].est_min > 0
+        online = name in ("um_glm_n2560_RAL3p3", "casesm2_10km_nocumulus")        # online-only catalogs: at most 4 readers at a time (48 of 195 slots)
+        assert all(t.slots == (48 if online else 4) for k, t in tasks.items() if k[0] == name and t.step.startswith("env_")) and tasks[(name, env[0])].est_min > 0
+        if online:
+            assert tasks[(name, env[0])].est_min == 50 and tasks[(name, env[0])].timeout_min == 240
     assert {t.step[4:] for k, t in tasks.items() if k[0] == "icon_d3hp003" and t.step.startswith("env_")} == ICON_ENV
     assert {t.step[4:] for k, t in tasks.items() if k[0] == "scream" and t.step.startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not extracted"
     assert len({t.step[4:] for k, t in tasks.items() if k[0] == "casesm2_10km_nocumulus" and t.step.startswith("env_")}) == 19
@@ -142,6 +145,13 @@ def test_reuse_env_tasks():
         assert opt(t.argv, "--new-track-file") == "/new/tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
         assert opt(t.argv, "--old-track-file") == "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
     assert {k[1][4:] for k in reu if k[0] == "scream" and k[1].startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not built"
+    # the catalog of each variable's group (frame times, so that points without a frame become NaN as in the extraction)
+    t3d = reu[("scream", "env_ua_850hPa")].argv
+    assert opt(t3d, "--catalog-model") == "scream_ne120" and opt(t3d, "--catalog-url").endswith("main.yaml") and "--current-location" not in t3d
+    assert opt(reu[("scream", "env_tas")].argv, "--catalog-model") == "scream_ne120_inst"
+    assert opt(t3d, "--catalog-params") == '{"zoom": 8}'
+    online, _ = rp.build_tasks(["casesm2_10km_nocumulus"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", reuse_env=True)
+    assert opt(online[("casesm2_10km_nocumulus", "env_wa_850hPa")].argv, "--current-location") == "online"
     assert infos["scream"]["old_points"] == 1000 and ("scream", "link_env") not in reu
     # pr, masks and etc_cof are unchanged: the new track file, the catalog / COF store
     assert opt(reu[("scream", "pr")].argv, "--trackfile").startswith("/new/tracks/") and "extract_etc_2d_vars.py" in " ".join(reu[("scream", "pr")].argv)

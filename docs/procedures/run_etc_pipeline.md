@@ -135,10 +135,15 @@ instead of minutes to hours. Checked on ICON: all 19 stores made this way were i
 `--extract-env` for that source). Points that two storms share have one row per storm in the old store; the first is used. A point whose time has no frame in the catalog keeps the value that the old extraction gave it.
 
 Notes on `--extract-env` from the same re-run:
-- The catalogs of NICAM, UM and CASESM2 are online only and are the bottleneck: CASESM2's 19 variables ran at 1.4 storms/s each with 17 in parallel (about 24 storms/s in total, the same total as March with 4 in parallel), so they need 3-4 hours and the
-  `env` timeout of the registry (120 min) is too short for them. Use `--reuse-env`, or raise `timeout_min: env` and expect hours.
-- SCREAM's 3D catalog (`scream_ne120`) has no frame at the first track time (2019-08-01 00), so 9 of 21,459 points have no frame, and the extraction stops for those variables (`--max_missing_fraction` is 0 by default and is only set for `pr` and the COF masks).
-  Pass `--step-args env "--max_missing_fraction 0.001"` to accept them as NaN.
+- **Missing frames never crash a variable now.** A storm point whose track time has no frame in the catalog gets a NaN slab (never the nearest frame; the March extraction used the nearest one), is counted and listed in the attributes of the store
+  (`n_points_time_missing`, `missing_track_times`; they pass through `combine`, which prints a WARNING line), and the run only stops when more than `--max_missing_fraction` of the points (default 0.05, a sanity limit for a wrong catalog or time axis) have
+  no frame. `pr` and the COF masks keep their explicit per-source limits (`expected_missing` in `submit_etc_extraction_jobs.py`). Example: SCREAM's local 3D catalog (`scream_ne120`) starts at 2019-08-01 03:00, the 2D one (`scream_ne120_inst`) at 00:00, and the tracks
+  at 00:00, so the 3D variables have 9 of 21,459 points (0.04 %) without a frame; before the guardrail that stopped 8 of the 24 variables. `--reuse-env` applies the same rule when it is given the catalog (the runner passes each group's catalog).
+- **Online catalogs lose data when many readers run at once.** CASESM2 (and UM) are read from the online catalog. With 17 parallel readers (2026-09-25) the `wa` stores had NaN cells and rows in 3-7 % of the points that a single reader does not give (a single reader
+  reproduced the March values exactly, in two windows, twice, and the job reported 0 failed), and ran at only 1.4 storms/s each (about 24 storms/s in total, the same total as March with 4 in parallel), so the 3D variables needed hours. The registry therefore allows at most
+  4 readers at a time for these two sources (`env` costs 48 of the 195 slots, 50 min and a 240-min timeout per variable). Prefer `--reuse-env`. NICAM and ICON are NERSC-hosted (ICON: identical to March).
+- **Check the inputs first:** `scripts/check_tracking_inputs.py --source <src> --new-track-file NEW.txt [--prev-track-file ROUND1.txt]` compares the new ETC track file with the old one (points, storms, new points, order), checks the ETC masks against it and prints the route for the
+  environment stores: `link` (identical to the previous round's file), `reuse` (every point is in the old file) or `extract`. See [rerun_after_tracking_update.md](rerun_after_tracking_update.md).
 
 ## Preflight
 
