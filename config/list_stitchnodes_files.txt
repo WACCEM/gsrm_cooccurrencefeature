@@ -1,6 +1,11 @@
 # Stitch-node track files of Bryce Harrop used for the quasi-stationary-storm re-run (record of the inputs; nothing reads this file).
-# ETC: qs_filter_r30_d48 (movement < 3.0 GCD per step for 48 h; 12 GCD and 24 h minima). TC: qs_filter_r15_d96 (1.5 GCD, 96 h, plus the TC minima), the set
-# of 2026-09-25 (18:57); the TC masks regenerated 19:09-20:22 match it (scripts/check_tracking_inputs.py --tc-track-file). The earlier TC files r30_d48 (18:25) and *_wrong were not final.
+# TC:  qs_filter_r15_d96 (1.5 GCD, 96 h, plus the TC minima), files of 2026-09-25 18:57. FINAL: confirmed by Bryce Harrop on 2026-09-26 (relayed by Zhe Feng), the seven TC files below.
+#      Not final, do not use: tc_stitched_nodes.qs_filter_r30_d48.txt (18:25), ...r15_d48.txt (18:52) and ...r30_d48_wrong.txt (the 12 GCD ETC criterion applied to TC by mistake).
+#      The TC masks regenerated 2026-09-25 (19:09-20:22) match r15_d96 (scripts/check_tracking_inputs.py --tc-track-file).
+# ETC: qs_filter_r30_d48 (movement < 3.0 GCD per step for 48 h; 12 GCD and 24 h minima).
+# ERA5: the observation analysis uses 2019-2021 only; the *_full_* files (1979-2021) are not used. The short TC file covers 2019-08-01..2021-03-26 only (143 storms) and r15_d96
+#      changes none of the 244 TC storms of 2019-2021 (same in the full file), so the ERA5 TC masks of the store stay the March ones (TC_test_tracks_old_SN_*). The daily
+#      TC_test_tracks_era5_* masks of 2026-09-26 are built from the short file, are empty outside that window and are not used (docs/procedures/rerun_after_tracking_update.md).
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/casesm2_10km_nocumulus_tracking_etc_nocoldcoreonly/casesm2_10km_nocumulus_hp8.etc_stitched_nodes.filtered_out_tcs.qs_filter_r30_d48.txt
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/casesm2_10km_nocumulus_tracking_etc_nocoldcoreonly/casesm2_10km_nocumulus_hp8.tc_stitched_nodes.qs_filter_r15_d96.txt
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/era5_tracking_etc_nocoldcoreonly/era5.etc_stitched_nodes.filtered_out_tcs.qs_filter_r30_d48.txt

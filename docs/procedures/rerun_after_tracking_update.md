@@ -53,3 +53,14 @@ Analysis 4 under 1 min per source.
 - The rows of an environment store are matched to a new track file by (time, lon, lat), never by storm ID (IDs are running counters: removing or splitting one storm renumbers all later ones). `--reuse-env` checks that the old store is the extraction of the old file row by row
   and that every new point is found, and fails otherwise. Checked 2026-09-25: for all six sources every point of the new file is in the old file, in the same order (ICON: 19 of 19 rebuilt stores identical to a fresh extraction; SCREAM 16 of 16).
 - Points without a frame in the catalog are NaN and recorded, never the nearest frame, and never a crash below the sanity limit ([run_etc_pipeline.md](run_etc_pipeline.md)).
+
+## ERA5 masks and the IMERG (observation) chain
+
+The observations take their AR, TC and ETC masks from ERA5 (`ERA5_AR_TC_ETC_hp8_v1.zarr`, made by `scripts/remap_era5_masks_healpix.py` from Bryce's `hackathon_pre/era5_tracking_etc_nocoldcoreonly/`), and only 2019-2021 is used (the `*_full_*` tracking of 1979-2021 is not).
+
+- The remap reads `AR_tracks_era5_*.nc`, `TC_test_tracks_era5_*.nc` and `ETC_test_tracks_era5_*.nc` from **one folder** and keeps only the times that all three have; IMERG's Step 2 intersects times in the same way. A folder with 20 months of ETC masks makes a 20-month store without a message.
+  Before Step 2 check that the three inputs cover the same 36 months (`check_tracking_inputs.py`) and that the new store has 4384 six-hourly steps (2019-01-01 to 2021-12-31T18).
+- Verify the content here too. On 2026-09-26 the folder held 20 monthly ETC masks (201908-202103) and 1096 daily TC masks built from the *short* TC file (2019-08-01 to 2021-03-26, 143 storms), which are empty outside that window (2019-02-01: 0 TC cells, 10,626 in the March masks).
+  r15_d96 changes none of the 244 TC storms of 2019-2021 (the March masks `TC_test_tracks_old_SN_*` equal them), so the ERA5 TC masks of 2019-2021 are the March ones.
+- Only the ETC masks of ERA5 change with the quasi-stationary filter. IMERG Step 1 reads the TC footprint only, so with an unchanged footprint (compare the daily masks with `old_SN` on every day) it is not re-run: link the production `mcs_masks/IMERGv7_mcs_masks_hp8.zarr`
+  (for NICAM and UM, whose TC masks did not change either, Step 1 came out bit-identical). The thresholds (`v1_2014_2024`) do not read the masks and are linked. Steps 2, 3, monthly, attribution, Analysis 3 (route `reuse`) and Analysis 4 follow the procedure above.
