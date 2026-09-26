@@ -1219,6 +1219,9 @@ def main():
                        help='Number of chunks to submit per batch to avoid overwhelming scheduler (default: 100)')
     parser.add_argument('--test-steps', type=int, default=None,
                        help='Number of time steps to process for testing (default: all)')
+    parser.add_argument('--tc-source-zarr', default=None,
+                       help="TC mask store on the target grid ('tc_mask' or 'TC_int_tag'); replaces tc_source_zarr of the config "
+                            "(e.g. IMERG's ERA5 masks remapped into a test data root). Default: the config's")
     
     args = parser.parse_args()
 
@@ -1363,7 +1366,7 @@ def main():
         # TC data for a given source. Sources without any of these set (e.g. not yet
         # backfilled into config_mcs_tbpf_*.yml) simply skip MCS-TC exclusion here and
         # fall back to Step 3's safety net, same as pre-fix behavior for that source only.
-        'tc_source_zarr': config.get('tc_source_zarr'),
+        'tc_source_zarr': args.tc_source_zarr or config.get('tc_source_zarr'),
         'dir_te': config.get('dir_te'),
         'source_te': config.get('source_te'),
         'source_res': config.get('source_res'),
