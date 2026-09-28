@@ -3,9 +3,11 @@
 #      Not final, do not use: tc_stitched_nodes.qs_filter_r30_d48.txt (18:25), ...r15_d48.txt (18:52) and ...r30_d48_wrong.txt (the 12 GCD ETC criterion applied to TC by mistake).
 #      The TC masks regenerated 2026-09-25 (19:09-20:22) match r15_d96 (scripts/check_tracking_inputs.py --tc-track-file).
 # ETC: qs_filter_r30_d48 (movement < 3.0 GCD per step for 48 h; 12 GCD and 24 h minima).
-# ERA5: the observation analysis uses 2019-2021 only; the *_full_* files (1979-2021) are not used. The short TC file covers 2019-08-01..2021-03-26 only (143 storms) and r15_d96
-#      changes none of the 244 TC storms of 2019-2021 (same in the full file), so the ERA5 TC masks of the store stay the March ones (TC_test_tracks_old_SN_*). The daily
-#      TC_test_tracks_era5_* masks of 2026-09-26 are built from the short file, are empty outside that window and are not used (docs/procedures/rerun_after_tracking_update.md).
+# ERA5: the observation analysis uses 2019-2021 only, so the *_full_* files (1979-2021, below) are NOT the source of era5's own analysis rows - that is always the short (2019-2021)
+#      files below, exactly like every other source's own file. BUT Bryce's ERA5 AR/TC/ETC masks (delivered complete 2026-09-28) are themselves built from the *_full_* tracking, so
+#      their storm-ID labels (ETC_int_tag/TC_int_tag) are the full file's numbering (tens of thousands), not the short file's (1-4091 ETC, 1-143 TC). scripts/combine_etc_cof_data.py's
+#      ERA5_ID_REFERENCE constant reads the *_full_* ETC file for exactly this: to resolve a mask's storm ID to a position, before matching the short file's own points by that position
+#      (never by ID - docs/procedures/rerun_after_tracking_update.md). Verified 2026-09-28 against the *_full_* files: masks consistent, all 36 months, both TC and ETC (0 mismatches).
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/casesm2_10km_nocumulus_tracking_etc_nocoldcoreonly/casesm2_10km_nocumulus_hp8.etc_stitched_nodes.filtered_out_tcs.qs_filter_r30_d48.txt
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/casesm2_10km_nocumulus_tracking_etc_nocoldcoreonly/casesm2_10km_nocumulus_hp8.tc_stitched_nodes.qs_filter_r15_d96.txt
 /global/cfs/cdirs/m1867/beharrop/kmscale_hackathon/stitch_nodes_data/era5_tracking_etc_nocoldcoreonly/era5.etc_stitched_nodes.filtered_out_tcs.qs_filter_r30_d48.txt
