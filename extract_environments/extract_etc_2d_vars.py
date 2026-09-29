@@ -10,7 +10,7 @@ for each ETC track position. Unlike MCS extraction (get_env_vars.py), this:
 - Saves data as zarr files for efficient I/O and memory management
 
 Memory considerations:
-- For 18704 storm points × 81×81 grid × 4 bytes (float32) ≈ 4.7 GB per variable
+- For 18704 storm points × 161×161 grid (radius 20°, the pipeline's default - see submit_etc_extraction_jobs.py's RADIUS) × 4 bytes (float32) ≈ 1.9 GB per variable
 - Zarr chunking allows processing larger-than-memory datasets
 - Multiple variables can be saved separately and combined later
 
@@ -98,7 +98,7 @@ def extract_healpix_variable_to_latlon(
     storm_lat,
     hp_grid,
     nside,
-    radius=10.0,
+    radius=20.0,
     lon_res=0.25,
     lat_res=0.25,
     x_dimname="lon",
@@ -127,7 +127,7 @@ def extract_healpix_variable_to_latlon(
     nside : int
         HEALPix nside parameter
     radius : float, optional
-        Radius around storm center in degrees (default: 10.0)
+        Radius around storm center in degrees (default: 20.0, matching the pipeline's default - see submit_etc_extraction_jobs.py's RADIUS)
     lon_res : float, optional
         Longitude resolution in degrees (default: 0.25)
     lat_res : float, optional
@@ -251,7 +251,7 @@ def extract_etc_2d_variable(
     variable_data,
     hp_grid,
     nside,
-    radius=10.0,
+    radius=20.0,
     lon_res=0.25,
     lat_res=0.25,
     progress_freq=1000,
@@ -759,8 +759,8 @@ def main():
                         help='Comma-separated list of storm IDs to process (for testing)')
     
     # Processing options
-    parser.add_argument('--radius', type=float, default=10.0,
-                        help='Extraction radius in degrees (default: 10.0)')
+    parser.add_argument('--radius', type=float, default=20.0,
+                        help='Extraction radius in degrees (default: 20.0, matching the pipeline default - see submit_etc_extraction_jobs.py\'s RADIUS)')
     parser.add_argument('--lon_res', type=float, default=0.25,
                         help='Longitude resolution in degrees (default: 0.25)')
     parser.add_argument('--lat_res', type=float, default=0.25,
