@@ -5,6 +5,8 @@
     (a time after the end or before the start of the record used to return the last / first frame)
   - the chunk cache (whole time chunks read once) gives exactly the same slabs as reading frame by frame
   - a repeated time stamp in the source uses the first frame
+  - the missing track times are recorded in the variable attributes (survive the zarr store), and the gate check_missing_frames() lets a small share
+    through with a warning (SCREAM's 3D catalog: 9 points, 0.04 %) and stops a large one (default limit 5 %), never crashing on a small gap
   - cof_source_name maps the catalog model names to the COF store names
 
 Run:  python tests/test_etc_time_matching.py      (or pytest tests/)
@@ -95,6 +97,46 @@ def test_repeated_time_stamp_uses_first_frame():
     np.testing.assert_array_equal(res[0][0], expected(4, 10.0, 20.0))       # the first of the two frames
 
 
+def test_missing_track_times_are_recorded_in_the_attributes(tmp_path=None):
+    import json
+    import shutil
+    import tempfile
+    df, res = run(source())
+    attrs = res[8]
+    assert attrs["n_missing_track_times"] == 3 and attrs["n_points_time_missing"] == 3
+    got = {pd.Timestamp(t) for t in attrs["missing_track_times"]}
+    want = {pd.Timestamp(TIMES[3] + np.timedelta64(3, "h")), pd.Timestamp(TIMES[-1] + np.timedelta64(6, "h")), pd.Timestamp(TIMES[0] - np.timedelta64(6, "h"))}
+    assert got == want, (got, want)
+    json.dumps(attrs["missing_track_times"])                                 # plain strings, so they can be stored
+    tmp = tempfile.mkdtemp(prefix="gap_")
+    try:                                                                     # ... and they survive the store
+        out, time_arr, ids, gids, lats, lons, xc, yc, a = res
+        path = ex.save_to_zarr(out, time_arr, ids, gids, lats, lons, xc, yc, "v", tmp + "/etc_2d_v_all_all", RADIUS, RES, RES, chunk_size=4, var_attrs=a)
+        back = xr.open_zarr(path)["v"].attrs
+        assert back["n_points_time_missing"] == 3 and set(map(pd.Timestamp, back["missing_track_times"])) == want
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_missing_frame_gate_never_crashes_on_a_small_gap():
+    f = ex.check_missing_frames
+    assert ex.DEFAULT_MAX_MISSING_FRACTION == 0.05
+    assert f({"n_points_time_missing": 0}, 1000, 0.0) == (True, "")
+    scream = {"n_points_time_missing": 9, "n_missing_track_times": 1, "missing_track_times": ["2019-08-01 00:00:00"]}
+    ok, msg = f(scream, 21459, ex.DEFAULT_MAX_MISSING_FRACTION)
+    assert ok and msg.startswith("WARNING") and "9 of 21459" in msg and "0.04%" in msg and "2019-08-01 00" in msg and "NaN" in msg, msg
+    ok, msg = f({"n_points_time_missing": 1288, "missing_track_times": ["2019-08-01 00:00:00"]}, 21459, ex.DEFAULT_MAX_MISSING_FRACTION)      # 6 %
+    assert not ok and msg.startswith("ERROR") and "--max_missing_fraction 0.05" in msg and "nothing is written" in msg, msg
+    ok, msg = f(scream, 21459, 0.0)                                          # a per-source limit of 0 is still strict
+    assert not ok
+    ok, msg = f(scream, 21459, 0.001)                                        # the share 0.00042 is inside 0.001
+    assert ok
+    # the command line default is the constant
+    import subprocess
+    out = subprocess.run([sys.executable, str(REPO / "extract_environments" / "extract_etc_2d_vars.py"), "--help"], capture_output=True, text=True).stdout
+    assert "--max_missing_fraction" in out and "0.05" in out
+
+
 def test_cof_source_name():
     f = ex.cof_source_name
     assert f("scream2D_hrly") == "scream" and f("scream_ne120_inst") == "scream" and f("scream_ne120") == "scream"
@@ -106,5 +148,6 @@ def test_cof_source_name():
 
 
 if __name__ == "__main__":
-    test_exact_matching_and_cache(); test_repeated_time_stamp_uses_first_frame(); test_cof_source_name()
+    test_exact_matching_and_cache(); test_repeated_time_stamp_uses_first_frame(); test_missing_track_times_are_recorded_in_the_attributes()
+    test_missing_frame_gate_never_crashes_on_a_small_gap(); test_cof_source_name()
     print("test_etc_time_matching: all checks passed")

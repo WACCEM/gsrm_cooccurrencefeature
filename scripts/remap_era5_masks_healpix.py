@@ -454,8 +454,20 @@ def remap_to_healpix_and_save(ds, zoom, out_zarr,
     
     return dsout_hp
 
+def parse_args(argv=None):
+    """Command line: where the ERA5 AR/TC/ETC masks (TempestExtremes netCDF) are read from and where the HEALPix zarr is written."""
+    import argparse
+    p = argparse.ArgumentParser(description="Remap the ERA5 AR/TC/ETC masks to a HEALPix zarr store")
+    p.add_argument("--in-dir", default="/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking_etc_nocoldcoreonly/",
+                   help="folder with AR_tracks_era5_*.nc, TC_test_tracks_era5_*.nc and ETC_test_tracks_era5_*.nc (default: Bryce's tracking folder)")
+    p.add_argument("--out-dir", default="/pscratch/sd/w/wcmca1/hackathon/all_masks/",
+                   help="folder that receives ERA5_AR_TC_ETC_hp8_v1.zarr (default: the production tree; use a test data root for a re-run)")
+    return p.parse_args(argv)
+
+
 def main():
     """Main function to run the remap masks"""
+    args = parse_args()
     # Set up logging
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -479,7 +491,7 @@ def main():
     # Bryce's original ERA5 tracking files
     # in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/ERA5_tracking/"
     # in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking/"
-    in_dir = "/pscratch/sd/b/beharrop/kmscale_hackathon/hackathon_pre/era5_tracking_etc_nocoldcoreonly/"
+    in_dir = args.in_dir if args.in_dir.endswith("/") else args.in_dir + "/"
     dir_ar = f"{in_dir}"
     dir_tc = f"{in_dir}"
     dir_etc = f"{in_dir}"
@@ -487,7 +499,7 @@ def main():
     basename_tc = f"TC_test_tracks_era5_*.nc"
     basename_etc = f"ETC_test_tracks_era5_*.nc"
 
-    out_dir = "/pscratch/sd/w/wcmca1/hackathon/all_masks/"
+    out_dir = args.out_dir if args.out_dir.endswith("/") else args.out_dir + "/"
     out_basename = f"{source_name}_AR_TC_ETC_hp{zoom}_{version}.zarr"
     out_zarr = f"{out_dir}{out_basename}"
     os.makedirs(out_dir, exist_ok=True)

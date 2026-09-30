@@ -476,6 +476,11 @@ def combine_zarr_files(file_list, output_path, suffix, source=None, chunk_size=1
     
     print(f"Combined dataset shape: {combined_ds.dims}")
     print(f"Variables: {list(datasets.keys())}")
+    # Variables whose input store has storm points without a frame in the source (NaN slabs, recorded by the extraction in the attributes)
+    gaps = {v: int(d.attrs.get('n_points_time_missing', 0)) for v, d in datasets.items() if int(d.attrs.get('n_points_time_missing', 0)) > 0}
+    if gaps:
+        print(f"WARNING: NaN-filled storm points (no frame in the source at their track time): "
+              + ", ".join(f"{v} {n}" for v, n in sorted(gaps.items())) + " (times in the attribute missing_track_times of each variable)")
     sys.stdout.flush()
     
     # Apply variable renaming if source is specified

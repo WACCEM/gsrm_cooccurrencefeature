@@ -5,6 +5,10 @@
     data root, the COF products read from the COF root, the expected share of missing storm points per source
   - the step selection ('mask' stands for the seven mask tasks), --step-args, source aliases
   - an output that exists without a marker is a conflict (protection) and no conflict with --force
+  - --tracks-dir (every command reads the track file from that folder) and --extract-env (one env_<store> task per environment variable, named
+    as the production stores, in place of link_env; the dependencies of combine; the step selection; link_env and env exclude each other)
+  - --reuse-env: the same env_<store> tasks, each running subset_etc_env_store.py from the old store (--env-from) with the registry's track file as the
+    old one and the --tracks-dir file as the new one; needs --tracks-dir; excludes --extract-env
   - the engine: the runner's data root is always COF_DATA_ROOT, whatever the caller's environment says, unless a task sets its own
 
 Run:  python tests/test_run_etc_pipeline.py      (or pytest tests/)
@@ -80,6 +84,101 @@ def test_selection_extra_args_and_aliases():
     assert rp.resolve_sources(["um", "UM", "obs", "icon"], sources) == ["um_glm_n2560_RAL3p3", "era5", "icon_d3hp003"]
 
 
+ICON_ENV = {"tas", "huss", "ps", "psl", "uas", "vas", "prw",
+            *[f"{v}_{l}hPa" for l in (850, 500) for v in ("ua", "va", "hus", "hur", "zg", "wa")]}       # the 19 environment stores of the March extraction
+# SCREAM's production stores without pr, the seven masks and the stale ps (not extracted again)
+SCREAM_ENV = {"hus_500hPa", "hus_850hPa", "huss", "omega500", "omega_500hPa", "omega850", "omega_850hPa", "psl", "rh500", "rh850", "tas", "ua500",
+              "ua_500hPa", "ua850", "ua_850hPa", "uas", "uivt", "va500", "va_500hPa", "va850", "va_850hPa", "vas", "vivt", "zg500"}
+
+
+def test_tracks_dir_and_extract_env():
+    rp.expected_points = lambda mc: 1000
+    defaults, sources = rp.load_registry(str(REPO / "config" / "config_etc_pipeline.yaml"))
+    tasks, infos = rp.build_tasks(list(sources), sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", extract_env=True)
+    for name in sources:
+        steps = [k[1] for k in tasks if k[0] == name]
+        env = [s for s in steps if s.startswith("env_")]
+        assert env
+        assert "link_env" not in steps and steps[:2] == ["etc_cof", "pr"] and steps[-3:] == ["combine", "composites", "stats"]
+        comb = tasks[(name, "combine")]
+        assert set(comb.deps) == {(name, s) for s in ["etc_cof", "pr", *[f"mask_{v}" for v in rp.MASK_VARS], *env]}
+        for s in env:                                                     # extracted from the catalog, one variable each, into the run's single_vars
+            t = tasks[(name, s)]
+            assert t.deps == [] and opt(t.argv, "--output_dir") == f"{ROOT}etc_data/{infos[name]['a3']}/single_vars/" and "--cof_mask" not in t.argv
+            assert t.outputs == [f"{ROOT}etc_data/{infos[name]['a3']}/single_vars/etc_2d_{s[4:]}_all_all.zarr"]
+            assert opt(t.argv, "--trackfile").startswith("/new/tracks/") and opt(t.argv, "--trackfile").endswith(".etc_stitched_nodes.filtered_out_tcs.txt")
+        for s in ("pr", "mask_etc_ar_overlap_mask"):
+            assert opt(tasks[(name, s)].argv, "--trackfile").startswith("/new/tracks/")
+        assert opt(tasks[(name, "etc_cof")].argv, "--etc_dir") == "/new/tracks/"
+        online = name in ("um_glm_n2560_RAL3p3", "casesm2_10km_nocumulus")        # online-only catalogs: at most 4 readers at a time (48 of 195 slots)
+        assert all(t.slots == (48 if online else 4) for k, t in tasks.items() if k[0] == name and t.step.startswith("env_")) and tasks[(name, env[0])].est_min > 0
+        if online:
+            assert tasks[(name, env[0])].est_min == 50 and tasks[(name, env[0])].timeout_min == 240
+    assert {t.step[4:] for k, t in tasks.items() if k[0] == "icon_d3hp003" and t.step.startswith("env_")} == ICON_ENV
+    assert {t.step[4:] for k, t in tasks.items() if k[0] == "scream" and t.step.startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not extracted"
+    assert len({t.step[4:] for k, t in tasks.items() if k[0] == "casesm2_10km_nocumulus" and t.step.startswith("env_")}) == 19
+    # the default graph (no options) still reads the registry's track files and links
+    tasks0, _ = rp.build_tasks(["icon_d3hp003"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {})
+    assert ("icon_d3hp003", "link_env") in tasks0 and not any(k[1].startswith("env_") for k in tasks0)
+    assert opt(tasks0[("icon_d3hp003", "pr")].argv, "--trackfile").startswith("/pscratch/sd/w/wcmca1/hackathon/etc_tracks/")
+    # selection: 'env' stands for the env_<store> tasks and nothing else
+    sel = rp.select(tasks, ["env"])
+    assert sel and all(k[1].startswith("env_") for k in sel) and len([k for k in sel if k[0] == "icon_d3hp003"]) == 19
+    assert {k[1] for k in rp.select(tasks, ["combine"])} == {"combine"}
+
+
+def test_reuse_env_tasks():
+    rp.expected_points = lambda mc: 1000
+    defaults, sources = rp.load_registry(str(REPO / "config" / "config_etc_pipeline.yaml"))
+    ext, _ = rp.build_tasks(["icon_d3hp003", "scream"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", extract_env=True)
+    reu, infos = rp.build_tasks(["icon_d3hp003", "scream"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", reuse_env=True)
+    assert set(reu) == set(ext), "the same steps as --extract-env, with the same outputs and dependencies"
+    for k, t in reu.items():
+        assert t.outputs == ext[k].outputs and t.deps == ext[k].deps and t.slots == ext[k].slots
+    icon = [t for k, t in reu.items() if k[0] == "icon_d3hp003" and k[1].startswith("env_")]
+    assert len(icon) == 19
+    for t in icon:
+        store = t.step[4:]
+        assert t.argv[1].endswith("extract_environments/subset_etc_env_store.py") and "extract_etc_2d_vars.py" not in " ".join(t.argv)
+        assert opt(t.argv, "--src-store") == f"/env_from/icon_d3hp003/single_vars/etc_2d_{store}_all_all.zarr"
+        assert opt(t.argv, "--dst-store") == t.outputs[0] and t.outputs[0] == f"{ROOT}etc_data/icon_d3hp003/single_vars/etc_2d_{store}_all_all.zarr"
+        assert opt(t.argv, "--new-track-file") == "/new/tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
+        assert opt(t.argv, "--old-track-file") == "/pscratch/sd/w/wcmca1/hackathon/etc_tracks/icon_d3hp003_hp8.etc_stitched_nodes.filtered_out_tcs.txt"
+    assert {k[1][4:] for k in reu if k[0] == "scream" and k[1].startswith("env_")} == SCREAM_ENV, "SCREAM's stale ps store is not built"
+    # the catalog of each variable's group (frame times, so that points without a frame become NaN as in the extraction)
+    t3d = reu[("scream", "env_ua_850hPa")].argv
+    assert opt(t3d, "--catalog-model") == "scream_ne120" and opt(t3d, "--catalog-url").endswith("main.yaml") and "--current-location" not in t3d
+    assert opt(reu[("scream", "env_tas")].argv, "--catalog-model") == "scream_ne120_inst"
+    assert opt(t3d, "--catalog-params") == '{"zoom": 8}'
+    online, _ = rp.build_tasks(["casesm2_10km_nocumulus"], sources, defaults, ROOT, "/py/python", COF, "/env_from/", {}, tracks_dir="/new/tracks/", reuse_env=True)
+    assert opt(online[("casesm2_10km_nocumulus", "env_wa_850hPa")].argv, "--current-location") == "online"
+    assert infos["scream"]["old_points"] == 1000 and ("scream", "link_env") not in reu
+    # pr, masks and etc_cof are unchanged: the new track file, the catalog / COF store
+    assert opt(reu[("scream", "pr")].argv, "--trackfile").startswith("/new/tracks/") and "extract_etc_2d_vars.py" in " ".join(reu[("scream", "pr")].argv)
+
+
+def test_reuse_env_option_rules():
+    import subprocess
+    base = [sys.executable, str(REPO / "scripts" / "run_etc_pipeline.py"), "--data-root", "/tmp/etc_test_root", "--dry-run"]
+    bad = subprocess.run(base + ["--reuse-env"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "needs --tracks-dir" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--reuse-env", "--extract-env", "--tracks-dir", "/tmp"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--reuse-env", "--tracks-dir", "/tmp", "--steps", "link_env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+
+
+def test_link_env_and_env_exclude_each_other():
+    import subprocess
+    base = [sys.executable, str(REPO / "scripts" / "run_etc_pipeline.py"), "--data-root", "/tmp/etc_test_root", "--dry-run"]
+    bad = subprocess.run(base + ["--extract-env", "--steps", "link_env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--steps", "env", "combine"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "exclude each other" in (bad.stdout + bad.stderr)
+    bad = subprocess.run(base + ["--tracks-dir", "/no/such/folder"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "not a folder" in (bad.stdout + bad.stderr)
+
+
 def test_protection_of_outputs_without_marker():
     tmp = tempfile.mkdtemp(prefix="etc_prot_")
     try:
@@ -122,5 +221,7 @@ def test_engine_data_root_environment():
 
 
 if __name__ == "__main__":
-    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_protection_of_outputs_without_marker(); test_engine_data_root_environment()
+    test_graph_and_commands(); test_selection_extra_args_and_aliases(); test_tracks_dir_and_extract_env(); test_reuse_env_tasks(); test_reuse_env_option_rules()
+    test_link_env_and_env_exclude_each_other()
+    test_protection_of_outputs_without_marker(); test_engine_data_root_environment()
     print("test_run_etc_pipeline: all checks passed")

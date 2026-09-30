@@ -10,7 +10,7 @@ for each ETC track position. Unlike MCS extraction (get_env_vars.py), this:
 - Saves data as zarr files for efficient I/O and memory management
 
 Memory considerations:
-- For 18704 storm points × 81×81 grid × 4 bytes (float32) ≈ 4.7 GB per variable
+- For 18704 storm points × 161×161 grid (radius 20°, the pipeline's default - see submit_etc_extraction_jobs.py's RADIUS) × 4 bytes (float32) ≈ 1.9 GB per variable
 - Zarr chunking allows processing larger-than-memory datasets
 - Multiple variables can be saved separately and combined later
 
@@ -56,6 +56,27 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 COF_STORE_SUFFIX = "_cofmasks_hp8_v1.zarr"
 # A time chunk of the source larger than this is not cached whole (see extract_etc_2d_variable)
 MAX_CACHED_CHUNK_BYTES = 400e6
+# Storm points without a frame in the source at their track time are filled with NaN, counted and recorded (never the nearest frame). The job only stops
+# when their share is larger than --max_missing_fraction, whose default is a sanity limit (a wrong catalog or time axis, not a data gap: SCREAM's 3D
+# catalog has no frame at the first track time, 2019-08-01 00, 0.04 % of the points).
+DEFAULT_MAX_MISSING_FRACTION = 0.05
+MAX_LISTED_MISSING_TIMES = 200          # missing track times kept in the attributes of the store
+
+
+def check_missing_frames(var_attrs, n_points, limit):
+    """(ok, message) for the storm points without a frame in the source: ok is False when their share is larger than limit (the variable is not
+    written); message is '' when none is missing, else the WARNING (they are NaN and recorded) or the ERROR to print."""
+    n_missing = int(var_attrs.get('n_points_time_missing', 0))
+    if n_missing == 0:
+        return True, ''
+    share = n_missing / max(int(n_points), 1)
+    times = list(var_attrs.get('missing_track_times', []))
+    listed = ', '.join(str(t)[:13] for t in times[:10]) + (' ...' if len(times) > 10 else '')
+    what = f"{n_missing} of {n_points} storm points ({100 * share:.2f}%) have no frame in the source at their track time (times: {listed})"
+    if share > limit:
+        return False, f"ERROR: {what}, more than --max_missing_fraction {limit} ({100 * limit:.2f}%); nothing is written for this variable"
+    return True, (f"WARNING: {what}; their slabs are NaN (never the nearest frame) and are recorded in the attributes of the store "
+                  f"(n_points_time_missing, missing_track_times)")
 
 
 def cof_source_name(catalog_model):
@@ -77,7 +98,7 @@ def extract_healpix_variable_to_latlon(
     storm_lat,
     hp_grid,
     nside,
-    radius=10.0,
+    radius=20.0,
     lon_res=0.25,
     lat_res=0.25,
     x_dimname="lon",
@@ -106,7 +127,7 @@ def extract_healpix_variable_to_latlon(
     nside : int
         HEALPix nside parameter
     radius : float, optional
-        Radius around storm center in degrees (default: 10.0)
+        Radius around storm center in degrees (default: 20.0, matching the pipeline's default - see submit_etc_extraction_jobs.py's RADIUS)
     lon_res : float, optional
         Longitude resolution in degrees (default: 0.25)
     lat_res : float, optional
@@ -230,7 +251,7 @@ def extract_etc_2d_variable(
     variable_data,
     hp_grid,
     nside,
-    radius=10.0,
+    radius=20.0,
     lon_res=0.25,
     lat_res=0.25,
     progress_freq=1000,
@@ -553,6 +574,8 @@ def extract_etc_2d_variable(
     var_attrs['n_points'] = int(ntimes)
     var_attrs['n_points_time_missing'] = int(n_points_time_missing)
     var_attrs['n_points_failed'] = int(n_points_failed)
+    var_attrs['n_missing_track_times'] = int(len(missing_times))
+    var_attrs['missing_track_times'] = [str(pd.Timestamp(t)) for t in missing_times[:MAX_LISTED_MISSING_TIMES]]
     
     return (output_array, time_array, storm_ids, grid_ids, storm_lats, storm_lons, 
             x_coords, y_coords, var_attrs)
@@ -736,8 +759,8 @@ def main():
                         help='Comma-separated list of storm IDs to process (for testing)')
     
     # Processing options
-    parser.add_argument('--radius', type=float, default=10.0,
-                        help='Extraction radius in degrees (default: 10.0)')
+    parser.add_argument('--radius', type=float, default=20.0,
+                        help='Extraction radius in degrees (default: 20.0, matching the pipeline default - see submit_etc_extraction_jobs.py\'s RADIUS)')
     parser.add_argument('--lon_res', type=float, default=0.25,
                         help='Longitude resolution in degrees (default: 0.25)')
     parser.add_argument('--lat_res', type=float, default=0.25,
@@ -767,10 +790,12 @@ def main():
                              "(<data root>/cof_masks/<source>_cofmasks_hp8_v1.zarr, mm/h, window [T, T+6h) like the COF masks and "
                              "Analyses 1, 2 and 4). 'legacy' reads the separate 6-hourly files / catalog 6-h mean as before. "
                              "ERA5 always uses IMERG 6-hourly (tot_pr is 0 poleward of 60 deg).")
-    parser.add_argument('--max_missing_fraction', type=float, default=0.0,
-                        help='Largest share of storm points allowed to have no frame in the source at their track time (default 0: any gap '
-                             'fails the job before it writes). Points without a frame are NaN, never the nearest frame. '
-                             'Expected gaps: COF store shorter than the track period (ICON 0.145, UM 0.03, SCREAM 0.006)')
+    parser.add_argument('--max_missing_fraction', type=float, default=DEFAULT_MAX_MISSING_FRACTION,
+                        help='Largest share of storm points allowed to have no frame in the source at their track time (default '
+                             f'{DEFAULT_MAX_MISSING_FRACTION}, a sanity limit: more fails the job before it writes). Points without a frame are NaN, never the '
+                             'nearest frame; they are logged and recorded in the attributes of the store (n_points_time_missing, missing_track_times). '
+                             'The pipeline sets a per-source limit for pr and the COF masks: COF store shorter than the track period '
+                             '(ICON 0.145, UM 0.03, SCREAM 0.006)')
     
     # Track file format options
     parser.add_argument('--unstructured_mesh', action='store_true', default=True,
@@ -1235,10 +1260,11 @@ def main():
             print(f"ERROR: {n_failed} storm points of '{variable_name}' failed to load or extract; nothing is written for this variable")
             failed_variables.append(variable_name)
             continue
-        if n_missing / n_pts > args.max_missing_fraction:
-            print(f"ERROR: {n_missing} of {n_pts} storm points ({100*n_missing/n_pts:.2f}%) have no frame in the source at their track time, "
-                  f"more than --max_missing_fraction {args.max_missing_fraction} ({100*args.max_missing_fraction:.2f}%); "
-                  f"nothing is written for '{variable_name}'")
+        gate_ok, gate_message = check_missing_frames(var_attrs, n_pts, args.max_missing_fraction)
+        if gate_message:
+            print(f"{gate_message} [{variable_name}]")
+            sys.stdout.flush()
+        if not gate_ok:
             failed_variables.append(variable_name)
             continue
         
